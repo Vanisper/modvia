@@ -185,6 +185,17 @@ describe("model codec", () => {
     expect(aliasKeyCollision).toThrow(RangeError);
   });
 
+  test("aggregates very large error sets without exhausting the call stack", () => {
+    const Tags = defineModel({
+      fields: { items: arrayOf(string()) },
+    });
+
+    const error = captureError(() => Tags.decode({ items: Array(200_000).fill(null) }));
+    expect(error).toBeInstanceOf(ModelValidationError);
+    if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
+    expect(error.issues).toHaveLength(200_000);
+  });
+
   test("materializes a real class only after the full model is valid", () => {
     let constructed = 0;
     const ClassUsers = UserModel.withFactory((data) => {

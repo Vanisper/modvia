@@ -35,11 +35,11 @@ export function field<T, Encoded>(codec: Codec<T, Encoded>): Field<T, Encoded, s
 
 export function fieldSource(codec: Codec<unknown, unknown>): string | undefined {
   if (!isField(codec)) return undefined;
-  const source = (codec as Field<unknown, unknown, string | undefined>).source;
+  const { source } = codec;
   return typeof source === "string" ? source : undefined;
 }
 
-function isField(codec: unknown): boolean {
+function isField(codec: unknown): codec is Field<unknown, unknown, string | undefined> {
   if (typeof codec !== "object" || codec === null) return false;
   try {
     return Reflect.get(codec, fieldBrand) === true;
@@ -94,7 +94,7 @@ function mapArray<Input, Output>(
     } catch (error) {
       const nested = nestValidationError(error, index);
       if (!nested) throw error;
-      issues.push(...nested.issues);
+      for (const issue of nested.issues) issues.push(issue);
     }
   }
 

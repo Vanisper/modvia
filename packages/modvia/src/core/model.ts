@@ -4,6 +4,12 @@ import type { Codec, Field, Model, ModelIssue } from "./types.ts";
 
 type FieldRecord = Readonly<Record<string, Codec<unknown, unknown>>>;
 
+interface ResolvedField {
+  readonly key: string;
+  readonly source: string;
+  readonly codec: Codec<unknown, unknown>;
+}
+
 type DataOf<Fields extends FieldRecord> = {
   readonly [Key in keyof Fields]: Fields[Key] extends Codec<infer Value, infer _Encoded>
     ? Value
@@ -30,12 +36,13 @@ export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
 }): Model<DataOf<Fields>, DTOOf<Fields>> {
   const fields: Fields = Object.freeze({ ...options.fields });
-  assertUniqueSources(fields);
-  return createModel(fields, (data) => data);
+  const resolvedFields = resolveFields(fields);
+  assertUniqueSources(resolvedFields);
+  return createModel(resolvedFields, (data) => data);
 }
 
 function createModel<Data, DTO, Out extends Data>(
-  fields: FieldRecord,
+  resolvedFields: readonly ResolvedField[],
   factory: (data: Data) => Out,
 ): Model<Data, DTO, Out> {
   return Object.freeze({
@@ -44,8 +51,7 @@ function createModel<Data, DTO, Out extends Data>(
       const data: Record<string, unknown> = {};
       const issues: ModelIssue[] = [];
 
-      for (const [key, codec] of Object.entries(fields)) {
-        const source = fieldSource(codec) ?? key;
+      for (const { key, source, codec } of resolvedFields) {
         if (!Object.hasOwn(input, source)) {
           issues.push({
             path: [source],
@@ -59,7 +65,7 @@ function createModel<Data, DTO, Out extends Data>(
         } catch (error) {
           const nested = nestValidationError(error, source);
           if (!nested) throw error;
-          issues.push(...nested.issues);
+          for (const issue of nested.issues) issues.push(issue);
         }
       }
 
@@ -72,7 +78,7 @@ function createModel<Data, DTO, Out extends Data>(
       const output: Record<string, unknown> = {};
       const issues: ModelIssue[] = [];
 
-      for (const [key, codec] of Object.entries(fields)) {
+      for (const { key, source, codec } of resolvedFields) {
         if (!Object.hasOwn(value, key)) {
           issues.push({
             path: [key],
@@ -81,13 +87,12 @@ function createModel<Data, DTO, Out extends Data>(
           });
           continue;
         }
-        const source = fieldSource(codec) ?? key;
         try {
           output[source] = codec.encode(value[key]);
         } catch (error) {
           const nested = nestValidationError(error, key);
           if (!nested) throw error;
-          issues.push(...nested.issues);
+          for (const issue of nested.issues) issues.push(issue);
         }
       }
 
@@ -96,15 +101,22 @@ function createModel<Data, DTO, Out extends Data>(
     },
 
     withFactory<Next extends Data>(nextFactory: (data: Data) => Next) {
-      return createModel<Data, DTO, Next>(fields, nextFactory);
+      return createModel<Data, DTO, Next>(resolvedFields, nextFactory);
     },
   });
 }
 
-function assertUniqueSources(fields: FieldRecord): void {
+function resolveFields(fields: FieldRecord): ResolvedField[] {
+  return Object.entries(fields).map(([key, codec]) => ({
+    key,
+    source: fieldSource(codec) ?? key,
+    codec,
+  }));
+}
+
+function assertUniqueSources(resolvedFields: readonly ResolvedField[]): void {
   const owners = new Map<string, string>();
-  for (const [key, codec] of Object.entries(fields)) {
-    const source = fieldSource(codec) ?? key;
+  for (const { key, source } of resolvedFields) {
     const owner = owners.get(source);
     if (owner !== undefined) {
       throw new RangeError(`Duplicate field source "${source}" used by "${owner}" and "${key}"`);
