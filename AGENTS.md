@@ -1,3 +1,21 @@
+# Modvia
+
+面向 TypeScript 应用的模型层基础库，核心包位于 `packages/modvia`。
+
+## 工作原则
+
+- 模型层保持零运行时依赖，不引入 HTTP、UI、缓存或平台耦合。
+- 派生优于开关：返回新值表达变化，不增加 `partial`/`mode`/`raw` 类配置。
+- 公共行为用测试锁定：新语义先补公共入口的用例，再扩展实现。
+- 行为、类型推导、文档是同一次变更的完整交付物，同步更新。
+- 文档一段一个主题：多主题并列的内容拆成条目列表，不把并列信息挤进长段落。
+
+## 操作事实
+
+- `vp run ready` 顺序为 构建 → 检查 → 测试：产物测试消费 `dist`，顺序是依赖不是风格。
+- `packages/utils` 与 `apps/website` 是工具链示例，不投入产品化改进。
+- 提交遵循 Conventional Commits：type/scope 用英文，subject 跟随仓库语言。
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web
