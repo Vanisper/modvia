@@ -38,4 +38,12 @@ vp install --frozen-lockfile
 vp run ready
 ```
 
-`ready` 依次执行格式与静态检查、工作区测试和构建。模型包位于 `packages/modvia`；`apps/website` 与 `packages/utils` 保留为 Vite+ 工具链示例。
+`ready` 依次执行：
+
+1. 工作区构建；
+2. 格式与静态检查；
+3. 测试。
+
+构建排在最前，是因为产物测试 `packages/modvia/tests/artifact.test.ts` 通过包名消费 `dist` 产物；未构建时单独运行 `vp test`，会在该文件上报导入失败。
+
+模型包位于 `packages/modvia`；`apps/website` 与 `packages/utils` 保留为 Vite+ 工具链示例。

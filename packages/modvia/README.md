@@ -39,7 +39,12 @@ const user = User.decode({
 });
 ```
 
-`user` 是带完整类型的普通对象：名称已去除首尾空白，`createdAt` 是有效 `Date`，`department` 已递归构造，未声明的 `extra` 被剥离。`UserData` 的字段为只读类型，但运行时不会自动深度冻结对象。
+`user` 是带完整类型的普通对象：
+
+- `name` 去除了首尾空白，`createdAt` 转为有效 `Date`；
+- `department` 递归构造为嵌套模型数据；
+- 未声明的 `extra` 被剥离；
+- `UserData` 的字段为只读类型，但运行时不会自动深度冻结对象。
 
 ## 编码回 DTO
 
@@ -107,7 +112,9 @@ entity.canManage();
 const entityDTO: UserDTO = UserEntityModel.encode(entity);
 ```
 
-`User` 与 `UserEntityModel` 共享 Data 和 DTO，原模型不会被修改。核心执行真实构造器，不绕过构造器或动态安装业务方法。依赖私有状态的 class 应提供自定义 Codec；默认编码只读取公开声明字段。
+- `User` 与 `UserEntityModel` 共享 Data 和 DTO，原模型不会被修改。
+- 核心执行真实构造器，不绕过构造器或动态安装业务方法。
+- 默认编码只读取公开声明字段；依赖私有状态的 class 应提供自定义 Codec。
 
 ## 自定义 Codec
 
@@ -172,3 +179,5 @@ vp test
 vp check
 vp pack
 ```
+
+`tests/artifact.test.ts` 通过包名消费 `dist` 产物：单独运行 `vp test` 前先 `vp pack`，或直接在仓库根目录运行 `vp run ready`。
