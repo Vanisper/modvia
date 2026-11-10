@@ -44,11 +44,12 @@ export function oneOf<const Values extends readonly string[]>(
 ): Field<Values[number], Values[number]> {
   if (allowedValues.length === 0) throw new RangeError("oneOf requires at least one value");
   const values = new Set<string>(allowedValues);
+  const isAllowed = (value: string): value is Values[number] => values.has(value);
   const convert = (input: unknown, context: CodecContext): Values[number] => {
-    if (typeof input !== "string" || !values.has(input)) {
+    if (typeof input !== "string" || !isAllowed(input)) {
       return context.fail("one_of", `Expected one of: ${[...values].join(", ")}`);
     }
-    return input as Values[number];
+    return input;
   };
   return field(defineCodec<Values[number], Values[number]>({ decode: convert, encode: convert }));
 }
