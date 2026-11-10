@@ -12,6 +12,8 @@ const context: CodecContext = Object.freeze({
   },
 });
 
+const fieldBrand = Symbol.for("modvia.Field");
+
 export function defineCodec<T, Encoded>(handlers: CodecHandlers<T, Encoded>): Codec<T, Encoded> {
   return Object.freeze({
     decode(input: unknown) {
@@ -23,12 +25,27 @@ export function defineCodec<T, Encoded>(handlers: CodecHandlers<T, Encoded>): Co
   });
 }
 
-export function field<T, Encoded>(codec: Codec<T, Encoded>): Field<T, Encoded> {
-  return createField(codec, undefined);
+export function field<T, Encoded, Source extends string>(
+  codec: Field<T, Encoded, Source>,
+): Field<T, Encoded, Source>;
+export function field<T, Encoded>(codec: Codec<T, Encoded>): Field<T, Encoded>;
+export function field<T, Encoded>(codec: Codec<T, Encoded>): Field<T, Encoded, string | undefined> {
+  return createField(codec, fieldSource(codec));
 }
 
 export function fieldSource(codec: Codec<unknown, unknown>): string | undefined {
-  return "source" in codec && typeof codec.source === "string" ? codec.source : undefined;
+  if (!isField(codec)) return undefined;
+  const source = (codec as Field<unknown, unknown, string | undefined>).source;
+  return typeof source === "string" ? source : undefined;
+}
+
+function isField(codec: unknown): boolean {
+  if (typeof codec !== "object" || codec === null) return false;
+  try {
+    return Reflect.get(codec, fieldBrand) === true;
+  } catch {
+    return false;
+  }
 }
 
 export function arrayOf<T, Encoded>(codec: Codec<T, Encoded>): Codec<T[], Encoded[]> {
@@ -48,7 +65,7 @@ function createField<T, Encoded, Source extends string | undefined>(
   codec: Codec<T, Encoded>,
   source: Source,
 ): Field<T, Encoded, Source> {
-  return Object.freeze({
+  const fieldCodec: Field<T, Encoded, Source> = {
     source,
     decode(input: unknown) {
       return codec.decode(input);
@@ -59,7 +76,9 @@ function createField<T, Encoded, Source extends string | undefined>(
     from<NextSource extends string>(nextSource: NextSource) {
       return createField(codec, nextSource);
     },
-  });
+  };
+  Object.defineProperty(fieldCodec, fieldBrand, { value: true });
+  return Object.freeze(fieldCodec);
 }
 
 function mapArray<Input, Output>(

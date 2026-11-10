@@ -12,7 +12,7 @@ import {
   oneOf,
   string,
 } from "../src/index.ts";
-import type { InferData, InferDTO, InferModel } from "../src/index.ts";
+import type { Codec, InferData, InferDTO, InferModel } from "../src/index.ts";
 
 const DepartmentModel = defineModel({
   fields: {
@@ -210,6 +210,42 @@ describe("model codec", () => {
     expect(error).toMatchObject({
       issues: [{ path: ["article_slug"], code: "string.slug" }],
     });
+  });
+
+  test("ignores unbranded source properties and keeps aliases when re-wrapping fields", () => {
+    const withExtraProperty = {
+      source: "not_an_alias",
+      decode(input: unknown): string {
+        return typeof input === "string" ? input : String(input);
+      },
+      encode(value: string): string {
+        return value;
+      },
+    };
+    const sourceLikeCodec: Codec<string, string> = withExtraProperty;
+    const Custom = defineModel({
+      fields: {
+        name: sourceLikeCodec,
+        alias: field(string().from("external_name")),
+      },
+    });
+
+    expect(Custom.decode({ name: "林舟", external_name: "林舟" })).toEqual({
+      name: "林舟",
+      alias: "林舟",
+    });
+    expect(Custom.encode({ name: "林舟", alias: "林舟" })).toEqual({
+      name: "林舟",
+      external_name: "林舟",
+    });
+    expectTypeOf<InferDTO<typeof Custom>>().toMatchTypeOf<{
+      name: string;
+      external_name: string;
+    }>();
+    expectTypeOf<{
+      name: string;
+      external_name: string;
+    }>().toMatchTypeOf<InferDTO<typeof Custom>>();
   });
 
   test("infers data, DTO, and class output types", () => {
