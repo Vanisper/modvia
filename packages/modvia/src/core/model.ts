@@ -30,6 +30,7 @@ export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
 }): Model<DataOf<Fields>, DTOOf<Fields>> {
   const fields: Fields = Object.freeze({ ...options.fields });
+  assertUniqueSources(fields);
   return createModel(fields, (data) => data);
 }
 
@@ -98,6 +99,18 @@ function createModel<Data, DTO, Out extends Data>(
       return createModel<Data, DTO, Next>(fields, nextFactory);
     },
   });
+}
+
+function assertUniqueSources(fields: FieldRecord): void {
+  const owners = new Map<string, string>();
+  for (const [key, codec] of Object.entries(fields)) {
+    const source = fieldSource(codec) ?? key;
+    const owner = owners.get(source);
+    if (owner !== undefined) {
+      throw new RangeError(`Duplicate field source "${source}" used by "${owner}" and "${key}"`);
+    }
+    owners.set(source, key);
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

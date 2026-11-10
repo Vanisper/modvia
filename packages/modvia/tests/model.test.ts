@@ -164,6 +164,27 @@ describe("model codec", () => {
     expect(list).toMatchObject({ issues: [{ path: [], code: "type.array" }] });
   });
 
+  test("rejects duplicate field sources at definition time", () => {
+    const duplicateAliases = () =>
+      defineModel({
+        fields: {
+          firstName: string().from("name"),
+          lastName: string().from("name"),
+        },
+      });
+    expect(duplicateAliases).toThrow(RangeError);
+    expect(duplicateAliases).toThrow(/Duplicate field source "name"/);
+
+    const aliasKeyCollision = () =>
+      defineModel({
+        fields: {
+          nickname: string().from("name"),
+          name: string(),
+        },
+      });
+    expect(aliasKeyCollision).toThrow(RangeError);
+  });
+
   test("materializes a real class only after the full model is valid", () => {
     let constructed = 0;
     const ClassUsers = UserModel.withFactory((data) => {
