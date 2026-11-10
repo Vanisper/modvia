@@ -77,6 +77,8 @@ packages/modvia/
 │  │  └─ types.ts       公共类型与类型推导
 │  ├─ fields.ts        首版标量与日期时间 Codec
 │  └─ index.ts         唯一公共入口
+├─ scripts/
+│  └─ artifact-smoke.ts  打包产物冒烟检查
 ├─ tests/              公共行为与类型消费测试
 ├─ README.md           使用方式与行为边界
 ├─ package.json
