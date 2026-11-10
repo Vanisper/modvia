@@ -40,10 +40,10 @@ export function boolean(): Field<boolean, boolean> {
 }
 
 export function oneOf<const Values extends readonly string[]>(
-  ...input: Values
+  ...allowedValues: Values
 ): Field<Values[number], Values[number]> {
-  if (input.length === 0) throw new RangeError("oneOf requires at least one value");
-  const values = new Set<string>(input);
+  if (allowedValues.length === 0) throw new RangeError("oneOf requires at least one value");
+  const values = new Set<string>(allowedValues);
   const convert = (input: unknown, context: CodecContext): Values[number] => {
     if (typeof input !== "string" || !values.has(input)) {
       return context.fail("one_of", `Expected one of: ${[...values].join(", ")}`);
