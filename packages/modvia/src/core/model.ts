@@ -37,6 +37,7 @@ export function defineModel<const Fields extends FieldRecord>(options: {
 }): Model<DataOf<Fields>, DTOOf<Fields>> {
   const fields: Fields = Object.freeze({ ...options.fields });
   const resolvedFields = resolveFields(fields);
+  assertNoReservedNames(resolvedFields);
   assertUniqueSources(resolvedFields);
   return createModel(resolvedFields, (data) => data);
 }
@@ -47,7 +48,7 @@ function createModel<Data, DTO, Out extends Data>(
 ): Model<Data, DTO, Out> {
   return Object.freeze({
     decode(input: unknown): Out {
-      if (!isObject(input)) fail([], "type.object", "Expected an object");
+      if (!isPlainObject(input)) fail([], "type.object", "Expected a plain object");
       const data: Record<string, unknown> = {};
       const issues: ModelIssue[] = [];
 
@@ -114,6 +115,16 @@ function resolveFields(fields: FieldRecord): ResolvedField[] {
   }));
 }
 
+function assertNoReservedNames(resolvedFields: readonly ResolvedField[]): void {
+  for (const { key, source } of resolvedFields) {
+    if (key === "__proto__" || source === "__proto__") {
+      throw new RangeError(
+        `Field "${key}" uses reserved name "__proto__"; it would assign the result prototype instead of a field`,
+      );
+    }
+  }
+}
+
 function assertUniqueSources(resolvedFields: readonly ResolvedField[]): void {
   const owners = new Map<string, string>();
   for (const { key, source } of resolvedFields) {
@@ -127,4 +138,10 @@ function assertUniqueSources(resolvedFields: readonly ResolvedField[]): void {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isObject(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

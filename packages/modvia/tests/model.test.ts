@@ -185,6 +185,39 @@ describe("model codec", () => {
     expect(aliasKeyCollision).toThrow(RangeError);
   });
 
+  test("rejects reserved field names at definition time", () => {
+    const protoKey = () =>
+      defineModel({
+        fields: { ["__proto__"]: string(), id: string() } as Record<
+          string,
+          Codec<unknown, unknown>
+        >,
+      });
+    expect(protoKey).toThrow(RangeError);
+    expect(protoKey).toThrow(/reserved name "__proto__"/);
+
+    const protoAlias = () => defineModel({ fields: { meta: string().from("__proto__") } });
+    expect(protoAlias).toThrow(RangeError);
+  });
+
+  test("accepts only plain object input", () => {
+    class Payload {
+      id = "p-1";
+    }
+    const cases: unknown[] = [new Date(), new Map([["id", "m-1"]]), new Payload()];
+    for (const input of cases) {
+      const error = captureError(() => UserModel.decode(input));
+      if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
+      expect(error.issues).toEqual([
+        { path: [], code: "type.object", message: "Expected a plain object" },
+      ]);
+    }
+
+    expect(UserModel.decode(Object.assign(Object.create(null), validDTO))).toMatchObject({
+      id: "u-1",
+    });
+  });
+
   test("aggregates very large error sets without exhausting the call stack", () => {
     const Tags = defineModel({
       fields: { items: arrayOf(string()) },
