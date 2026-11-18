@@ -139,7 +139,7 @@ describe("packaged artifact", () => {
     if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
     expect(error.issues.map((issue) => issue.code)).toEqual([
       "string.min_length",
-      "one_of",
+      "string.one_of",
       "datetime.invalid",
       "type.object",
     ]);

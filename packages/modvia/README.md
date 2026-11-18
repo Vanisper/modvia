@@ -281,7 +281,7 @@ const nodeModel: Model<NodeData, NodeDTO> = defineModel({
 | `type.boolean`          | `boolean()` 收到非布尔值                        |
 | `type.datetime`         | 解码输入不是字符串，或编码输入不是有效的 `Date` |
 | `string.min_length`     | `string({ minLength })` 长度不足                |
-| `one_of`                | `oneOf()` 收到枚举外的值                        |
+| `string.one_of`         | `oneOf()` 收到枚举外的值                        |
 | `datetime.invalid`      | 日期时间字符串的格式、日期、时间或偏移非法      |
 | `datetime.out_of_range` | 解码输入换算为 UTC 后超出原生 `Date` 的时间范围 |
 | `field.required`        | 缺少必填的外部键，或模型缺少可读取的必填字段    |

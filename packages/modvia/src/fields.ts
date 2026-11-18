@@ -47,7 +47,7 @@ export function oneOf<const Values extends readonly string[]>(
   const isAllowed = (value: string): value is Values[number] => values.has(value);
   const convert = (input: unknown, context: CodecContext): Values[number] => {
     if (typeof input !== "string" || !isAllowed(input)) {
-      return context.fail("one_of", `Expected one of: ${[...values].join(", ")}`);
+      return context.fail("string.one_of", `Expected one of: ${[...values].join(", ")}`);
     }
     return input;
   };
