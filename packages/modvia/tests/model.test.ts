@@ -185,19 +185,41 @@ describe("model codec", () => {
     expect(aliasKeyCollision).toThrow(RangeError);
   });
 
-  test("rejects reserved field names at definition time", () => {
-    const protoKey = () =>
-      defineModel({
-        fields: { ["__proto__"]: string(), id: string() } as Record<
-          string,
-          Codec<unknown, unknown>
-        >,
-      });
-    expect(protoKey).toThrow(RangeError);
-    expect(protoKey).toThrow(/reserved name "__proto__"/);
+  test("__proto__ 作为声明字段或外部别名时可双向读写自有键", () => {
+    const Info = defineModel({ fields: { label: string() } });
+    const Direct = defineModel({ fields: { ["__proto__"]: Info } });
+    const Aliased = defineModel({ fields: { info: field(Info).from("__proto__") } });
+    const dto: unknown = JSON.parse('{"__proto__":{"label":"目录"}}');
 
-    const protoAlias = () => defineModel({ fields: { meta: string().from("__proto__") } });
-    expect(protoAlias).toThrow(RangeError);
+    const data = Direct.decode(dto);
+    const aliasedData = Aliased.decode(dto);
+    expect(aliasedData).toStrictEqual({ info: { label: "目录" } });
+    for (const output of [data, Direct.encode(data), Aliased.encode(aliasedData)]) {
+      expect(Object.getPrototypeOf(output)).toBe(Object.prototype);
+      expect(Object.hasOwn(output, "__proto__")).toBe(true);
+      expect(output["__proto__"]).toStrictEqual({ label: "目录" });
+    }
+  });
+
+  test("__proto__ 未声明时剥离，声明时按常规必填与缺省规则处理", () => {
+    const Required = defineModel({ fields: { ["__proto__"]: string() } });
+    const Optional = defineModel({ fields: { ["__proto__"]: string().optional() } });
+    const Known = defineModel({ fields: { title: string() } });
+    const input = { title: "目录", ["__proto__"]: "其他" };
+    for (const output of [
+      Known.decode(input),
+      Known.encode(input),
+      Optional.decode({}),
+      Optional.encode({}),
+    ]) {
+      expect(Object.hasOwn(output, "__proto__")).toBe(false);
+    }
+    const missing = expect.objectContaining({
+      issues: [expect.objectContaining({ path: ["__proto__"], code: "field.required" })],
+    });
+    expect(() => Required.decode({})).toThrow(missing);
+    // @ts-expect-error 编码输入缺少已声明的必填键
+    expect(() => Required.encode({})).toThrow(missing);
   });
 
   test("accepts only plain object input", () => {

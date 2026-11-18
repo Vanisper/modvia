@@ -16,7 +16,6 @@ export function defineModel<const Fields extends FieldRecord>(options: {
 }): ModelOf<Fields> {
   const fields: Fields = Object.freeze({ ...options.fields });
   const resolvedFields = resolveFields(fields);
-  assertNoReservedNames(resolvedFields);
   assertUniqueSources(resolvedFields);
   return createModel(resolvedFields, (data) => data);
 }
@@ -42,7 +41,7 @@ function createModel<Data, DTO, Out extends Data>(
           continue;
         }
         try {
-          data[key] = codec.decode(input[source]);
+          writeOwnField(data, key, codec.decode(input[source]));
         } catch (error) {
           const nested = nestValidationError(error, source);
           if (!nested) throw error;
@@ -71,7 +70,7 @@ function createModel<Data, DTO, Out extends Data>(
             });
             continue;
           }
-          output[source] = codec.encode(fieldValue);
+          writeOwnField(output, source, codec.encode(fieldValue));
         } catch (error) {
           const nested = nestValidationError(error, key);
           if (!nested) throw error;
@@ -102,16 +101,6 @@ function resolveFields(fields: FieldRecord): ResolvedField[] {
   });
 }
 
-function assertNoReservedNames(resolvedFields: readonly ResolvedField[]): void {
-  for (const { key, source } of resolvedFields) {
-    if (key === "__proto__" || source === "__proto__") {
-      throw new RangeError(
-        `Field "${key}" uses reserved name "__proto__"; it would assign the result prototype instead of a field`,
-      );
-    }
-  }
-}
-
 function assertUniqueSources(resolvedFields: readonly ResolvedField[]): void {
   const owners = new Map<string, string>();
   for (const { key, source } of resolvedFields) {
@@ -125,11 +114,20 @@ function assertUniqueSources(resolvedFields: readonly ResolvedField[]): void {
 
 const missingField = Symbol("missing model field");
 
+function writeOwnField(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 function readModelField(value: Record<string, unknown>, key: string): unknown {
   if (Object.hasOwn(value, key)) return value[key];
 
   let prototype = Reflect.getPrototypeOf(value);
-  while (prototype !== null && prototype !== Object.prototype) {
+  while (prototype !== null && !isObjectPrototype(prototype)) {
     const descriptor: TypedPropertyDescriptor<unknown> | undefined =
       Object.getOwnPropertyDescriptor(prototype, key);
     if (descriptor) {
@@ -148,5 +146,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!isObject(value)) return false;
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  return prototype === null || isObjectPrototype(prototype);
+}
+
+function isObjectPrototype(prototype: object): boolean {
+  if (prototype === Object.prototype) return true;
+  if (Reflect.getPrototypeOf(prototype) !== null) return false;
+
+  // 其他上下文的内建 Object 经 Function.prototype 继承其自身的 Object.prototype
+  const constructor: unknown = Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+  if (typeof constructor !== "function") return false;
+  const functionPrototype = Reflect.getPrototypeOf(constructor);
+  return functionPrototype !== null && Reflect.getPrototypeOf(functionPrototype) === prototype;
 }

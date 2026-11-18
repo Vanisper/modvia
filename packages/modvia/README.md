@@ -214,7 +214,8 @@ try {
 ## 当前边界
 
 - 字段默认必填。缺键用 `.optional()` 表达，允许的特殊值用 `.or(value)` 表达。
-- 字段外部名（别名或字段名）在定义时必须唯一，重复会在 `defineModel` 抛出 `RangeError`；`__proto__` 是保留名，同样在定义期拒绝。
+- 字段外部名（别名或字段名）在定义时必须唯一，重复时 `defineModel` 抛出 `RangeError`。
+- `__proto__` 可以作为字段名或别名。对象字面量使用计算属性名 `["__proto__"]` 声明自有键，`JSON.parse` 也会保留同名自有键。默认解码对象和编码后的 DTO 都保留普通对象原型。
 - 解码输入只接受普通对象：`null`、数组、`Date`、`Map` 与 class 实例均报 `type.object`；原型为 `null` 的对象可以接受。
 - 对象与数组会构造新容器，但核心不执行通用深拷贝。
 - 未知 DTO 字段在解码时剥离；编码不会输出方法或未声明字段。
@@ -272,19 +273,19 @@ const nodeModel: Model<NodeData, NodeDTO> = defineModel({
 
 `issue.code` 是稳定标识，可以用于分支判断：
 
-| code                    | 来源                                            |
-| ----------------------- | ----------------------------------------------- |
-| `type.object`           | 模型或嵌套模型收到非普通对象                    |
-| `type.array`            | `arrayOf` 收到非数组                            |
-| `type.string`           | `string()` 收到非字符串                         |
-| `type.number`           | `number()` 收到非有限数字                       |
-| `type.boolean`          | `boolean()` 收到非布尔值                        |
-| `type.datetime`         | 解码输入不是字符串，或编码输入不是有效的 `Date` |
-| `string.min_length`     | `string({ minLength })` 长度不足                |
-| `string.one_of`         | `oneOf()` 收到枚举外的值                        |
-| `datetime.invalid`      | 日期时间字符串的格式、日期、时间或偏移非法      |
-| `datetime.out_of_range` | 解码输入换算为 UTC 后超出原生 `Date` 的时间范围 |
-| `field.required`        | 缺少必填的外部键，或模型缺少可读取的必填字段    |
+| code                    | 来源                                                  |
+| ----------------------- | ----------------------------------------------------- |
+| `type.object`           | 解码输入非普通对象，或编码输入为 `null`、数组或非对象 |
+| `type.array`            | `arrayOf` 收到非数组                                  |
+| `type.string`           | `string()` 收到非字符串                               |
+| `type.number`           | `number()` 收到非有限数字                             |
+| `type.boolean`          | `boolean()` 收到非布尔值                              |
+| `type.datetime`         | 解码输入不是字符串，或编码输入不是有效的 `Date`       |
+| `string.min_length`     | `string({ minLength })` 长度不足                      |
+| `string.one_of`         | `oneOf()` 收到枚举外的值                              |
+| `datetime.invalid`      | 日期时间字符串的格式、日期、时间或偏移非法            |
+| `datetime.out_of_range` | 解码输入换算为 UTC 后超出原生 `Date` 的时间范围       |
+| `field.required`        | 缺少必填的外部键，或模型缺少可读取的必填字段          |
 
 `string()` 的长度按 UTF-16 码元计算，因此一个基本多文种平面之外的字符（如 emoji）计为 2。
 

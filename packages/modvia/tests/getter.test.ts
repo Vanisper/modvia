@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
 import { defineModel, number } from "../src/index.ts";
 
@@ -68,6 +69,52 @@ describe("声明字段的 getter", () => {
     try {
       expect(() => Counter.encode(input)).toThrow(missing);
       expect(() => Counter.decode(input)).toThrow(missing);
+    } finally {
+      Reflect.deleteProperty(Object.prototype, key);
+    }
+  });
+
+  test("跨上下文的普通对象可以解码，编码时忽略其 Object.prototype 上的 getter", () => {
+    const plain = runInNewContext("({ quantity: 4 })");
+    expect(Quantity.decode(plain)).toEqual({ count: 4 });
+
+    const inherited = runInNewContext(
+      "Object.defineProperty(Object.prototype, 'count', { get() { return 7 } }); ({})",
+    ) as { count: number };
+    expect(() => Quantity.encode(inherited)).toThrow(missingCount);
+  });
+
+  test("自定义原型自身以 null 为原型时仍可提供 getter", () => {
+    const prototype = Object.create(null, { count: { get: () => 3 } });
+    const counter = Object.create(prototype) as { count: number };
+    expect(Quantity.encode(counter)).toEqual({ quantity: 3 });
+    expect(() => Quantity.decode(counter)).toThrow(
+      expect.objectContaining({ issues: [expect.objectContaining({ code: "type.object" })] }),
+    );
+  });
+
+  test("解码与编码在结果上定义自有字段，避免触发原型上的同名访问器", () => {
+    const key = "modviaTestOwnCount";
+    const Counter = defineModel({ fields: { [key]: number() } });
+    const own = { [key]: 7 };
+
+    Object.defineProperty(Object.prototype, key, {
+      configurable: true,
+      get: () => 3,
+      set: () => {
+        throw new Error("意外调用原型 setter");
+      },
+    });
+    try {
+      for (const output of [Counter.decode(own), Counter.encode(own)]) {
+        expect(Object.getPrototypeOf(output)).toBe(Object.prototype);
+        expect(Object.getOwnPropertyDescriptor(output, key)).toEqual({
+          value: 7,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
     } finally {
       Reflect.deleteProperty(Object.prototype, key);
     }
