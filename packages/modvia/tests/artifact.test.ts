@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { arrayOf, defineModel, isModelValidationError, isoDateTime, oneOf, string } from "modvia";
 import type { InferData, InferDTO } from "modvia";
 
@@ -65,6 +65,34 @@ function captureError(run: () => unknown): unknown {
 }
 
 describe("packaged artifact", () => {
+  test("从包入口组合可选日期数组并编码工厂实例的公开字段", () => {
+    const Schedule = defineModel({
+      fields: { dates: arrayOf(isoDateTime().or(null)).optional().from("event_dates") },
+    });
+    expectTypeOf<InferData<typeof Schedule>>().toEqualTypeOf<{
+      readonly dates?: (Date | null)[];
+    }>();
+    expectTypeOf<InferDTO<typeof Schedule>>().toEqualTypeOf<{
+      readonly event_dates?: (string | null)[];
+    }>();
+
+    class Calendar {
+      #dates: (Date | null)[];
+      constructor(data: InferData<typeof Schedule>) {
+        this.#dates = data.dates ?? [];
+      }
+      get dates() {
+        return this.#dates;
+      }
+    }
+
+    const Calendars = Schedule.withFactory((data) => new Calendar(data));
+    const dto = { event_dates: ["2026-11-09T00:00:00.000Z", "+010000-01-01T00:00:00.000Z", null] };
+    expect(Calendars.encode(Calendars.decode(dto))).toStrictEqual(dto);
+    expect(Schedule.encode(Schedule.decode({}))).toStrictEqual({});
+    expect(Calendars.encode(Calendars.decode({}))).toStrictEqual({ event_dates: [] });
+  });
+
   test("decodes and encodes a full round-trip from dist", () => {
     const members = Members.decode(dtoList);
     expect(members).toHaveLength(1);

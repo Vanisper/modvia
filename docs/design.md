@@ -79,7 +79,15 @@ const Shipment = defineModel({
 
 ### 编码业务值
 
-模型按声明的业务字段名读取自有属性，校验并编码后用外部键名写入新 DTO。编码错误的路径使用业务字段名和数组下标。
+基础模型与工厂派生模型共用一套字段读取规则：
+
+1. 对每个声明字段，优先读取模型值的同名自有属性。
+2. 缺少自有属性时，沿原型链查找最近的同名成员，在 `Object.prototype` 之前停止。若该成员是可读 getter，以模型值为 `this` 读取一次。同名方法、原型数据属性或只有 setter 的成员会遮蔽更上层的 getter，此时按字段缺失处理。
+3. 读取到的值交给字段 Codec 校验和编码，用外部键名写入新 DTO。编码校验错误的路径使用业务字段名和数组下标。
+
+若 `Size` 只声明数值字段 `size`，`Size.encode(map)` 通过 getter 取到条目数并输出 `{ size: map.size }`。`Size.decode(map)` 仍按外部对象形状报 `type.object`。
+
+getter 返回 `undefined` 时字段已存在，是否接受这个值由字段 Codec 决定。getter 返回 `"匿名"` 一类默认值时，编码器写出这个公开值。需要保留底层缺键语义时，应通过待编码对象的字段结构表达。
 
 ### 输出工厂与所有权
 
@@ -91,12 +99,12 @@ const Shipment = defineModel({
 
 ### 校验错误
 
-字段与数组聚合可定位的校验失败，`ModelValidationError.issues` 提供路径、稳定错误码和消息。自定义 Codec 通过 `context.fail(code, message)` 报告校验问题。其他异常保留原异常，包括工厂或自定义 Codec 抛出的普通异常。
+字段与数组聚合可定位的校验失败，`ModelValidationError.issues` 提供路径、稳定错误码和消息。自定义 Codec 通过 `context.fail(code, message)` 报告校验问题。其他异常保留原异常，包括 getter、工厂或自定义 Codec 抛出的普通异常。
 
 ## 交付与验证
 
 模型包以 `packages/modvia/src/index.ts` 为公共入口，发布产物为 ESM 和 TypeScript 声明。
 
-- 公共行为用例覆盖嵌套转换、字段作用域、可缺省键和值校验及错误路径。
+- 公共行为用例覆盖嵌套转换、字段作用域、可缺省键和值校验、getter 读取及错误路径。
 - 类型用例验证业务值、DTO 别名与可选键、工厂输出及编解码两端的推导。
 - 产物测试从包名导入，验证构建后的调用方式。工作区通过 `vp run ready` 顺序执行构建、检查与测试。

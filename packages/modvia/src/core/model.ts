@@ -60,17 +60,18 @@ function createModel<Data, DTO, Out extends Data>(
       const issues: ModelIssue[] = [];
 
       for (const { key, source, optional, codec } of resolvedFields) {
-        if (!Object.hasOwn(value, key)) {
-          if (optional) continue;
-          issues.push({
-            path: [key],
-            code: "field.required",
-            message: `Missing model field: ${key}`,
-          });
-          continue;
-        }
         try {
-          output[source] = codec.encode(value[key]);
+          const fieldValue = readModelField(value, key);
+          if (fieldValue === missingField) {
+            if (optional) continue;
+            issues.push({
+              path: [key],
+              code: "field.required",
+              message: `Missing model field: ${key}`,
+            });
+            continue;
+          }
+          output[source] = codec.encode(fieldValue);
         } catch (error) {
           const nested = nestValidationError(error, key);
           if (!nested) throw error;
@@ -120,6 +121,24 @@ function assertUniqueSources(resolvedFields: readonly ResolvedField[]): void {
     }
     owners.set(source, key);
   }
+}
+
+const missingField = Symbol("missing model field");
+
+function readModelField(value: Record<string, unknown>, key: string): unknown {
+  if (Object.hasOwn(value, key)) return value[key];
+
+  let prototype = Reflect.getPrototypeOf(value);
+  while (prototype !== null && prototype !== Object.prototype) {
+    const descriptor: TypedPropertyDescriptor<unknown> | undefined =
+      Object.getOwnPropertyDescriptor(prototype, key);
+    if (descriptor) {
+      // 最近的同名属性会遮蔽更远的 getter
+      return descriptor.get ? Reflect.apply(descriptor.get, value, []) : missingField;
+    }
+    prototype = Reflect.getPrototypeOf(prototype);
+  }
+  return missingField;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

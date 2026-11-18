@@ -116,13 +116,18 @@ const dtoList = Users.encode(users);
 ```ts
 class UserEntity {
   declare readonly id: string;
-  declare readonly name: string;
+  readonly #name: string;
   declare readonly role: "admin" | "manager" | "member";
   declare readonly createdAt: Date;
   declare readonly department: UserData["department"];
 
-  constructor(data: UserData) {
-    Object.assign(this, data);
+  constructor({ name, ...fields }: UserData) {
+    this.#name = name;
+    Object.assign(this, fields);
+  }
+
+  get name(): string {
+    return this.#name;
   }
 
   get displayName(): string {
@@ -144,8 +149,7 @@ const entityDTO: UserDTO = UserEntityModel.encode(entity);
 ```
 
 - `User` 与 `UserEntityModel` 共享 Data 和 DTO，原模型不会被修改。
-- 核心执行真实构造器，不绕过构造器或动态安装业务方法。
-- 默认编码只读取公开声明字段；依赖私有状态的 class 应提供自定义 Codec。
+- 编码时，声明字段 `name` 通过实例的公开 getter 读取，`displayName` 与 `canManage` 留在业务对象上。
 
 如果业务约定缺少页大小时取 20，可以在工厂中补上这个值。此后编码会写出补全后的字段。
 
@@ -214,6 +218,7 @@ try {
 - 解码输入只接受普通对象：`null`、数组、`Date`、`Map` 与 class 实例均报 `type.object`；原型为 `null` 的对象可以接受。
 - 对象与数组会构造新容器，但核心不执行通用深拷贝。
 - 未知 DTO 字段在解码时剥离；编码不会输出方法或未声明字段。
+- 编码优先读取声明字段的自有属性，再沿原型链查找最近的同名成员，止于 `Object.prototype` 之前。原型 getter 以实例为 `this` 读取一次。同名方法、原型数据属性或只有 setter 的成员会遮蔽上层 getter，按缺字段处理。getter 返回 `undefined` 时仍要校验该值。
 - 模型不能直接自引用；递归结构需要显式注解类型后再组合，见下方说明。
 - class 的字段契约由模型显式声明。跨字段校验、异步校验和局部更新的业务规则由应用处理。
 - 不依赖 HTTP、Service、UI、缓存或具体运行平台。
