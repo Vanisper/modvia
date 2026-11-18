@@ -218,6 +218,28 @@ describe("model codec", () => {
     });
   });
 
+  test("日期字段规范化精度并检查输入偏移", () => {
+    const Stamped = defineModel({ fields: { at: isoDateTime() } });
+
+    expect(Stamped.decode({ at: "2026-11-09T02:00:00.123456Z" }).at).toEqual(
+      new Date("2026-11-09T02:00:00.123Z"),
+    );
+    expect(Stamped.encode(Stamped.decode({ at: "2026-11-09T02:00:00+14:01" }))).toEqual({
+      at: "2026-11-08T11:59:00.000Z",
+    });
+
+    for (const offset of ["+24:00", "-24:00", "+12:60", "-12:60"]) {
+      expect(() => Stamped.decode({ at: `2026-11-09T02:00:00${offset}` })).toThrow(
+        expect.objectContaining({
+          issues: [expect.objectContaining({ path: ["at"], code: "datetime.invalid" })],
+        }),
+      );
+    }
+
+    const roundTrip = Stamped.decode(Stamped.encode({ at: new Date("2026-11-09T02:00:00Z") }));
+    expect(roundTrip.at).toEqual(new Date("2026-11-09T02:00:00.000Z"));
+  });
+
   test("aggregates very large error sets without exhausting the call stack", () => {
     const Tags = defineModel({
       fields: { items: arrayOf(string()) },

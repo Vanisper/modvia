@@ -54,21 +54,24 @@ export function oneOf<const Values extends readonly string[]>(
   return field(defineCodec<Values[number], Values[number]>({ decode: convert, encode: convert }));
 }
 
+/**
+ * 将带时区偏移的日期时间字符串与毫秒精度的 Date 互转
+ *
+ * @description 解码接受 `Z` 或 `-23:59` 至 `+23:59` 的数字偏移，编码统一输出 UTC，支持原生 Date 的完整年份范围
+ */
 export function isoDateTime(): Field<Date, string> {
   return field(
     defineCodec<Date, string>({
-      decode(input, context) {
-        if (typeof input !== "string") {
-          return context.fail("type.datetime", "Expected an ISO date-time");
-        }
-        if (!isIsoDateTime(input)) return context.fail("datetime.invalid", "Invalid ISO date-time");
-        return new Date(input);
-      },
+      decode: decodeIsoDateTime,
       encode(input, context) {
-        if (!(input instanceof Date) || !Number.isFinite(input.getTime())) {
-          return context.fail("type.datetime", "Expected a valid Date");
+        try {
+          return Date.prototype.toISOString.call(input);
+        } catch (error) {
+          if (error instanceof TypeError || error instanceof RangeError) {
+            return context.fail("type.datetime", "Expected a valid Date");
+          }
+          throw error;
         }
-        return input.toISOString();
       },
     }),
   );
@@ -81,37 +84,46 @@ function finiteNumber(input: unknown, context: CodecContext): number {
   return input;
 }
 
-function isIsoDateTime(input: string): boolean {
-  const match =
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/.exec(
-      input,
-    );
-  if (!match) return false;
+const isoDateTimePattern =
+  /^(\d{4}|[+-]\d{6})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3})\d*)?(Z|[+-]\d{2}:\d{2})$/;
+const monthLengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-  const [, yearText, monthText, dayText, hourText, minuteText, secondText, zone] = match;
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const second = Number(secondText);
-  if (hour > 23 || minute > 59 || second > 59) return false;
+function decodeIsoDateTime(input: unknown, context: CodecContext): Date {
+  if (typeof input !== "string") return context.fail("type.datetime", "Expected an ISO date-time");
+  const parts = isoDateTimePattern.exec(input);
+  if (!parts) return context.fail("datetime.invalid", "Invalid ISO date-time");
 
-  if (zone !== "Z") {
-    const offsetHour = Number(zone.slice(1, 3));
-    const offsetMinute = Number(zone.slice(4, 6));
-    if (offsetHour > 23 || offsetMinute > 59) return false;
-  }
-
-  const calendar = new Date(0);
-  calendar.setUTCHours(0, 0, 0, 0);
-  calendar.setUTCFullYear(year, month - 1, day);
+  const [, year, month, day, hour, minute, second, fraction = "", zone] = parts;
   if (
-    calendar.getUTCFullYear() !== year ||
-    calendar.getUTCMonth() !== month - 1 ||
-    calendar.getUTCDate() !== day
+    year === "-000000" ||
+    !isCalendarDate(Number(year), Number(month), Number(day)) ||
+    Number(hour) > 23 ||
+    Number(minute) > 59 ||
+    Number(second) > 59 ||
+    !isValidOffset(zone)
   ) {
-    return false;
+    return context.fail("datetime.invalid", "Invalid ISO date-time");
   }
-  return Number.isFinite(Date.parse(input));
+
+  // 日历日期按输入校验，Date 的范围由换算偏移后的时间点决定
+  const date = new Date(
+    `${year}-${month}-${day}T${hour}:${minute}:${second}.${fraction.padEnd(3, "0")}${zone}`,
+  );
+  if (Number.isNaN(date.getTime())) {
+    return context.fail("datetime.out_of_range", "Date-time exceeds the native Date range");
+  }
+  return date;
+}
+
+function isCalendarDate(year: number, month: number, day: number): boolean {
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const lastDay = month === 2 && leapYear ? 29 : (monthLengths[month - 1] ?? 0);
+  return day >= 1 && day <= lastDay;
+}
+
+function isValidOffset(zone: string): boolean {
+  if (zone === "Z") return true;
+  const hours = Number(zone.slice(1, 3));
+  const minutes = Number(zone.slice(4, 6));
+  return hours <= 23 && minutes <= 59;
 }

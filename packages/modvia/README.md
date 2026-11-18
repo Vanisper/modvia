@@ -218,6 +218,25 @@ try {
 - class 的字段契约由模型显式声明。跨字段校验、异步校验和局部更新的业务规则由应用处理。
 - 不依赖 HTTP、Service、UI、缓存或具体运行平台。
 
+## 日期时间
+
+`isoDateTime()` 适合创建时间、事件发生时间等确定的时间点。解码得到毫秒精度的 `Date`，编码统一输出 UTC 字符串。原始偏移和毫秒之后的小数位会丢失。
+
+```ts
+import { isoDateTime } from "modvia";
+
+const timestamp = isoDateTime();
+const instant = timestamp.decode("2026-11-19T00:15:00.123456+08:00");
+timestamp.encode(instant); // "2026-11-18T16:15:00.123Z"
+```
+
+- 输入由日期、`T`、完整的时分秒和时区偏移组成。年份接受四位数字或带正负号的六位数字，`-000000` 为非法年份。
+- 偏移写作 `Z` 或 `±HH:mm`。数字偏移的小时范围是 `00`–`23`，分钟范围是 `00`–`59`，因此 `+23:59` 和 `-23:59` 都有效。
+- 小数秒可省略，也可提供一位或多位数字。解码截断超出毫秒的部分，编码固定输出三位小数秒。
+- 换算为 UTC 后，时间值必须在原生 `Date` 的范围内，即距 Unix 纪元不超过 `8_640_000_000_000_000` 毫秒，含两个端点。
+- 编码按 UTC 年份选择表示。`0000`–`9999` 使用四位数字，范围以外使用带正负号的六位数字。例如 `9999-12-31T23:30:00-01:00` 会写成 `+010000-01-01T00:30:00.000Z`。
+- 纯日期、无偏移的本地日期时间和数字时间戳不在该字段的输入范围内。这些协议可以通过自定义 Codec 指定业务表示和单位。
+
 ## 递归模型
 
 模型不能在自己的字段里直接引用自己，需要在第一次引用前给外层变量一个显式类型：
@@ -248,18 +267,19 @@ const nodeModel: Model<NodeData, NodeDTO> = defineModel({
 
 `issue.code` 是稳定标识，可以用于分支判断：
 
-| code                | 来源                                            |
-| ------------------- | ----------------------------------------------- |
-| `type.object`       | 模型或嵌套模型收到非普通对象                    |
-| `type.array`        | `arrayOf` 收到非数组                            |
-| `type.string`       | `string()` 收到非字符串                         |
-| `type.number`       | `number()` 收到非有限数字                       |
-| `type.boolean`      | `boolean()` 收到非布尔值                        |
-| `type.datetime`     | 解码输入不是字符串，或编码输入不是有效的 `Date` |
-| `string.min_length` | `string({ minLength })` 长度不足                |
-| `one_of`            | `oneOf()` 收到枚举外的值                        |
-| `datetime.invalid`  | 日期时间字符串的格式、日期、时间或偏移非法      |
-| `field.required`    | 缺少必填的外部键，或模型缺少可读取的必填字段    |
+| code                    | 来源                                            |
+| ----------------------- | ----------------------------------------------- |
+| `type.object`           | 模型或嵌套模型收到非普通对象                    |
+| `type.array`            | `arrayOf` 收到非数组                            |
+| `type.string`           | `string()` 收到非字符串                         |
+| `type.number`           | `number()` 收到非有限数字                       |
+| `type.boolean`          | `boolean()` 收到非布尔值                        |
+| `type.datetime`         | 解码输入不是字符串，或编码输入不是有效的 `Date` |
+| `string.min_length`     | `string({ minLength })` 长度不足                |
+| `one_of`                | `oneOf()` 收到枚举外的值                        |
+| `datetime.invalid`      | 日期时间字符串的格式、日期、时间或偏移非法      |
+| `datetime.out_of_range` | 解码输入换算为 UTC 后超出原生 `Date` 的时间范围 |
+| `field.required`        | 缺少必填的外部键，或模型缺少可读取的必填字段    |
 
 `string()` 的长度按 UTF-16 码元计算，因此一个基本多文种平面之外的字符（如 emoji）计为 2。
 
