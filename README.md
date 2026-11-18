@@ -29,7 +29,7 @@ const user = User.decode({ id: "u-1", name: "  林舟  ", extra: "ignored" });
 const dto = User.encode(user);
 ```
 
-字段别名、嵌套模型、数组、自定义 Codec 和 class 工厂见[模型包使用说明](packages/modvia/README.md)。定位、首轮范围与模块职责见[设计文档](docs/design.md)。
+字段别名、可选键、字面量、数组与工厂的用法见[模型包使用说明](packages/modvia/README.md)。接口职责与模型读写契约见[设计文档](docs/design.md)。
 
 ## 开发
 

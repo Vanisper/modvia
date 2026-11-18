@@ -1,40 +1,19 @@
-import { fieldSource } from "./codec.ts";
+import { isField } from "./codec.ts";
 import { fail, ModelValidationError, nestValidationError } from "./errors.ts";
-import type { Codec, Field, Model, ModelIssue } from "./types.ts";
-
-type FieldRecord = Readonly<Record<string, Codec<unknown, unknown>>>;
+import type { FieldRecord, ModelOf } from "./model-types.ts";
+import type { Codec, Model, ModelIssue } from "./types.ts";
 
 interface ResolvedField {
   readonly key: string;
   readonly source: string;
+  readonly optional: boolean;
   readonly codec: Codec<unknown, unknown>;
 }
 
-type DataOf<Fields extends FieldRecord> = {
-  readonly [Key in keyof Fields]: Fields[Key] extends Codec<infer Value, infer _Encoded>
-    ? Value
-    : never;
-};
-
-type SourceOf<FieldCodec, Fallback extends PropertyKey> =
-  FieldCodec extends Field<infer _Value, infer _Encoded, infer Source>
-    ? Source extends string
-      ? Source
-      : Fallback
-    : Fallback;
-
-type DTOOf<Fields extends FieldRecord> = {
-  [Key in keyof Fields as SourceOf<Fields[Key], Key>]: Fields[Key] extends Codec<
-    infer _Value,
-    infer Encoded
-  >
-    ? Encoded
-    : never;
-};
-
+/** 声明对象字段，并推导业务数据和外部 DTO */
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
-}): Model<DataOf<Fields>, DTOOf<Fields>> {
+}): ModelOf<Fields> {
   const fields: Fields = Object.freeze({ ...options.fields });
   const resolvedFields = resolveFields(fields);
   assertNoReservedNames(resolvedFields);
@@ -52,8 +31,9 @@ function createModel<Data, DTO, Out extends Data>(
       const data: Record<string, unknown> = {};
       const issues: ModelIssue[] = [];
 
-      for (const { key, source, codec } of resolvedFields) {
+      for (const { key, source, optional, codec } of resolvedFields) {
         if (!Object.hasOwn(input, source)) {
+          if (optional) continue;
           issues.push({
             path: [source],
             code: "field.required",
@@ -79,8 +59,9 @@ function createModel<Data, DTO, Out extends Data>(
       const output: Record<string, unknown> = {};
       const issues: ModelIssue[] = [];
 
-      for (const { key, source, codec } of resolvedFields) {
+      for (const { key, source, optional, codec } of resolvedFields) {
         if (!Object.hasOwn(value, key)) {
+          if (optional) continue;
           issues.push({
             path: [key],
             code: "field.required",
@@ -108,11 +89,16 @@ function createModel<Data, DTO, Out extends Data>(
 }
 
 function resolveFields(fields: FieldRecord): ResolvedField[] {
-  return Object.entries(fields).map(([key, codec]) => ({
-    key,
-    source: fieldSource(codec) ?? key,
-    codec,
-  }));
+  return Object.entries(fields).map(([key, codec]) => {
+    const field = isField(codec) ? codec : undefined;
+    const source = field?.source;
+    return {
+      key,
+      codec,
+      source: typeof source === "string" ? source : key,
+      optional: field?.presence === "optional",
+    };
+  });
 }
 
 function assertNoReservedNames(resolvedFields: readonly ResolvedField[]): void {

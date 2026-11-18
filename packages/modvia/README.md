@@ -1,6 +1,6 @@
 # modvia
 
-`modvia` 是独立的 TypeScript 模型层库，用一份声明完成运行时校验、DTO 映射、嵌套构造和双向序列化。普通对象可以直接使用全部核心能力；需要领域行为时，再通过工厂输出 class 实例。
+`modvia` 是独立的 TypeScript 模型层库，用一份声明完成运行时校验、DTO 映射、嵌套构造和双向序列化。模型默认返回普通对象，也可以通过工厂构造带方法的对象或 class 实例。
 
 当前包处于开发阶段，尚未发布。
 
@@ -66,6 +66,35 @@ const dto: UserDTO = User.encode(user);
 
 编码只读取声明字段，仍会执行字段 Codec。日期输出统一为 UTC ISO 字符串；其他规范化转换以对应字段 Codec 为准。
 
+## 字段组合
+
+字段可以独立读写，也可以作为多个模型的字段复用。`.from(name)`、`.or(value)` 和 `.optional()` 都返回派生字段，保留同一字段上的其他约定。
+
+```ts
+import { arrayOf, defineModel, number, string } from "modvia";
+
+const SKU = string({ trim: true, minLength: 1 });
+const Product = defineModel({
+  fields: {
+    sku: SKU.from("product_code"),
+    stock: number().or("unlimited"),
+    tags: arrayOf(string().or(null)).from("labels").optional(),
+  },
+});
+
+const product = Product.decode({ product_code: " A-01 ", stock: "unlimited" });
+// { sku: "A-01", stock: "unlimited" }
+
+Product.encode({ ...product, tags: [null, "夏季"] });
+// { product_code: "A-01", stock: "unlimited", labels: [null, "夏季"] }
+```
+
+- `from` 在模型读写外部对象时指定键名。`SKU` 本身仍可用作同名字段，或直接调用 `SKU.decode(" A-01 ")`。
+- `or` 接受一个显式字符串、数字、布尔值、`null` 或 `undefined`，两端类型都增加该字面量。编解码时按 `Object.is` 优先匹配，命中后直接保留它。若加入的字符串恰好也是 `isoDateTime()` 的规范输出，解码该字符串时会得到字符串。
+- `optional` 允许父对象省略键，解码与编码都保留缺省。示例中的业务类型有 `readonly tags?: (string | null)[]`，DTO 则有 `labels?: (string | null)[]`。
+
+字段值为 `undefined` 时键已经存在。对 `SKU.optional()`，`{}` 可以通过，`{ sku: undefined }` 会触发 `type.string`。对 `SKU.or(undefined)`，后者会保留键和值，缺键则触发 `field.required`。两种输入都合法时写 `SKU.or(undefined).optional()`。TypeScript 的 `exactOptionalPropertyTypes` 设置影响显式 `undefined` 的静态检查，运行时始终按字段规则校验。
+
 ## 列表
 
 ```ts
@@ -76,11 +105,13 @@ const users = Users.decode(response);
 const dtoList = Users.encode(users);
 ```
 
-列表输入必须是数组。元素错误保留数组下标，例如 `[2, "department", "name"]`。
+- 列表输入必须是数组。元素错误保留下标，例如 `[2, "department", "name"]`。
+- `arrayOf(string().or(null))` 允许单个元素为 `null`，`arrayOf(string()).or(null)` 允许整个数组为 `null`。
+- `arrayOf(...).from(...).optional()` 声明数组字段的外部名和可缺省性。
 
-## class 输出
+## 工厂输出
 
-class 工厂接收已经完成校验和转换的数据，不接触原始 DTO：
+`withFactory` 的回调接收已经完成校验和转换的字段数据。它可以返回带方法或计算属性的普通对象，也可以通过已有构造器创建 class 实例。
 
 ```ts
 class UserEntity {
@@ -116,10 +147,23 @@ const entityDTO: UserDTO = UserEntityModel.encode(entity);
 - 核心执行真实构造器，不绕过构造器或动态安装业务方法。
 - 默认编码只读取公开声明字段；依赖私有状态的 class 应提供自定义 Codec。
 
+如果业务约定缺少页大小时取 20，可以在工厂中补上这个值。此后编码会写出补全后的字段。
+
+```ts
+import { defineModel, number } from "modvia";
+
+const Page = defineModel({ fields: { size: number().optional() } }).withFactory((data) => ({
+  size: data.size ?? 20,
+}));
+
+const page = Page.decode({}); // { size: 20 }
+Page.encode(page); // { size: 20 }
+```
+
 ## 自定义 Codec
 
 ```ts
-import { defineCodec, field } from "modvia";
+import { defineCodec, defineModel, field } from "modvia";
 
 const slug = defineCodec<string, string>({
   decode(input, context) {
@@ -165,20 +209,66 @@ try {
 
 ## 当前边界
 
-- 所有字段均为必填；可选、可空和默认值尚未提供。
+- 字段默认必填。缺键用 `.optional()` 表达，允许的特殊值用 `.or(value)` 表达。
 - 字段外部名（别名或字段名）在定义时必须唯一，重复会在 `defineModel` 抛出 `RangeError`；`__proto__` 是保留名，同样在定义期拒绝。
 - 解码输入只接受普通对象：`null`、数组、`Date`、`Map` 与 class 实例均报 `type.object`；原型为 `null` 的对象可以接受。
 - 对象与数组会构造新容器，但核心不执行通用深拷贝。
 - 未知 DTO 字段在解码时剥离；编码不会输出方法或未声明字段。
-- 不提供跨字段校验、异步校验、class 继承、装饰器或局部 Patch 推导。
+- 模型不能直接自引用；递归结构需要显式注解类型后再组合，见下方说明。
+- class 的字段契约由模型显式声明。跨字段校验、异步校验和局部更新的业务规则由应用处理。
 - 不依赖 HTTP、Service、UI、缓存或具体运行平台。
+
+## 递归模型
+
+模型不能在自己的字段里直接引用自己，需要在第一次引用前给外层变量一个显式类型：
+
+```ts
+import { defineModel, defineCodec, arrayOf, string, type Codec, type Model } from "modvia";
+
+interface NodeData {
+  readonly id: string;
+  readonly children: readonly NodeData[];
+}
+interface NodeDTO {
+  id: string;
+  children: NodeDTO[];
+}
+
+const nodeCodec: Codec<NodeData, NodeDTO> = defineCodec({
+  decode: (input) => nodeModel.decode(input),
+  encode: (value) => nodeModel.encode(value),
+});
+
+const nodeModel: Model<NodeData, NodeDTO> = defineModel({
+  fields: { id: string(), children: arrayOf(nodeCodec) },
+});
+```
+
+## 错误码
+
+`issue.code` 是稳定标识，可以用于分支判断：
+
+| code                | 来源                                            |
+| ------------------- | ----------------------------------------------- |
+| `type.object`       | 模型或嵌套模型收到非普通对象                    |
+| `type.array`        | `arrayOf` 收到非数组                            |
+| `type.string`       | `string()` 收到非字符串                         |
+| `type.number`       | `number()` 收到非有限数字                       |
+| `type.boolean`      | `boolean()` 收到非布尔值                        |
+| `type.datetime`     | 解码输入不是字符串，或编码输入不是有效的 `Date` |
+| `string.min_length` | `string({ minLength })` 长度不足                |
+| `one_of`            | `oneOf()` 收到枚举外的值                        |
+| `datetime.invalid`  | 日期时间字符串的格式、日期、时间或偏移非法      |
+| `field.required`    | 缺少必填的外部键，或模型缺少可读取的必填字段    |
+
+`string()` 的长度按 UTF-16 码元计算，因此一个基本多文种平面之外的字符（如 emoji）计为 2。
 
 ## 开发
 
+在工作区根目录运行完整验证。
+
 ```sh
-vp test
-vp check
-vp pack
+vp run ready
 ```
 
-`tests/artifact.test.ts` 通过包名消费 `dist` 产物：单独运行 `vp test` 前先 `vp pack`，或直接在仓库根目录运行 `vp run ready`。
+`tests/artifact.test.ts` 通过包名消费 `dist` 产物。单独在包目录运行 `vp test` 时，先运行 `vp pack`。

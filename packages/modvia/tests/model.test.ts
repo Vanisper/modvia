@@ -329,4 +329,24 @@ describe("model codec", () => {
     expectTypeOf<InferModel<typeof UserClassModel>>().toEqualTypeOf<User>();
     expectTypeOf<InferDTO<typeof UserClassModel>>().toEqualTypeOf<UserDTO>();
   });
+
+  test("联合字段表保留各分支的键以及索引签名中的已知字段", () => {
+    const compact = { kind: oneOf("compact"), label: string().from("title") };
+    const counted = { kind: oneOf("counted"), count: number().optional() };
+    function catalog(fields: typeof compact | typeof counted) {
+      return defineModel({ fields });
+    }
+    const model = catalog(compact);
+    const data = model.decode({ kind: "compact", title: "目录" });
+    if (data.kind === "compact") expectTypeOf(data.label).toEqualTypeOf<string>();
+    else expectTypeOf(data.count).toEqualTypeOf<number | undefined>();
+    expect(model.encode(data)).toStrictEqual({ kind: "compact", title: "目录" });
+    type DTO = InferDTO<typeof model>;
+    expectTypeOf<Extract<DTO, { kind: "compact" }>["title"]>().toEqualTypeOf<string>();
+
+    const fields: Record<string, Codec<unknown, unknown>> & typeof compact = compact;
+    const indexed = defineModel({ fields });
+    expectTypeOf<InferData<typeof indexed>["label"]>().toEqualTypeOf<string>();
+    expectTypeOf<InferDTO<typeof indexed>["title"]>().toEqualTypeOf<string>();
+  });
 });
