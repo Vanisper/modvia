@@ -14,8 +14,7 @@ interface ResolvedField {
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
 }): ModelOf<Fields> {
-  const fields: Fields = Object.freeze({ ...options.fields });
-  const resolvedFields = resolveFields(fields);
+  const resolvedFields = resolveFields(options.fields);
   assertUniqueSources(resolvedFields);
   return createModel(resolvedFields, (data) => data);
 }

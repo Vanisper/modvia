@@ -374,6 +374,33 @@ describe("model codec", () => {
     expectTypeOf<InferDTO<typeof UserClassModel>>().toEqualTypeOf<UserDTO>();
   });
 
+  test("模型只收集字段表的可枚举字符串键", () => {
+    const metadata = Symbol("metadata");
+    const item = defineModel({
+      fields: {
+        1: number(),
+        label: string(),
+        get [metadata](): Codec<string, string> {
+          throw new Error("符号键不参与模型定义");
+        },
+      },
+    });
+    const data = item.decode({ 1: 3, label: "目录" });
+    expectTypeOf<keyof typeof data>().toEqualTypeOf<1 | "label">();
+    expectTypeOf<keyof InferDTO<typeof item>>().toEqualTypeOf<1 | "label">();
+    expect(item.encode(data)).toStrictEqual({ 1: 3, label: "目录" });
+  });
+
+  test("动态字段别名只写出实际选择的键", () => {
+    function user(key: `user_${string}`) {
+      return defineModel({ fields: { name: string().from(key), id: number() } });
+    }
+    const dto = user("user_amy").encode({ name: "Amy", id: 1 });
+    expect(dto).toStrictEqual({ id: 1, user_amy: "Amy" });
+    expectTypeOf(dto.user_bob).toEqualTypeOf<string | undefined>();
+    expectTypeOf(dto.id).toEqualTypeOf<number>();
+  });
+
   test("联合字段表保留各分支的键以及索引签名中的已知字段", () => {
     const compact = { kind: oneOf("compact"), label: string().from("title") };
     const counted = { kind: oneOf("counted"), count: number().optional() };
