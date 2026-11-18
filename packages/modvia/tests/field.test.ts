@@ -92,13 +92,19 @@ describe("字段组合", () => {
 
   test("展开字段保留别名和可选性，普通 Codec 的同名属性不参与字段声明", () => {
     const copy = { ...string().optional().from("external") };
-    const plain = {
-      source: "ignored",
-      presence: "optional" as const,
-      decode: (input: unknown) => string().decode(input),
-      encode: (value: string) => value,
-    };
+    const { source, presence, from, or, optional, decode, encode } = string()
+      .from("ignored")
+      .optional();
+    const plain = { source, presence, from, or, optional, decode, encode };
+    const tagged = { ...plain, [Symbol.toStringTag]: "modvia.Field" } as const;
+    const named = defineModel({ fields: { title: tagged } });
+    expectTypeOf<InferDTO<typeof named>>().toEqualTypeOf<{ readonly ignored?: string }>();
+    expect(named.encode({ title: "B" })).toStrictEqual({ ignored: "B" });
     const model = defineModel({ fields: { code: copy, title: plain } });
+    expectTypeOf<InferDTO<typeof model>>().toEqualTypeOf<{
+      readonly external?: string;
+      readonly title: string;
+    }>();
     expect(model.decode({ external: "A", title: "B" })).toStrictEqual({ code: "A", title: "B" });
     expect(model.encode({ title: "B" })).toStrictEqual({ title: "B" });
     expect(model.encode({ code: "A", title: "B" })).toStrictEqual({ external: "A", title: "B" });

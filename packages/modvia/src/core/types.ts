@@ -28,6 +28,8 @@ export interface Field<
   Source extends string | undefined = undefined,
   Presence extends FieldPresence = "required",
 > extends Codec<T, Encoded> {
+  /** 标识字段声明的对象标签 */
+  readonly [Symbol.toStringTag]: "modvia.Field";
   /** 外部字段名，未指定时沿用模型字段名 */
   readonly source: Source;
   /** 父对象在编解码时是否允许省略此键 */

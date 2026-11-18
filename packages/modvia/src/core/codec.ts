@@ -59,7 +59,16 @@ export function isField<T, Encoded>(
 ): codec is Field<T, Encoded, string | undefined, FieldPresence> {
   if (typeof codec !== "object" || codec === null) return false;
   try {
-    return Reflect.get(codec, fieldBrand) === true;
+    if (Reflect.get(codec, fieldBrand) === true) return true;
+    const field = codec as Partial<Field<T, Encoded, string | undefined, FieldPresence>>;
+    return (
+      field[Symbol.toStringTag] === "modvia.Field" &&
+      (field.presence === "required" || field.presence === "optional") &&
+      (field.source === undefined || typeof field.source === "string") &&
+      typeof field.from === "function" &&
+      typeof field.optional === "function" &&
+      typeof field.or === "function"
+    );
   } catch {
     return false;
   }
@@ -90,7 +99,9 @@ function createField<T, Encoded, Source extends string | undefined, Presence ext
   source: Source,
   presence: Presence,
 ): Field<T, Encoded, Source, Presence> {
-  const fieldCodec: Field<T, Encoded, Source, Presence> = {
+  const fieldCodec: Field<T, Encoded, Source, Presence> & { [fieldBrand]: true } = {
+    [fieldBrand]: true,
+    [Symbol.toStringTag]: "modvia.Field",
     source,
     presence,
     decode(input: unknown) {
@@ -121,8 +132,6 @@ function createField<T, Encoded, Source extends string | undefined, Presence ext
       return createField(codec, source, "optional");
     },
   };
-  // 对象展开会保留字段类型，品牌也须随字段元数据一起复制
-  Object.defineProperty(fieldCodec, fieldBrand, { value: true, enumerable: true });
   return Object.freeze(fieldCodec);
 }
 

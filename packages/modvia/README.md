@@ -95,6 +95,8 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 
 字段值为 `undefined` 时键已经存在。对 `SKU.optional()`，`{}` 可以通过，`{ sku: undefined }` 会触发 `type.string`。对 `SKU.or(undefined)`，后者会保留键和值，缺键则触发 `field.required`。两种输入都合法时写 `SKU.or(undefined).optional()`。TypeScript 的 `exactOptionalPropertyTypes` 设置影响显式 `undefined` 的静态检查，运行时始终按字段规则校验。
 
+封装或导出字段时，保留 TypeScript 推导出的字段类型，模型就能继续推导别名和可选键。显式标注成基础类型 `Codec<T, E>` 只保留值的编解码签名，运行时字段仍带有原来的别名和缺省规则。
+
 ## 列表
 
 ```ts
