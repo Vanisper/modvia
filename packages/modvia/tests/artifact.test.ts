@@ -6,6 +6,7 @@ import {
   isoDateTime,
   literal,
   oneOf,
+  snakeCase,
   string,
   taggedUnion,
   type InferData,
@@ -28,7 +29,7 @@ const MemberModel = defineModel({
     id: string(),
     name: string({ trim: true, minLength: 1 }),
     role: oneOf("admin", "manager", "member"),
-    joinedAt: isoDateTime().from("joined_at"),
+    joinedAt: isoDateTime().alias("joined_at"),
     department: Department,
   },
 });
@@ -75,12 +76,20 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     expect("defineModel" in codecEntry).toBe(false);
 
     const positiveMap = codecEntry.recordOf(
-      codecEntry.number().check((n, ctx) => {
-        if (n <= 0) ctx.fail("number.positive", "Expected > 0");
-      }),
+      codecEntry
+        .int()
+        .refine((n) => n > 0, "number.positive", "Expected > 0")
+        .brand<"PositiveInt">(),
     );
     expect(positiveMap.decode({ a: 1 })).toStrictEqual({ a: 1 });
     expect(positiveMap.safeDecode({ a: 0 }).ok).toBe(false);
+    expect(positiveMap.safeDecode({ a: 1.5 }).ok).toBe(false);
+
+    const pair = codecEntry.tupleOf(
+      codecEntry.string({ trim: true }).normalize((s) => s.toLowerCase()),
+      codecEntry.unknown(),
+    );
+    expect(pair.decode(["  OK ", { raw: 1 }])).toStrictEqual(["ok", { raw: 1 }]);
 
     const nums = codecEntry.arrayOf(codecEntry.number().or("auto", null));
     expect(nums.safeDecode([1, "auto", null])).toStrictEqual({
@@ -91,7 +100,7 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
 
   test("从包入口组合可选日期数组并编码工厂实例的公开字段", () => {
     const Schedule = defineModel({
-      fields: { dates: arrayOf(isoDateTime().nullable()).optional().from("event_dates") },
+      fields: { dates: arrayOf(isoDateTime().nullable()).optional().alias("event_dates") },
     });
     expectTypeOf<InferData<typeof Schedule>>().toEqualTypeOf<{
       readonly dates?: (Date | null)[];
@@ -135,10 +144,23 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
       type: "system",
       code: 200,
     });
+
+    const Config = defineModel({
+      alias: snakeCase,
+      fields: {
+        maxRetries: codecEntry.int().default(3),
+        serviceUrl: string(),
+      },
+    });
+    expect(Config.encode(Config.decode({ service_url: "https://api.example.com" }))).toStrictEqual({
+      max_retries: 3,
+      service_url: "https://api.example.com",
+    });
+    expect(Config.partial().decode({})).toStrictEqual({});
   });
 
   test("通过 dist 完成完整实例往返与 Standard Schema 校验", () => {
-    const members = Members.decode(dtoList);
+    const members = Members.parse(dtoList);
     expect(members).toHaveLength(1);
 
     const member = members[0];
@@ -168,6 +190,8 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
         department: { id: "d-1", name: "研发部" },
       },
     ]);
+    expect(Members.decode(encoded)).toHaveLength(1);
+    expect(Members.dump(members)).toEqual(encoded);
 
     expect(Members["~standard"].validate(dtoList)).toMatchObject({
       value: [expect.any(Member)],
@@ -177,7 +201,7 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
   test("从打包产物聚合多字段校验错误", () => {
     let caught: unknown;
     try {
-      MemberModel.decode({
+      MemberModel.parse({
         id: "m-2",
         name: " ",
         role: "owner",

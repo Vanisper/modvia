@@ -23,25 +23,31 @@ describe("field binding", () => {
     expectTypeOf<DTO["product_code"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<InferData<ReturnType<typeof product>>>().toEqualTypeOf<{ readonly sku: string }>();
     expect(product(string()).encode({ sku: "A" })).toStrictEqual({ sku: "A" });
-    expect(product(string().from("product_code")).encode({ sku: "A" })).toStrictEqual({
+    expect(product(string().alias("product_code")).encode({ sku: "A" })).toStrictEqual({
       product_code: "A",
     });
   });
 
-  test("from 覆盖生效，optional 与 required 幂等转换且不改变值规则", () => {
+  test("alias 覆盖生效，optional 与 required 幂等转换且不改变值规则", () => {
     const base = number();
-    const first = base.from("old_key").optional();
+    const first = base.alias("old_key").optional();
     expect(first.optional()).toBe(first);
 
-    const rebound = first.from("new_key").required();
+    const rebound = first.alias("new_key").required();
     expect(rebound.required()).toBe(rebound);
     expect(rebound.source).toBe("new_key");
     expect(rebound.presence).toBe("required");
     expect(rebound.codec).toBe(base);
+    expect(rebound.parse(5)).toBe(5);
+    expect(rebound.dump(5)).toBe(5);
+    expect(rebound.safeParse("bad").ok).toBe(false);
+    expect(rebound.safeDump("bad").ok).toBe(false);
 
     const Model = defineModel({ fields: { count: rebound } });
     expect(Model.decode({ new_key: 5 })).toStrictEqual({ count: 5 });
-    expect(Model.safeDecode({})).toMatchObject({
+    // @ts-expect-error decode 编译期要求传入必填键 new_key
+    expect(Model.safeDecode({}).ok).toBe(false);
+    expect(Model.safeParse({})).toMatchObject({
       ok: false,
       issues: [{ path: ["new_key"], code: "field.required" }],
     });
@@ -53,19 +59,20 @@ describe("field binding", () => {
     const optional = defineModel({ fields: { sku: SKU.optional() } });
     const both = defineModel({ fields: { sku: SKU.optional().or(undefined) } });
 
-    expect(required.safeDecode({})).toMatchObject({
+    expect(required.safeParse({})).toMatchObject({
       ok: false,
       issues: [{ path: ["sku"], code: "field.required" }],
     });
-    // @ts-expect-error 缺少必填键时编码也会失败
+    // @ts-expect-error 缺少必填键时编码在编译期报错，运行时亦失败
     expect(() => required.encode({})).toThrow();
+    expect(() => required.dump({})).toThrow();
     expect(required.decode({ sku: undefined })).toStrictEqual({ sku: undefined });
     expect(required.encode({ sku: undefined })).toStrictEqual({ sku: undefined });
 
     expect(optional.decode({})).toStrictEqual({});
     expect(optional.encode({})).toStrictEqual({});
-    expect(optional.safeDecode({ sku: undefined }).ok).toBe(false);
-    expect(() => Reflect.apply(optional.encode, undefined, [{ sku: undefined }])).toThrow();
+    expect(optional.safeParse({ sku: undefined }).ok).toBe(false);
+    expect(() => optional.dump({ sku: undefined })).toThrow();
 
     expect(both.decode({})).toStrictEqual({});
     expect(both.encode({})).toStrictEqual({});
@@ -79,35 +86,45 @@ describe("field binding", () => {
   });
 
   test("对象展开拷贝保留字段元数据，无标识对象的同名属性不参与字段声明", () => {
-    const copy = { ...string().optional().from("external") };
+    const copy = { ...string().optional().alias("external") };
     const {
       codec,
       source,
       presence,
-      from,
+      alias,
       or,
       nullable,
       optional,
       required,
+      default: withDefault,
       decode,
       encode,
       safeDecode,
       safeEncode,
+      parse,
+      safeParse,
+      dump,
+      safeDump,
       "~standard": standard,
-    } = string().from("ignored").optional();
+    } = string().alias("ignored").optional();
     const plain = {
       codec,
       source,
       presence,
-      from,
+      alias,
       or,
       nullable,
       optional,
       required,
+      default: withDefault,
       decode,
       encode,
       safeDecode,
       safeEncode,
+      parse,
+      safeParse,
+      dump,
+      safeDump,
       "~standard": standard,
     };
     const tagged = { ...plain, [Symbol.toStringTag]: "modvia.Field" } as const;
@@ -124,7 +141,7 @@ describe("field binding", () => {
     expect(model.decode({ external: "A", title: "B" })).toStrictEqual({ code: "A", title: "B" });
     expect(model.encode({ title: "B" })).toStrictEqual({ title: "B" });
     expect(model.encode({ code: "A", title: "B" })).toStrictEqual({ external: "A", title: "B" });
-    expect(model.safeDecode({ ignored: "B" })).toMatchObject({
+    expect(model.safeParse({ ignored: "B" })).toMatchObject({
       ok: false,
       issues: [{ path: ["title"], code: "field.required" }],
     });
@@ -134,18 +151,18 @@ describe("field binding", () => {
     const list = arrayOf(isoDateTime().nullable());
     const required = defineModel({ fields: { dates: list } });
     const wrapped = defineModel({
-      fields: { dates: field(list.or(false).from("event_dates").optional()) },
+      fields: { dates: field(list.or(false).alias("event_dates").optional()) },
     });
     const reordered = defineModel({
-      fields: { dates: list.optional().or(false).from("event_dates") },
+      fields: { dates: list.optional().or(false).alias("event_dates") },
     });
 
     const stamp = "2026-01-01T00:00:00.000Z";
     expect(required.decode({ dates: [null, stamp] })).toStrictEqual({
       dates: [null, new Date(stamp)],
     });
-    expect(required.safeDecode({}).ok).toBe(false);
-    expect(list.safeDecode([undefined]).ok).toBe(false);
+    expect(required.safeParse({}).ok).toBe(false);
+    expect(list.safeParse([undefined]).ok).toBe(false);
 
     for (const model of [wrapped, reordered]) {
       expect(model.decode({})).toStrictEqual({});
@@ -154,7 +171,7 @@ describe("field binding", () => {
       expect(model.encode({ dates: [new Date(stamp), null] })).toStrictEqual({
         event_dates: [stamp, null],
       });
-      expect(model.safeDecode({ event_dates: [null, false] })).toMatchObject({
+      expect(model.safeParse({ event_dates: [null, false] })).toMatchObject({
         ok: false,
         issues: [{ path: ["event_dates", 1], code: "type.datetime" }],
       });
@@ -172,5 +189,36 @@ describe("field binding", () => {
       readonly event_dates?: (string | null)[] | false;
     }>();
     expectTypeOf<InferDTO<typeof reordered>>().toEqualTypeOf<InferDTO<typeof wrapped>>();
+  });
+
+  test("default 仅在父对象缺键时填入业务默认值，防可变共享引用且满足往返收敛", () => {
+    const Pagination = defineModel({
+      fields: {
+        page: number().default(1).alias("page_no"),
+        tags: arrayOf(string()).default(() => []),
+      },
+    });
+
+    const first = Pagination.decode({});
+    const second = Pagination.decode({});
+    expect(first).toStrictEqual({ page: 1, tags: [] });
+    expect(first.tags).not.toBe(second.tags);
+    expect(Pagination.encode(first)).toStrictEqual({ page_no: 1, tags: [] });
+
+    // 键显式存在但值非法时照常报错，不静默兜底
+    expect(Pagination.safeParse({ page_no: undefined }).ok).toBe(false);
+    expect(Pagination.safeParse({ page_no: null }).ok).toBe(false);
+
+    expectTypeOf<InferData<typeof Pagination>>().toEqualTypeOf<{
+      readonly page: number;
+      readonly tags: string[];
+    }>();
+    expectTypeOf<InferDTO<typeof Pagination>>().toMatchTypeOf<{
+      page_no?: number;
+      tags?: string[];
+    }>();
+
+    // @ts-expect-error 非原始可变值必须通过工厂函数提供默认值，防止实例间共享同一引用
+    expect(() => arrayOf(string()).default([])).toThrow(TypeError);
   });
 });

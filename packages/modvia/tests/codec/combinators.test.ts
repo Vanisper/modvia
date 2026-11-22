@@ -24,7 +24,7 @@ const intFromString = defineCodec<number, string>({
     return Number(input);
   },
   encode(value, context) {
-    if (!Number.isSafeInteger(value)) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
       return context.fail("number.safe_integer", "Expected a safe integer");
     }
     return String(value);
@@ -67,6 +67,80 @@ describe("codec combinators", () => {
     expect(afterEpoch.safeEncode(new Date(-1))).toMatchObject({
       ok: false,
       issues: [{ code: "date.before_epoch" }],
+    });
+  });
+
+  test("check 支持通过 context.issue 非中断收集多条错误及相对子路径", () => {
+    const Span = defineModel({
+      fields: {
+        min: number(),
+        max: number(),
+      },
+    }).check((span, context) => {
+      if (span.min < 0) {
+        context.issue({ code: "span.negative_min", message: "min must be >= 0", path: ["min"] });
+      }
+      if (span.max < span.min) {
+        context.issue({ code: "span.inverted", message: "max must be >= min", path: ["max"] });
+      }
+    });
+
+    const failure = Span.safeDecode({ min: -5, max: -10 });
+    expect(failure).toStrictEqual({
+      ok: false,
+      issues: [
+        { path: ["min"], code: "span.negative_min", message: "min must be >= 0" },
+        { path: ["max"], code: "span.inverted", message: "max must be >= min" },
+      ],
+    });
+  });
+
+  test("refine 支持布尔断言与 TypeScript 子类型收窄，强制要求稳定错误码", () => {
+    const Positive = number().refine((n) => n > 0, "number.positive", "Expected > 0");
+    expect(Positive.decode(3)).toBe(3);
+    expect(Positive.safeDecode(0)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.positive", message: "Expected > 0" }],
+    });
+    expect(Positive.safeEncode(-1)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.positive" }],
+    });
+
+    const NonEmptyList = arrayOf(string()).refine(
+      (items): items is [string, ...string[]] => items.length > 0,
+      "array.non_empty",
+      "At least one item required",
+    );
+    const decoded = NonEmptyList.decode(["first"]);
+    expectTypeOf(decoded).toEqualTypeOf<[string, ...string[]]>();
+    expectTypeOf<InferEncoded<typeof NonEmptyList>>().toEqualTypeOf<string[]>();
+    expect(NonEmptyList.safeDecode([])).toMatchObject({
+      ok: false,
+      issues: [{ code: "array.non_empty" }],
+    });
+
+    expect(() => number().refine((n) => n > 0, "", "msg")).toThrow(TypeError);
+  });
+
+  test("normalize 在解码与编码两端维持幂等规范形态且满足往返收敛", () => {
+    const Email = string({ trim: true })
+      .normalize((value) => value.toLowerCase())
+      .refine((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value), "string.email", "Invalid email");
+
+    const decoded = Email.decode("  Alice@Example.COM  ");
+    expect(decoded).toBe("alice@example.com");
+    expect(Email.encode("Alice@Example.COM")).toBe("alice@example.com");
+    expect(Email.decode(Email.encode(decoded))).toBe(decoded);
+
+    // 非法输入在进入 normalize 回调前已被基础 Codec 拦截
+    expect(Email.safeParse(123)).toMatchObject({
+      ok: false,
+      issues: [{ code: "type.string" }],
+    });
+    expect(Email.safeDump(123)).toMatchObject({
+      ok: false,
+      issues: [{ code: "type.string" }],
     });
   });
 
@@ -121,7 +195,7 @@ describe("codec combinators", () => {
 
     expect(utcStringFromDate.decode(date)).toBe("2026-11-09T00:00:00.000Z");
     expect(utcStringFromDate.encode("2026-11-09T02:00:00+02:00")).toEqual(date);
-    expect(utcStringFromDate.safeDecode("not-a-date")).toMatchObject({
+    expect(utcStringFromDate.safeParse("not-a-date")).toMatchObject({
       ok: false,
       issues: [{ code: "type.datetime" }],
     });
@@ -176,7 +250,7 @@ describe("codec combinators", () => {
       expect(status.decode(item)).toBe(item);
       expect(status.encode(item)).toBe(item);
     }
-    expect(status.safeDecode(500)).toMatchObject({
+    expect(status.safeParse(500)).toMatchObject({
       ok: false,
       issues: [{ code: "value.literal" }],
     });
@@ -196,7 +270,7 @@ describe("codec combinators", () => {
     expect(timestampOrIso.encode(date)).toBe("2026-01-01T00:00:00.000Z");
     expect(timestampOrIso.encode(1700000000)).toBe(1700000000);
 
-    expect(timestampOrIso.safeDecode(true)).toStrictEqual({
+    expect(timestampOrIso.safeParse(true)).toStrictEqual({
       ok: false,
       issues: [
         { path: [], code: "union.no_match", message: "Input did not match any union branch" },

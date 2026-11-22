@@ -1,8 +1,9 @@
-import { isAbortSignal, sharedContext } from "./collector.ts";
+import { createScopedContext, INVALID, isAbortSignal } from "./collector.ts";
 import { isValidationError } from "./errors.ts";
 import {
   createCodec,
   createField,
+  getDefaultResolver,
   isFieldDescriptor,
   isStandardCodec,
   promoteToCodec,
@@ -11,18 +12,20 @@ import type { Codec, CodecContext, CodecLike, Field, FieldPresence } from "./typ
 
 export interface CodecHandlers<T, Encoded> {
   decode(this: void, input: unknown, context: CodecContext): T;
-  encode(this: void, value: T, context: CodecContext): Encoded;
+  encode(this: void, input: unknown, context: CodecContext): Encoded;
 }
 
-/** 通过一对双向转换函数创建标准 Codec，两端均可通过 context.fail 报告校验失败 */
+/** 通过一对双向转换函数创建标准 Codec，正反两端均须对 unknown 输入做校验并可通过 context 报告问题 */
 export function defineCodec<T, Encoded = T>(
   handlers: CodecHandlers<T, Encoded>,
 ): Codec<T, Encoded> {
   return createCodec<T, Encoded>((input, direction, collector) => {
+    const mark = collector.mark();
+    const context = createScopedContext(collector);
     try {
-      return direction === "decode"
-        ? handlers.decode(input, sharedContext)
-        : handlers.encode(input as T, sharedContext);
+      const output =
+        direction === "decode" ? handlers.decode(input, context) : handlers.encode(input, context);
+      return collector.mark() > mark ? INVALID : output;
     } catch (error) {
       if (isAbortSignal(error)) {
         return collector.add(error.code, error.message);
@@ -52,10 +55,13 @@ export function field<T, Encoded>(
   }
   const { source, presence } = input;
   const inner = isStandardCodec(input.codec) ? input.codec : promoteToCodec(input);
+  const normalizedPresence: FieldPresence =
+    presence === "optional" ? "optional" : presence === "defaulted" ? "defaulted" : "required";
   return createField(
     inner,
     typeof source === "string" ? source : undefined,
-    presence === "optional" ? "optional" : "required",
+    normalizedPresence,
+    normalizedPresence === "defaulted" ? getDefaultResolver(input) : undefined,
   );
 }
 

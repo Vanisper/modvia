@@ -1,4 +1,4 @@
-import type { CodecContext, PathSegment, ValidationIssue } from "./types.ts";
+import type { CodecContext, CodecIssueInput, PathSegment, ValidationIssue } from "./types.ts";
 
 export const errorBrand = Symbol.for("modvia.ValidationError");
 const abortBrand = Symbol.for("modvia.CodecAbort");
@@ -12,14 +12,6 @@ interface AbortSignal {
   readonly message: string;
 }
 
-export const sharedContext: CodecContext = Object.freeze({
-  fail(code: string, message: string): never {
-    const signal: AbortSignal = { [abortBrand]: true, code, message };
-    // oxlint-disable-next-line no-throw-literal -- 内部零调用栈开销中断信号，由紧邻执行器捕获转为 Issue
-    throw signal;
-  },
-});
-
 export function isAbortSignal(value: unknown): value is AbortSignal {
   return (
     typeof value === "object" &&
@@ -28,10 +20,47 @@ export function isAbortSignal(value: unknown): value is AbortSignal {
   );
 }
 
+export type SegmentMapper = (segment: PathSegment) => PathSegment;
+
+export function createScopedContext(
+  collector: IssueCollector,
+  mapFirstSegment?: SegmentMapper,
+): CodecContext {
+  return {
+    fail(code: string, message: string): never {
+      const signal: AbortSignal = { [abortBrand]: true, code, message };
+      // oxlint-disable-next-line no-throw-literal -- 内部零调用栈开销中断信号，由紧邻执行器捕获转为 Issue
+      throw signal;
+    },
+    issue(detail: CodecIssueInput): void {
+      if (
+        typeof detail !== "object" ||
+        detail === null ||
+        typeof detail.code !== "string" ||
+        detail.code.length === 0 ||
+        typeof detail.message !== "string"
+      ) {
+        throw new TypeError("context.issue requires a non-empty code and a message string");
+      }
+      const rawPath = detail.path;
+      if (!rawPath || rawPath.length === 0) {
+        collector.add(detail.code, detail.message);
+        return;
+      }
+      const mappedPath =
+        mapFirstSegment !== undefined
+          ? [mapFirstSegment(rawPath[0] as PathSegment), ...rawPath.slice(1)]
+          : rawPath;
+      collector.addAt(mappedPath, detail.code, detail.message);
+    },
+  };
+}
+
 export interface IssueCollector {
   pushSegment(segment: PathSegment): void;
   popSegment(): void;
   add(code: string, message: string): Invalid;
+  addAt(relativePath: readonly PathSegment[], code: string, message: string): Invalid;
   addRelativeIssues(issues: readonly ValidationIssue[]): Invalid;
   mark(): number;
   restore(index: number): void;
@@ -54,6 +83,16 @@ export function createCollector(): IssueCollector {
       issues.push(
         Object.freeze({
           path: Object.freeze([...path]),
+          code,
+          message,
+        }),
+      );
+      return INVALID;
+    },
+    addAt(relativePath: readonly PathSegment[], code: string, message: string): Invalid {
+      issues.push(
+        Object.freeze({
+          path: Object.freeze(path.length === 0 ? [...relativePath] : [...path, ...relativePath]),
           code,
           message,
         }),

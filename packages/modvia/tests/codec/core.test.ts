@@ -4,11 +4,13 @@ import {
   arrayOf,
   defineCodec,
   field,
+  fromStandard,
   isValidationError,
   isoDateTime,
   number,
   string,
   ValidationError,
+  type Branded,
   type Codec,
   type CodecLike,
   type InferEncoded,
@@ -28,7 +30,7 @@ const intFromString = defineCodec<number, string>({
     return parsed;
   },
   encode(value, context) {
-    if (!Number.isSafeInteger(value)) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
       return context.fail("number.safe_integer", "Expected a safe integer");
     }
     return String(value);
@@ -36,7 +38,7 @@ const intFromString = defineCodec<number, string>({
 });
 
 describe("codec kernel", () => {
-  test("safeDecode 与 safeEncode 返回冻结的判别结果且不抛异常", () => {
+  test("2×2 执行矩阵：decode/encode 约束编译期契约，parse/dump 面向 unknown 动态边界", () => {
     const okDecoded = intFromString.safeDecode("42");
     expect(okDecoded).toStrictEqual({ ok: true, value: 42 });
     expect(Object.isFrozen(okDecoded)).toBe(true);
@@ -56,6 +58,27 @@ describe("codec kernel", () => {
       ok: false,
       issues: [{ path: [], code: "number.safe_integer" }],
     });
+
+    // @ts-expect-error decode 编译期拒绝非 Encoded 类型
+    expect(intFromString.safeDecode(42).ok).toBe(false);
+    // @ts-expect-error encode 编译期拒绝非 T 类型
+    expect(intFromString.safeEncode("42").ok).toBe(false);
+
+    // parse / safeParse 与 dump / safeDump 接收任意 unknown 并在运行时安全校验
+    const rawIn: unknown = "42";
+    const rawOut: unknown = 42;
+    expect(intFromString.parse(rawIn)).toBe(42);
+    expect(intFromString.dump(rawOut)).toBe("42");
+    expect(intFromString.safeParse(null)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "number.integer_string" }],
+    });
+    expect(intFromString.safeDump(null)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "number.safe_integer" }],
+    });
+    expect(() => intFromString.parse({})).toThrow(ValidationError);
+    expect(() => intFromString.dump({})).toThrow(ValidationError);
 
     expectTypeOf<InferValue<typeof intFromString>>().toEqualTypeOf<number>();
     expectTypeOf<InferEncoded<typeof intFromString>>().toEqualTypeOf<string>();
@@ -90,7 +113,7 @@ describe("codec kernel", () => {
         throw boom;
       },
       encode(value) {
-        return value;
+        return String(value);
       },
     });
 
@@ -155,20 +178,81 @@ describe("codec kernel", () => {
   test("arrayOf 接受纯值 Codec 或自定义 CodecLike，拒绝带属性修饰的 Field", () => {
     const plainCodec: CodecLike<string, string> = {
       decode: (input) => String(input),
-      encode: (value) => value,
+      encode: (value) => String(value),
     };
-    expect(arrayOf(plainCodec).decode([1, "a"])).toStrictEqual(["1", "a"]);
+    expect(arrayOf(plainCodec).parse([1, "a"])).toStrictEqual(["1", "a"]);
 
-    const aliasedField = string().from("item_code").optional();
+    const aliasedField = string().alias("item_code").optional();
     expect(arrayOf(aliasedField.codec).decode(["a"])).toStrictEqual(["a"]);
 
     // @ts-expect-error Field 携带对象属性修饰，不能直接作为数组元素 Codec
     expect(() => arrayOf(string().optional())).toThrow(TypeError);
     // @ts-expect-error Field 携带外部键别名，不能直接作为数组元素 Codec
-    expect(() => arrayOf(string().from("code"))).toThrow(TypeError);
+    expect(() => arrayOf(string().alias("code"))).toThrow(TypeError);
     // @ts-expect-error field() 显式包装后的属性描述符同样不可直接放入数组
     expect(() => arrayOf(field(string()))).toThrow(TypeError);
 
     expectTypeOf(arrayOf(string())).toEqualTypeOf<Codec<string[], string[]>>();
+  });
+
+  test("fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
+    const emailStandard: StandardSchemaV1<string, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "custom-validator",
+        validate(value) {
+          if (typeof value !== "string" || !value.includes("@")) {
+            return {
+              issues: [{ message: "Invalid email", path: [{ key: "address" }] }],
+            };
+          }
+          return { value: value.trim() };
+        },
+      },
+    };
+
+    const Email = fromStandard(emailStandard);
+    expect(Email.decode(" a@b.com ")).toBe("a@b.com");
+    expect(Email.encode(" a@b.com ")).toBe("a@b.com");
+    expect(Email.safeDecode("invalid")).toStrictEqual({
+      ok: false,
+      issues: [{ path: ["address"], code: "standard.invalid", message: "Invalid email" }],
+    });
+
+    const asyncSchema: StandardSchemaV1<string, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "async-validator",
+        validate: async (value) => ({ value: String(value) }),
+      },
+    };
+    const AsyncWrapped = fromStandard(asyncSchema);
+    expect(() => AsyncWrapped.safeDecode("x")).toThrow(TypeError);
+  });
+
+  test("brand 在解码端附加编译期名义类型且编码端保持原始外部类型，运行时零额外包装", () => {
+    const base = string({ trim: true, minLength: 1 });
+    const UserId = base.brand<"UserId">();
+    const OrderId = base.brand<"OrderId">();
+
+    // 运行时直接复用原 Codec 实例
+    expect(UserId).toBe(base);
+
+    const uid = UserId.decode("  u-1  ");
+    expect(uid).toBe("u-1");
+    expect(UserId.encode(uid)).toBe("u-1");
+
+    expectTypeOf(uid).toEqualTypeOf<Branded<string, "UserId">>();
+    expectTypeOf<InferEncoded<typeof UserId>>().toEqualTypeOf<string>();
+
+    function acceptUserId(id: Branded<string, "UserId">): string {
+      return id;
+    }
+    acceptUserId(uid);
+    const oid = OrderId.decode("o-1");
+    // @ts-expect-error 不同品牌名义类型不可混用
+    acceptUserId(oid);
+    // @ts-expect-error 裸 string 不可直接传入品牌参数
+    acceptUserId("u-1");
   });
 });

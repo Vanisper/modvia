@@ -1,6 +1,14 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
-import { boolean, isoDateTime, number, oneOf, string } from "../../src/codec/index.ts";
+import {
+  boolean,
+  int,
+  isoDateTime,
+  number,
+  oneOf,
+  string,
+  unknown,
+} from "../../src/codec/index.ts";
 import { defineModel } from "../../src/index.ts";
 
 const instant = isoDateTime();
@@ -15,7 +23,11 @@ describe("built-in scalars", () => {
       ok: false,
       issues: [{ path: [], code: "string.min_length" }],
     });
-    expect(nonBlank.safeDecode(12)).toMatchObject({
+    expect(nonBlank.safeParse(12)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "type.string" }],
+    });
+    expect(nonBlank.safeDump(12)).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "type.string" }],
     });
@@ -29,7 +41,7 @@ describe("built-in scalars", () => {
     const finite = number();
     expect(finite.decode(0)).toBe(0);
     for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, "1"]) {
-      expect(finite.safeDecode(invalid)).toMatchObject({
+      expect(finite.safeParse(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "type.number" }],
       });
@@ -37,7 +49,7 @@ describe("built-in scalars", () => {
 
     const flag = boolean();
     expect(flag.decode(false)).toBe(false);
-    expect(flag.safeDecode(0)).toMatchObject({
+    expect(flag.safeParse(0)).toMatchObject({
       ok: false,
       issues: [{ code: "type.boolean" }],
     });
@@ -45,10 +57,25 @@ describe("built-in scalars", () => {
     expect(() => oneOf()).toThrow(RangeError);
     const role = oneOf("admin", "member");
     expect(role.decode("admin")).toBe("admin");
-    expect(role.safeDecode("guest")).toMatchObject({
+    expect(role.safeParse("guest")).toMatchObject({
       ok: false,
       issues: [{ code: "string.one_of" }],
     });
+
+    const safeInt = int();
+    expect(safeInt.decode(0)).toBe(0);
+    expect(safeInt.encode(-42)).toBe(-42);
+    for (const invalid of [1.5, 1e25, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
+      expect(safeInt.safeParse(invalid)).toMatchObject({
+        ok: false,
+        issues: [{ code: "type.integer" }],
+      });
+    }
+
+    const passthrough = unknown();
+    const complex = { nested: [1, true, null] };
+    expect(passthrough.decode(complex)).toBe(complex);
+    expect(passthrough.encode(undefined)).toBeUndefined();
   });
 
   test("isoDateTime 支持四位年与扩展年份按同一时间点往返", () => {
@@ -73,7 +100,7 @@ describe("built-in scalars", () => {
       expect(instant.decode(utc).getTime()).toBe(time);
     }
 
-    const Event = defineModel({ fields: { at: instant.from("starts_at") } });
+    const Event = defineModel({ fields: { at: instant.alias("starts_at") } });
     for (const input of ["-271821-04-19T00:00:59.999-23:59", "+275760-09-13T23:59:00.001+23:59"]) {
       expect(Event.safeDecode({ starts_at: input })).toMatchObject({
         ok: false,
@@ -95,6 +122,10 @@ describe("built-in scalars", () => {
       expect(instant.decode(encoded).getTime()).toBe(0);
     }
     expect(instant.safeEncode(new Date(Number.NaN))).toMatchObject({
+      ok: false,
+      issues: [{ code: "type.datetime" }],
+    });
+    expect(instant.safeDump("not-a-date")).toMatchObject({
       ok: false,
       issues: [{ code: "type.datetime" }],
     });

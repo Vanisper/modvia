@@ -2,7 +2,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
 import { defineModel, number } from "../../src/index.ts";
 
-const Quantity = defineModel({ fields: { count: number().from("quantity") } });
+const Quantity = defineModel({ fields: { count: number().alias("quantity") } });
 const missingCount = expect.objectContaining({
   issues: [expect.objectContaining({ path: ["count"], code: "field.required" })],
 });
@@ -74,9 +74,9 @@ describe("声明字段的 getter", () => {
     }
   });
 
-  test("跨上下文的普通对象可以解码，编码时忽略其 Object.prototype 上的 getter", () => {
+  test("跨上下文的普通对象可以解析，编码时忽略其 Object.prototype 上的 getter", () => {
     const plain = runInNewContext("({ quantity: 4 })");
-    expect(Quantity.decode(plain)).toEqual({ count: 4 });
+    expect(Quantity.parse(plain)).toEqual({ count: 4 });
 
     const inherited = runInNewContext(
       "Object.defineProperty(Object.prototype, 'count', { get() { return 7 } }); ({})",
@@ -88,7 +88,7 @@ describe("声明字段的 getter", () => {
     const prototype = Object.create(null, { count: { get: () => 3 } });
     const counter = Object.create(prototype) as { count: number };
     expect(Quantity.encode(counter)).toEqual({ quantity: 3 });
-    expect(() => Quantity.decode(counter)).toThrow(
+    expect(() => Quantity.parse(counter)).toThrow(
       expect.objectContaining({ issues: [expect.objectContaining({ code: "type.object" })] }),
     );
   });
@@ -144,11 +144,11 @@ describe("声明字段的 getter", () => {
       }
     }
     const draft = new Draft();
-    const quantity = number().from("quantity").optional();
+    const quantity = number().alias("quantity").optional();
     const Numeric = defineModel({ fields: { count: quantity } });
     const Clearable = defineModel({ fields: { count: quantity.or(undefined) } });
 
-    expect(() => Reflect.apply(Numeric.encode, undefined, [draft])).toThrow(
+    expect(() => Numeric.dump(draft)).toThrow(
       expect.objectContaining({
         issues: [expect.objectContaining({ path: ["count"], code: "type.number" })],
       }),

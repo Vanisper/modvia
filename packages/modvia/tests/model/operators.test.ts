@@ -1,11 +1,14 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
+  defineAlias,
   defineModel,
   isoDateTime,
+  kebabCase,
   literal,
   number,
   oneOf,
+  snakeCase,
   string,
   taggedUnion,
   type InferData,
@@ -20,7 +23,7 @@ const BaseUser = defineModel({
     id: string(),
     name: string({ trim: true, minLength: 1 }),
     role: oneOf("admin", "member"),
-    createdAt: isoDateTime().from("created_at"),
+    createdAt: isoDateTime().alias("created_at"),
     bio: string().optional(),
   },
 });
@@ -91,7 +94,7 @@ describe("model introspection & derivation", () => {
   test("extend 支持扩展与覆写字段，并在定义期拦截外部别名冲突", () => {
     const SuperAdmin = BaseUser.extend({
       role: literal("superadmin"),
-      permissions: arrayOf(string()).from("perm_list"),
+      permissions: arrayOf(string()).alias("perm_list"),
     });
 
     const decoded = SuperAdmin.decode({
@@ -114,16 +117,176 @@ describe("model introspection & derivation", () => {
     // 新字段与已有字段的外部键名碰撞时立即抛 RangeError
     expect(() =>
       BaseUser.extend({
-        registeredAt: isoDateTime().from("created_at"),
+        registeredAt: isoDateTime().alias("created_at"),
       }),
     ).toThrow(RangeError);
+  });
+
+  test("partial 支持全量与指定字段可选化，保留外部别名并移除创建期默认值避免覆盖", () => {
+    const WithDefault = BaseUser.extend({
+      status: oneOf("active", "archived").default("active").alias("account_status"),
+    });
+
+    const FullPatch = WithDefault.partial();
+    expect(FullPatch.decode({})).toStrictEqual({});
+    expect(FullPatch.decode({ created_at: "2026-11-09T00:00:00.000Z" })).toStrictEqual({
+      createdAt: new Date("2026-11-09T00:00:00.000Z"),
+    });
+    expect(FullPatch.encode({ status: "archived" })).toStrictEqual({ account_status: "archived" });
+
+    expectTypeOf<InferData<typeof FullPatch>>().toEqualTypeOf<{
+      readonly id?: string;
+      readonly name?: string;
+      readonly role?: "admin" | "member";
+      readonly createdAt?: Date;
+      readonly bio?: string;
+      readonly status?: "active" | "archived";
+    }>();
+
+    const SelectivePatch = BaseUser.partial("name", "createdAt");
+    expect(SelectivePatch.decode({ id: "u-1", role: "member" })).toStrictEqual({
+      id: "u-1",
+      role: "member",
+    });
+    expectTypeOf<InferData<typeof SelectivePatch>>().toEqualTypeOf<{
+      readonly id: string;
+      readonly name?: string;
+      readonly role: "admin" | "member";
+      readonly createdAt?: Date;
+      readonly bio?: string;
+    }>();
+
+    // @ts-expect-error 不存在的字段名在编译期与定义期均被拒绝
+    expect(() => BaseUser.partial("missing")).toThrow(RangeError);
+  });
+
+  test("alias 策略自动同步编译期与运行时外部键映射，字段显式 .alias() 优先", () => {
+    const Profile = defineModel({
+      alias: snakeCase,
+      fields: {
+        userId: string(),
+        isEmailVerified: literal(true, false).default(false),
+        htmlURL: string().optional(),
+        legacyCode: string().alias("USR_CODE"),
+      },
+    });
+
+    const decoded = Profile.decode({
+      user_id: "u-1",
+      html_url: "https://example.com",
+      USR_CODE: "L-9",
+    });
+    expect(decoded).toStrictEqual({
+      userId: "u-1",
+      isEmailVerified: false,
+      htmlURL: "https://example.com",
+      legacyCode: "L-9",
+    });
+    expect(Profile.encode(decoded)).toStrictEqual({
+      user_id: "u-1",
+      is_email_verified: false,
+      html_url: "https://example.com",
+      USR_CODE: "L-9",
+    });
+
+    expectTypeOf<InferDTO<typeof Profile>>().toMatchTypeOf<{
+      user_id: string;
+      is_email_verified?: boolean;
+      html_url?: string;
+      USR_CODE: string;
+    }>();
+
+    // 派生子模型完整保留别名策略生成的外部键名
+    const Picked = Profile.pick("userId", "legacyCode");
+    expect(Picked.encode({ userId: "u-1", legacyCode: "L-9" })).toStrictEqual({
+      user_id: "u-1",
+      USR_CODE: "L-9",
+    });
+
+    const HeaderModel = defineModel({
+      alias: kebabCase,
+      fields: { traceId: string(), clientVersion: string() },
+    });
+    expect(HeaderModel.encode({ traceId: "t-1", clientVersion: "1.0" })).toStrictEqual({
+      "trace-id": "t-1",
+      "client-version": "1.0",
+    });
+    expectTypeOf<InferDTO<typeof HeaderModel>>().toMatchTypeOf<{
+      "trace-id": string;
+      "client-version": string;
+    }>();
+
+    const UpperAlias = defineAlias((key) => key.toUpperCase());
+    const EnvModel = defineModel({
+      alias: UpperAlias,
+      fields: { appPort: number() },
+    });
+    expect(EnvModel.decode({ APPPORT: 8080 })).toStrictEqual({ appPort: 8080 });
+
+    // 别名策略转换后若与已有字段名碰撞则在定义期抛 RangeError
+    expect(() =>
+      defineModel({
+        alias: snakeCase,
+        fields: { userId: string(), user_id: string() },
+      }),
+    ).toThrow(RangeError);
+  });
+
+  test("对模型调用 check 时自动将声明字段路径双向翻译为 DTO 外部键与模型内部键", () => {
+    const PasswordReset = defineModel({
+      alias: snakeCase,
+      fields: {
+        newPassword: string({ minLength: 6 }),
+        confirmPassword: string({ minLength: 6 }),
+      },
+    }).check((data, context) => {
+      if (data.newPassword !== data.confirmPassword) {
+        context.issue({
+          code: "password.mismatch",
+          message: "Passwords do not match",
+          path: ["confirmPassword"],
+        });
+      }
+    });
+
+    expect(
+      PasswordReset.safeDecode({
+        new_password: "secret-1",
+        confirm_password: "secret-2",
+      }),
+    ).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: ["confirm_password"],
+          code: "password.mismatch",
+          message: "Passwords do not match",
+        },
+      ],
+    });
+
+    expect(
+      PasswordReset.safeEncode({
+        newPassword: "secret-1",
+        confirmPassword: "secret-2",
+      }),
+    ).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: ["confirmPassword"],
+          code: "password.mismatch",
+          message: "Passwords do not match",
+        },
+      ],
+    });
   });
 });
 
 describe("taggedUnion", () => {
   const TextBlock = defineModel({
     fields: {
-      kind: oneOf("text").from("block_type"),
+      kind: oneOf("text").alias("block_type"),
       body: string({ trim: true, minLength: 1 }),
     },
   });
@@ -143,8 +306,8 @@ describe("taggedUnion", () => {
 
   const ImageBlock = defineModel({
     fields: {
-      kind: literal("image").from("block_type"),
-      url: string({ minLength: 1 }).from("image_url"),
+      kind: literal("image").alias("block_type"),
+      url: string({ minLength: 1 }).alias("image_url"),
     },
   }).withFactory((data) => new ImageBlockEntity(data));
 
@@ -174,12 +337,12 @@ describe("taggedUnion", () => {
   });
 
   test("精确定位缺失标签、非法标签及命中分支内部字段的错误路径", () => {
-    expect(ContentBlock.safeDecode({})).toMatchObject({
+    expect(ContentBlock.safeParse({})).toMatchObject({
       ok: false,
       issues: [{ path: ["block_type"], code: "field.required" }],
     });
 
-    expect(ContentBlock.safeDecode({ block_type: "video" })).toMatchObject({
+    expect(ContentBlock.safeParse({ block_type: "video" })).toMatchObject({
       ok: false,
       issues: [{ path: ["block_type"], code: "union.invalid_tag" }],
     });
@@ -189,12 +352,12 @@ describe("taggedUnion", () => {
       issues: [{ path: ["image_url"], code: "string.min_length" }],
     });
 
-    expect(Reflect.apply(ContentBlock.safeEncode, undefined, [{}])).toMatchObject({
+    expect(ContentBlock.safeDump({})).toMatchObject({
       ok: false,
       issues: [{ path: ["kind"], code: "field.required" }],
     });
 
-    expect(Reflect.apply(ContentBlock.safeEncode, undefined, [{ kind: "video" }])).toMatchObject({
+    expect(ContentBlock.safeDump({ kind: "video" })).toMatchObject({
       ok: false,
       issues: [{ path: ["kind"], code: "union.invalid_tag" }],
     });
@@ -202,7 +365,7 @@ describe("taggedUnion", () => {
 
   test("定义期拒绝重复标签、可选判别键、不一致外部名或非常量判别规则", () => {
     const DuplicateText = defineModel({
-      fields: { kind: literal("text").from("block_type"), note: number() },
+      fields: { kind: literal("text").alias("block_type"), note: number() },
     });
     expect(() => taggedUnion("kind", [TextBlock, DuplicateText])).toThrow(RangeError);
 
@@ -212,7 +375,7 @@ describe("taggedUnion", () => {
     expect(() => taggedUnion("kind", [TextBlock, InconsistentSource])).toThrow(RangeError);
 
     const OptionalTag = defineModel({
-      fields: { kind: literal("quote").from("block_type").optional() },
+      fields: { kind: literal("quote").alias("block_type").optional() },
     });
     // @ts-expect-error 可选判别键在编译期与定义期均被拒绝
     expect(() => taggedUnion("kind", [TextBlock, OptionalTag])).toThrow(RangeError);
@@ -224,7 +387,7 @@ describe("taggedUnion", () => {
     expect(() => taggedUnion("kind", [TextBlock, MissingTag])).toThrow(RangeError);
 
     const DynamicTag = defineModel({
-      fields: { kind: string().from("block_type") },
+      fields: { kind: string().alias("block_type") },
     });
     expect(() => taggedUnion("kind", [TextBlock, DynamicTag])).toThrow(TypeError);
   });

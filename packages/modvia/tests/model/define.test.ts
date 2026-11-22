@@ -28,7 +28,7 @@ const UserModel = defineModel({
     id: string(),
     name: string({ trim: true, minLength: 1 }),
     role: oneOf("admin", "manager", "member"),
-    createdAt: isoDateTime().from("created_at"),
+    createdAt: isoDateTime().alias("created_at"),
     department: DepartmentModel,
     active: boolean(),
     score: number(),
@@ -87,8 +87,8 @@ const validDTO = {
 };
 
 describe("domain model", () => {
-  test("按声明契约解码普通对象并回写为纯净 DTO", () => {
-    const user = UserModel.decode(validDTO);
+  test("parse/dump 处理未知外界输入并剥离多余字段，decode/encode 校验强类型契约往返", () => {
+    const user = UserModel.parse(validDTO);
 
     expect(user).toEqual({
       id: "u-1",
@@ -114,15 +114,17 @@ describe("domain model", () => {
       active: true,
       score: 42,
     });
+    expect(UserModel.decode(encoded)).toEqual(user);
+    expect(UserModel.dump({ ...user, extraDraftField: true })).toEqual(encoded);
     expect(encoded.department).not.toBe(user.department);
     expect(validDTO.name).toBe("  林舟  ");
   });
 
-  test("嵌套模型无需 field 包装即可直接调用 from、optional 与 nullable", () => {
+  test("嵌套模型无需 field 包装即可直接调用 alias、optional 与 nullable", () => {
     const Team = defineModel({
       fields: {
-        lead: UserClassModel.from("team_lead").optional(),
-        parentDept: DepartmentModel.nullable().from("parent_dept"),
+        lead: UserClassModel.alias("team_lead").optional(),
+        parentDept: DepartmentModel.nullable().alias("parent_dept"),
       },
     });
 
@@ -130,11 +132,21 @@ describe("domain model", () => {
     expect(empty).toStrictEqual({ parentDept: null });
     expect(Team.encode(empty)).toStrictEqual({ parent_dept: null });
 
-    const populated = Team.decode({
+    const populated = Team.parse({
       team_lead: validDTO,
       parent_dept: { id: "d-0", name: "技术中心" },
     });
     expect(populated.lead).toBeInstanceOf(User);
+    // dump 允许将纯数据草稿按 UserClassModel 字段协议直接写出为 DTO
+    expect(
+      Team.dump({
+        lead: UserModel.parse(validDTO),
+        parentDept: { id: "d-0", name: "技术中心" },
+      }),
+    ).toMatchObject({
+      team_lead: { id: "u-1", created_at: "2026-11-09T00:00:00.000Z" },
+      parent_dept: { id: "d-0", name: "技术中心" },
+    });
     expect(Team.encode(populated)).toMatchObject({
       team_lead: { id: "u-1", created_at: "2026-11-09T00:00:00.000Z" },
       parent_dept: { id: "d-0", name: "技术中心" },
@@ -143,10 +155,10 @@ describe("domain model", () => {
 
   test("组合数组模型并精确定位嵌套错误路径", () => {
     const Users = arrayOf(UserModel);
-    expect(Users.decode([validDTO])).toHaveLength(1);
-    expect(Users.encode(Users.decode([validDTO]))).toHaveLength(1);
+    expect(Users.parse([validDTO])).toHaveLength(1);
+    expect(Users.encode(Users.parse([validDTO]))).toHaveLength(1);
 
-    const result = Users.safeDecode([
+    const result = Users.safeParse([
       validDTO,
       {
         ...validDTO,
@@ -166,13 +178,17 @@ describe("domain model", () => {
   });
 
   test("拒绝缺失必填键与非数组列表输入", () => {
-    const missing = UserModel.safeDecode({ id: "u-1" });
+    // @ts-expect-error decode 在编译期拦截缺失必填字段的残缺 DTO
+    const compileChecked = UserModel.safeDecode({ id: "u-1" });
+    expect(compileChecked.ok).toBe(false);
+
+    const missing = UserModel.safeParse({ id: "u-1" });
     expect(missing.ok).toBe(false);
     if (missing.ok) throw new Error("Expected failure");
     expect(missing.issues.length).toBeGreaterThan(1);
     expect(missing.issues[0]).toMatchObject({ path: ["name"], code: "field.required" });
 
-    expect(arrayOf(UserModel).safeDecode({ 0: validDTO })).toMatchObject({
+    expect(arrayOf(UserModel).safeParse({ 0: validDTO })).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "type.array" }],
     });
@@ -182,8 +198,8 @@ describe("domain model", () => {
     const duplicateAliases = () =>
       defineModel({
         fields: {
-          firstName: string().from("name"),
-          lastName: string().from("name"),
+          firstName: string().alias("name"),
+          lastName: string().alias("name"),
         },
       });
     expect(duplicateAliases).toThrow(RangeError);
@@ -192,7 +208,7 @@ describe("domain model", () => {
     const aliasKeyCollision = () =>
       defineModel({
         fields: {
-          nickname: string().from("name"),
+          nickname: string().alias("name"),
           name: string(),
         },
       });
@@ -202,11 +218,11 @@ describe("domain model", () => {
   test("__proto__ 作为声明字段或外部别名时可安全双向读写自有键", () => {
     const Info = defineModel({ fields: { label: string() } });
     const Direct = defineModel({ fields: { ["__proto__"]: Info } });
-    const Aliased = defineModel({ fields: { info: Info.from("__proto__") } });
+    const Aliased = defineModel({ fields: { info: Info.alias("__proto__") } });
     const dto: unknown = JSON.parse('{"__proto__":{"label":"目录"}}');
 
-    const data = Direct.decode(dto);
-    const aliasedData = Aliased.decode(dto);
+    const data = Direct.parse(dto);
+    const aliasedData = Aliased.parse(dto);
     expect(aliasedData).toStrictEqual({ info: { label: "目录" } });
     for (const output of [data, Direct.encode(data), Aliased.encode(aliasedData)]) {
       expect(Object.getPrototypeOf(output)).toBe(Object.prototype);
@@ -222,8 +238,8 @@ describe("domain model", () => {
     const input = { title: "目录", ["__proto__"]: "其他" };
 
     for (const output of [
-      Known.decode(input),
-      Known.encode(input),
+      Known.parse(input),
+      Known.dump(input),
       Optional.decode({}),
       Optional.encode({}),
     ]) {
@@ -233,7 +249,8 @@ describe("domain model", () => {
     const missing = expect.objectContaining({
       issues: [expect.objectContaining({ path: ["__proto__"], code: "field.required" })],
     });
-    expect(() => Required.decode({})).toThrow(missing);
+    expect(() => Required.parse({})).toThrow(missing);
+    expect(() => Required.dump({})).toThrow(missing);
     // @ts-expect-error 编码输入缺少已声明的必填键
     expect(() => Required.encode({})).toThrow(missing);
   });
@@ -244,13 +261,13 @@ describe("domain model", () => {
     }
     const cases: unknown[] = [null, [], new Date(), new Map([["id", "m-1"]]), new Payload()];
     for (const input of cases) {
-      expect(UserModel.safeDecode(input)).toStrictEqual({
+      expect(UserModel.safeParse(input)).toStrictEqual({
         ok: false,
         issues: [{ path: [], code: "type.object", message: "Expected a plain object" }],
       });
     }
 
-    expect(UserModel.decode(Object.assign(Object.create(null), validDTO))).toMatchObject({
+    expect(UserModel.parse(Object.assign(Object.create(null), validDTO))).toMatchObject({
       id: "u-1",
     });
   });
@@ -262,7 +279,7 @@ describe("domain model", () => {
 
     let caught: unknown;
     try {
-      Tags.decode({ items: Array(200_000).fill(null) });
+      Tags.parse({ items: Array(200_000).fill(null) });
     } catch (error) {
       caught = error;
     }
@@ -279,21 +296,21 @@ describe("domain model", () => {
       return new User(data);
     });
 
-    const user = ClassUsers.decode(validDTO);
+    const user = ClassUsers.parse(validDTO);
     expect(constructed).toBe(1);
     expect(user).toBeInstanceOf(User);
     expect(user.displayName).toBe("林舟 · 研发部");
     expect(user.canManage()).toBe(true);
-    expect(ClassUsers.encode(user)).toEqual(UserModel.encode(UserModel.decode(validDTO)));
+    expect(ClassUsers.encode(user)).toEqual(UserModel.encode(UserModel.parse(validDTO)));
     expect(ClassUsers["~standard"].validate(validDTO)).toStrictEqual({ value: user });
     expect(constructed).toBe(2);
 
-    expect(() => ClassUsers.decode({ ...validDTO, name: " " })).toThrow(ValidationError);
+    expect(() => ClassUsers.parse({ ...validDTO, name: " " })).toThrow(ValidationError);
     expect(constructed).toBe(2);
-    expect(UserModel.decode(validDTO)).not.toBeInstanceOf(User);
+    expect(UserModel.parse(validDTO)).not.toBeInstanceOf(User);
 
     const Replaced = ClassUsers.withFactory((data) => ({ ...data, tag: "plain" as const }));
-    expect(Replaced.decode(validDTO).tag).toBe("plain");
+    expect(Replaced.parse(validDTO).tag).toBe("plain");
     expect(constructed).toBe(2);
   });
 
@@ -306,7 +323,7 @@ describe("domain model", () => {
         return input;
       },
       encode(input, context) {
-        if (!/^[a-z0-9-]+$/.test(input)) {
+        if (typeof input !== "string" || !/^[a-z0-9-]+$/.test(input)) {
           return context.fail("string.slug", "Expected a lowercase slug");
         }
         return input;
@@ -315,14 +332,14 @@ describe("domain model", () => {
     const sourceLikeCodec: CodecLike<string, string> & { readonly source: string } = {
       source: "not_an_alias",
       decode: (input) => (typeof input === "string" ? input : String(input)),
-      encode: (value) => value,
+      encode: (value) => (typeof value === "string" ? value : String(value)),
     };
 
     const Article = defineModel({
       fields: {
-        slug: slug.from("article_slug"),
+        slug: slug.alias("article_slug"),
         name: sourceLikeCodec,
-        alias: field(string().from("external_name")),
+        alias: field(string().alias("external_name")),
       },
     });
 
@@ -343,6 +360,11 @@ describe("domain model", () => {
     ).toMatchObject({
       ok: false,
       issues: [{ path: ["article_slug"], code: "string.slug" }],
+    });
+    // encode 端同样对 unknown 输入严格守卫类型，不会把数字 123 当合法字符串放行
+    expect(Article.safeDump({ slug: 123, name: "林舟", alias: "林舟" })).toMatchObject({
+      ok: false,
+      issues: [{ path: ["slug"], code: "string.slug" }],
     });
   });
 
@@ -382,7 +404,7 @@ describe("domain model", () => {
 
   test("动态字段别名只写出实际选择的键", () => {
     function user(key: `user_${string}`) {
-      return defineModel({ fields: { name: string().from(key), id: number() } });
+      return defineModel({ fields: { name: string().alias(key), id: number() } });
     }
     const dto = user("user_amy").encode({ name: "Amy", id: 1 });
     expect(dto).toStrictEqual({ id: 1, user_amy: "Amy" });
@@ -391,7 +413,7 @@ describe("domain model", () => {
   });
 
   test("联合字段表保留各分支的键以及索引签名中的已知字段", () => {
-    const compact = { kind: oneOf("compact"), label: string().from("title") };
+    const compact = { kind: oneOf("compact"), label: string().alias("title") };
     const counted = { kind: oneOf("counted"), count: number().optional() };
     function catalog(fields: typeof compact | typeof counted) {
       return defineModel({ fields });

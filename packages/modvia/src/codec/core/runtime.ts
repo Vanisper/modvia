@@ -1,17 +1,20 @@
 import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
   createCollector,
+  createScopedContext,
   INVALID,
   isAbortSignal,
-  sharedContext,
   type Invalid,
   type IssueCollector,
+  type SegmentMapper,
 } from "./collector.ts";
 import { isValidationError, ValidationError } from "./errors.ts";
 import type {
+  Branded,
   Codec,
   CodecContext,
   CodecLike,
+  DefaultProvider,
   Field,
   FieldLiteral,
   FieldPresence,
@@ -31,6 +34,8 @@ export type InternalRunner<T, Encoded> = (
 const runnerSymbol = Symbol.for("modvia.codecRunner");
 const literalStateSymbol = Symbol.for("modvia.literalState");
 const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
+const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
+const defaultResolverSymbol = Symbol.for("modvia.defaultResolver");
 export const fieldBrand = Symbol.for("modvia.Field");
 
 interface LiteralState {
@@ -41,6 +46,7 @@ interface LiteralState {
 export interface CodecMetadata {
   readonly literalState?: LiteralState;
   readonly allowedLiterals?: readonly FieldLiteral[];
+  readonly decodeSegmentMapper?: SegmentMapper;
 }
 
 export function createCodec<T, Encoded>(
@@ -52,17 +58,19 @@ export function createCodec<T, Encoded>(
   metadata?: CodecMetadata,
 ): Codec<T, Encoded> {
   const literalState = metadata?.literalState;
-  const safeDecode = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
-  const safeEncode = (value: T): SafeResult<Encoded> => runSafe<Encoded>(runner, value, "encode");
+  const decodeSegmentMapper = metadata?.decodeSegmentMapper;
+  const safeParse = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
+  const safeDump = (input: unknown): SafeResult<Encoded> =>
+    runSafe<Encoded>(runner, input, "encode");
 
-  const decode = (input: unknown): T => {
-    const result = safeDecode(input);
+  const parse = (input: unknown): T => {
+    const result = safeParse(input);
     if (!result.ok) throw new ValidationError(result.issues);
     return result.value;
   };
 
-  const encode = (value: T): Encoded => {
-    const result = safeEncode(value);
+  const dump = (input: unknown): Encoded => {
+    const result = safeDump(input);
     if (!result.ok) throw new ValidationError(result.issues);
     return result.value;
   };
@@ -71,23 +79,70 @@ export function createCodec<T, Encoded>(
     version: 1,
     vendor: "modvia",
     validate(value: unknown): StandardSchemaV1.Result<T> {
-      const result = safeDecode(value);
+      const result = safeParse(value);
       return result.ok ? { value: result.value } : { issues: result.issues };
     },
   });
 
+  function refine<Narrowed extends T>(
+    predicate: (value: T) => value is Narrowed,
+    code: string,
+    message: string,
+  ): Codec<Narrowed, Encoded>;
+  function refine(
+    predicate: (value: T) => boolean,
+    code: string,
+    message: string,
+  ): Codec<T, Encoded>;
+  function refine(
+    predicate: (value: T) => boolean,
+    code: string,
+    message: string,
+  ): Codec<T, Encoded> {
+    if (typeof predicate !== "function") {
+      throw new TypeError("refine requires a predicate function");
+    }
+    if (typeof code !== "string" || code.length === 0) {
+      throw new TypeError("refine requires a non-empty error code");
+    }
+    if (typeof message !== "string") {
+      throw new TypeError("refine requires an error message string");
+    }
+    return createCheckedCodec(
+      codec,
+      (value, context) => {
+        if (!predicate(value)) context.fail(code, message);
+      },
+      decodeSegmentMapper,
+    );
+  }
+
   const codec: Codec<T, Encoded> = {
     [Symbol.toStringTag]: "modvia.Codec",
     "~standard": standardProps,
-    decode,
-    encode,
-    safeDecode,
-    safeEncode,
+    decode: parse,
+    encode: dump,
+    safeDecode: safeParse,
+    safeEncode: safeDump,
+    parse,
+    safeParse,
+    dump,
+    safeDump,
     check(rule: (value: T, context: CodecContext) => void) {
       if (typeof rule !== "function") {
         throw new TypeError("check requires a validation function");
       }
-      return createCheckedCodec(codec, rule);
+      return createCheckedCodec(codec, rule, decodeSegmentMapper);
+    },
+    refine,
+    normalize(fn: (value: T) => T) {
+      if (typeof fn !== "function") {
+        throw new TypeError("normalize requires a transformation function");
+      }
+      return createNormalizedCodec(codec, fn, decodeSegmentMapper);
+    },
+    brand<const Name extends string | symbol>() {
+      return codec as unknown as Codec<Branded<T, Name>, Encoded>;
     },
     pipe<Next>(next: ValueCodecInput<Next, T>) {
       return createPipedCodec(codec, next);
@@ -99,12 +154,15 @@ export function createCodec<T, Encoded>(
     nullable() {
       return codec.or(null);
     },
-    from<NextSource extends string>(source: NextSource) {
+    alias<NextSource extends string>(source: NextSource) {
       assertValidSource(source);
       return createField(codec, source, "required");
     },
     optional() {
       return createField(codec, undefined, "optional");
+    },
+    default(provider: DefaultProvider<T>) {
+      return createField(codec, undefined, "defaulted", toDefaultResolver(provider));
     },
   };
 
@@ -117,6 +175,9 @@ export function createCodec<T, Encoded>(
       value: Object.freeze([...metadata.allowedLiterals]),
     });
   }
+  if (decodeSegmentMapper) {
+    Object.defineProperty(codec, segmentMapperSymbol, { value: decodeSegmentMapper });
+  }
   return Object.freeze(codec);
 }
 
@@ -126,12 +187,16 @@ export function extendCodec<T, Encoded, Extra extends object>(
   extraSymbols?: ReadonlyArray<readonly [symbol, unknown]>,
 ): Codec<T, Encoded> & Extra {
   const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
+  const segmentMapper = Reflect.get(base, segmentMapperSymbol) as SegmentMapper | undefined;
   const extended = {
     ...base,
     ...extra,
   };
   if (runner) {
     Object.defineProperty(extended, runnerSymbol, { value: runner });
+  }
+  if (segmentMapper) {
+    Object.defineProperty(extended, segmentMapperSymbol, { value: segmentMapper });
   }
   if (extraSymbols) {
     for (const [sym, value] of extraSymbols) {
@@ -170,7 +235,7 @@ export function executeCodec<T, Encoded>(
     return runner(input, direction, collector);
   }
   try {
-    return direction === "decode" ? codec.decode(input) : codec.encode(input as T);
+    return direction === "decode" ? codec.decode(input) : codec.encode(input);
   } catch (error) {
     if (isAbortSignal(error)) {
       return collector.add(error.code, error.message);
@@ -211,11 +276,13 @@ export function isFieldDescriptor(
     const candidate = value as Partial<Field<unknown, unknown, string | undefined, FieldPresence>>;
     return (
       candidate[Symbol.toStringTag] === "modvia.Field" &&
-      (candidate.presence === "required" || candidate.presence === "optional") &&
+      (candidate.presence === "required" ||
+        candidate.presence === "optional" ||
+        candidate.presence === "defaulted") &&
       (candidate.source === undefined || typeof candidate.source === "string") &&
       typeof candidate.decode === "function" &&
       typeof candidate.encode === "function" &&
-      typeof candidate.from === "function" &&
+      typeof candidate.alias === "function" &&
       typeof candidate.optional === "function" &&
       typeof candidate.or === "function"
     );
@@ -235,9 +302,15 @@ export function assertValueCodec<T, Encoded>(codec: CodecLike<T, Encoded>, calle
   }
   if (isFieldDescriptor(codec)) {
     throw new TypeError(
-      `${caller} accepts a value Codec, not a Field with .from() or .optional(); apply field modifiers on the outer container or pass field.codec`,
+      `${caller} accepts a value Codec, not a Field with .alias() or .optional(); apply field modifiers on the outer container or pass field.codec`,
     );
   }
+}
+
+export function getDefaultResolver(value: unknown): (() => unknown) | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const resolver = Reflect.get(value, defaultResolverSymbol);
+  return typeof resolver === "function" ? (resolver as () => unknown) : undefined;
 }
 
 export function createField<
@@ -249,11 +322,16 @@ export function createField<
   codec: Codec<T, Encoded>,
   source: Source,
   presence: Presence,
+  defaultResolver?: () => unknown,
 ): Field<T, Encoded, Source, Presence> {
   const runner = Reflect.get(codec, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
 
-  const fieldDescriptor: Field<T, Encoded, Source, Presence> & { readonly [fieldBrand]: true } = {
+  const fieldDescriptor: Field<T, Encoded, Source, Presence> & {
+    readonly [fieldBrand]: true;
+    readonly [defaultResolverSymbol]?: () => unknown;
+  } = {
     [fieldBrand]: true,
+    ...(defaultResolver ? { [defaultResolverSymbol]: defaultResolver } : {}),
     [Symbol.toStringTag]: "modvia.Field",
     "~standard": codec["~standard"],
     codec,
@@ -263,9 +341,13 @@ export function createField<
     encode: codec.encode,
     safeDecode: codec.safeDecode,
     safeEncode: codec.safeEncode,
-    from<NextSource extends string>(nextSource: NextSource) {
+    parse: codec.parse,
+    safeParse: codec.safeParse,
+    dump: codec.dump,
+    safeDump: codec.safeDump,
+    alias<NextSource extends string>(nextSource: NextSource) {
       assertValidSource(nextSource);
-      return createField(codec, nextSource, presence);
+      return createField(codec, nextSource, presence, defaultResolver);
     },
     optional() {
       if (presence === "optional") {
@@ -279,11 +361,14 @@ export function createField<
       }
       return createField(codec, source, "required");
     },
+    default(provider: DefaultProvider<T>) {
+      return createField(codec, source, "defaulted", toDefaultResolver(provider));
+    },
     or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(...values: Literals) {
-      return createField(codec.or(...values), source, presence);
+      return createField(codec.or(...values), source, presence, defaultResolver);
     },
     nullable() {
-      return createField(codec.nullable(), source, presence);
+      return createField(codec.nullable(), source, presence, defaultResolver);
     },
   };
 
@@ -327,25 +412,56 @@ export function getStaticLiterals(
 function createCheckedCodec<T, Encoded>(
   base: Codec<T, Encoded>,
   rule: (value: T, context: CodecContext) => void,
+  decodeSegmentMapper?: SegmentMapper,
 ): Codec<T, Encoded> {
-  return createCodec<T, Encoded>((input, direction, collector) => {
-    const converted = executeCodec(base, input, direction, collector);
-    if (converted === INVALID) return INVALID;
+  return createCodec<T, Encoded>(
+    (input, direction, collector) => {
+      const converted = executeCodec(base, input, direction, collector);
+      if (converted === INVALID) return INVALID;
 
-    const domainValue = (direction === "decode" ? converted : input) as T;
-    try {
-      rule(domainValue, sharedContext);
-      return converted;
-    } catch (error) {
-      if (isAbortSignal(error)) {
-        return collector.add(error.code, error.message);
+      const domainValue = (direction === "decode" ? converted : input) as T;
+      const mark = collector.mark();
+      const context = createScopedContext(
+        collector,
+        direction === "decode" ? decodeSegmentMapper : undefined,
+      );
+      try {
+        rule(domainValue, context);
+        return collector.mark() > mark ? INVALID : converted;
+      } catch (error) {
+        if (isAbortSignal(error)) {
+          return collector.add(error.code, error.message);
+        }
+        if (isValidationError(error)) {
+          return collector.addRelativeIssues(error.issues);
+        }
+        throw error;
       }
-      if (isValidationError(error)) {
-        return collector.addRelativeIssues(error.issues);
+    },
+    { decodeSegmentMapper },
+  );
+}
+
+function createNormalizedCodec<T, Encoded>(
+  base: Codec<T, Encoded>,
+  fn: (value: T) => T,
+  decodeSegmentMapper?: SegmentMapper,
+): Codec<T, Encoded> {
+  return createCodec<T, Encoded>(
+    (input, direction, collector) => {
+      if (direction === "decode") {
+        const decoded = executeCodec(base, input, "decode", collector);
+        return decoded === INVALID ? INVALID : fn(decoded);
       }
-      throw error;
-    }
-  });
+
+      const firstPass = executeCodec(base, input, "encode", collector);
+      if (firstPass === INVALID) return INVALID;
+      const normalized = fn(input as T);
+      if (Object.is(normalized, input)) return firstPass;
+      return executeCodec(base, normalized, "encode", collector);
+    },
+    { decodeSegmentMapper },
+  );
 }
 
 function runSafe<Result>(
@@ -387,6 +503,18 @@ function createLiteralExtendedCodec<
         literals: mergedLiterals,
       },
     },
+  );
+}
+
+function toDefaultResolver<T>(provider: unknown): () => T {
+  if (typeof provider === "function") {
+    return provider as () => T;
+  }
+  if (isPrimitiveLiteral(provider)) {
+    return () => provider as T;
+  }
+  throw new TypeError(
+    "Non-primitive default values must be provided via a factory function () => value",
   );
 }
 
