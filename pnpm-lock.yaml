@@ -200,6 +200,18 @@ importers:
         specifier: 'catalog:'
         version: 1.5.0(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)
 
+  packages/json-schema:
+    devDependencies:
+      modvia:
+        specifier: workspace:*
+        version: link:../modvia
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.5.0(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)
+
   packages/modvia:
     devDependencies:
       typescript:

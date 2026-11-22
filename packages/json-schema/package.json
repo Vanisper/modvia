@@ -1,0 +1,31 @@
+{
+  "name": "@modvia/json-schema",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bidirectional JSON Schema & StandardJSONSchemaV1 exporter for Modvia codecs and models.",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "modvia": "workspace:*",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "modvia": "workspace:*"
+  }
+}

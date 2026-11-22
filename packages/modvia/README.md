@@ -6,10 +6,11 @@
 
 ## 模块入口
 
-包提供两个子路径入口，共享同一套底层原语：
+包提供三个零外部依赖的子路径入口，按需加载并共享同一套底层原语：
 
-- `modvia`：完整入口，包含领域模型（`defineModel`）与全部编解码能力。
+- `modvia`：完整主入口，包含领域模型（`defineModel`）与全部核心编解码能力。
 - `modvia/codec`：纯粹的值级双向编解码底座，不包含领域模型层，适合仅需值转换与容器校验的场景。
+- `modvia/formats`：按需 Tree-shaking 的标准格式与协议编解码器（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`jsonString`、`jsonOf`），不引入时零体积开销。
 
 ## 定义模型与双向转换
 
@@ -115,11 +116,38 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 ```
 
 - `.alias(name)`：指定父对象双向读写该字段时使用的外部键别名；同一模型内的外部键名不能重复。
+- `string({ trim?, minLength?, maxLength?, pattern? })`：先执行可选 `trim` 清洗，再对称校验 UTF-16 长度上下界与无状态正则表达式（自动剥离有状态的 `g`/`y` 标志）。
+- `number({ min?, max? })` 与 `int({ min?, max? })`：分别校验有限浮点数与安全整数（`Number.isSafeInteger`），可选限制闭区间 `[min, max]`。
 - `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
 - `.optional()`、`.required()` 与 `.default(provider)`：`.optional()` 允许父对象省略该键；`.default(...)` 在父对象解码缺键时填入业务默认值（DTO 侧键可选、模型侧键必填，对象或数组默认值须传入工厂函数 `() => value`）。显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
-- `arrayOf(elementCodec)` 与 `tupleOf(...codecs)`：分别编解码不定长同构数组与定长异构元组；元素参数仅接受值级 `Codec`，编译期与定义期拒绝带 `.alias()` 或 `.optional()` 的 `Field`（可通过 `someField.codec` 提取纯值规则）。
+- `arrayOf(elementCodec, { minLength?, maxLength? })` 与 `tupleOf(...codecs)`：分别编解码不定长同构数组（可选限制元素个数上下界）与定长异构元组；元素参数仅接受值级 `Codec`，编译期与定义期拒绝带 `.alias()` 或 `.optional()` 的 `Field`（可通过 `someField.codec` 提取纯值规则）。
 - `recordOf(valueCodec)` 与 `recordOf(keyCodec, valueCodec)`：编解码键名动态的普通对象字典（如按语言代码或实体 ID 索引的映射表），错误路径保留对应键名。
-- `int()`、`literal(...values)` 与 `unknown()`：分别表达安全整数（`Number.isSafeInteger`）、多类型精确字面量匹配以及显式原样透传的动态载荷。
+- `literal(...values)` 与 `unknown()`：分别表达多类型精确字面量匹配以及显式原样透传的动态载荷。
+
+## 标准格式与 JSON 文本编解码（`modvia/formats`）
+
+`modvia/formats` 子路径提供遵循往返收敛律的常用格式原语与 JSON 文本桥接，均附带可供 `@modvia/json-schema` 读取的格式元数据：
+
+```ts
+import { defineModel, snakeCase } from "modvia";
+import { email, ipv4, isoDate, jsonOf, url, uuid } from "modvia/formats";
+
+const WebhookConfig = defineModel({
+  alias: snakeCase,
+  fields: {
+    webhookId: uuid(), // 双端自动归一为小写 UUID
+    notifyEmail: email({ trim: true, lowercase: true }),
+    callbackUrl: url({ protocols: ["https"] }),
+    allowIp: ipv4().optional(),
+    expireDate: isoDate(), // 精确校验闰年与月日合法性的 YYYY-MM-DD
+  },
+});
+
+// jsonOf(codec) 将任意 Codec 或 Model 包装为「JSON 字符串 ↔ 业务对象」双向 Codec
+const WebhookConfigJson = jsonOf(WebhookConfig);
+const config = WebhookConfigJson.parse(rawJsonText);
+const serializedText: string = WebhookConfigJson.encode(config);
+```
 
 ## 值精化、归一化、品牌类型与双向管道
 
@@ -286,7 +314,7 @@ const Order = defineModel({
 });
 ```
 
-若两端类型相同且只需附加约束，优先使用 `string().refine(...)` 或 `.check(...)` 等对称校验方法。若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.alias()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
+若两端类型相同且只需附加约束，优先使用 `string().refine(...)` 或 `.check(...)` 等对称校验方法。`defineCodec` 还支持通过可选的 `meta: { format, encodedSchema, decodedSchema }` 附加只读结构元数据（可通过 `inspectCodec(codec)` 读取，供 `@modvia/json-schema` 导出标准 Schema）。若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.alias()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
 
 ## 日期时间
 
@@ -336,17 +364,32 @@ const NodeModel: Model<NodeData, NodeDTO> = defineModel({
 | ----------------------- | ----------------------------------------------------------- |
 | `type.object`           | 解码输入不是普通对象，或编码输入为 `null`、数组或非对象     |
 | `type.array`            | `arrayOf` 或 `tupleOf` 收到非数组输入                       |
+| `array.min_length`      | `arrayOf(codec, { minLength })` 数组元素个数不足            |
+| `array.max_length`      | `arrayOf(codec, { maxLength })` 数组元素个数超出上限        |
 | `tuple.length`          | `tupleOf` 收到的数组长度与声明的元组长度不一致              |
-| `type.string`           | `string()` 收到非字符串输入                                 |
+| `type.string`           | `string()` 或字符串格式规则收到非字符串输入                 |
 | `type.number`           | `number()` 收到非有限数字（含 `NaN`、`±Infinity` 或非数字） |
 | `type.integer`          | `int()` 收到非安全整数（含浮点数或超出双精度安全整数范围）  |
+| `number.min`            | `number({ min })` 或 `int({ min })` 小于最小下界            |
+| `number.max`            | `number({ max })` 或 `int({ max })` 大于最大上界            |
 | `type.boolean`          | `boolean()` 收到非布尔值                                    |
 | `type.datetime`         | `isoDateTime()` 解码输入非字符串，或编码输入不是有效 `Date` |
 | `string.min_length`     | `string({ minLength })` 长度不足（按 UTF-16 码元计）        |
+| `string.max_length`     | `string({ maxLength })` 长度超出上限（按 UTF-16 码元计）    |
+| `string.pattern`        | `string({ pattern })` 未匹配指定正则表达式                  |
 | `string.one_of`         | `oneOf()` 收到枚举集合之外的值                              |
 | `value.literal`         | `literal()` 收到声明字面量集合之外的值                      |
 | `datetime.invalid`      | 日期时间字符串的格式、日历日期、时分秒或时区偏移非法        |
 | `datetime.out_of_range` | 日期时间换算为 UTC 后超出原生 `Date` 可表示范围             |
+| `format.uuid`           | `uuid()` 收到非法 UUID 字符串                               |
+| `format.email`          | `email()` 收到非法电子邮箱地址                              |
+| `format.url`            | `url()` 收到非法 URL 字符串                                 |
+| `format.url_protocol`   | `url({ protocols })` 协议不在允许白名单内                   |
+| `format.ipv4`           | `ipv4()` 收到非法 IPv4 地址                                 |
+| `format.ipv6`           | `ipv6()` 收到非法 IPv6 地址                                 |
+| `format.iso_date`       | `isoDate()` 收到非法 `YYYY-MM-DD` 公历日期                  |
+| `format.iso_time`       | `isoTime()` 收到非法 `HH:mm:ss` 时钟时间                    |
+| `format.json`           | `jsonString()` 收到非法 JSON 文本或不可 JSON 序列化的值     |
 | `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞             |
 | `union.no_match`        | `unionOf` 的所有候选分支均未匹配当前输入                    |
 | `union.invalid_tag`     | `taggedUnion` 的判别字段值不在已注册的分支标签集合内        |

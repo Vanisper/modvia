@@ -15,7 +15,7 @@
 
 ## 操作事实
 
-- `vp run ready` 顺序为 构建 → 检查 → 测试：产物测试通过包出口消费 `dist`（含 `modvia`、`modvia/codec` 与 `@modvia/zod`），顺序是依赖不是风格。
+- `vp run ready` 顺序为 构建 → 检查 → 测试：产物测试通过包出口消费 `dist`（含 `modvia`、`modvia/codec`、`modvia/formats`、`@modvia/json-schema` 与 `@modvia/zod`），顺序是依赖不是风格。
 - `packages/utils` 与 `apps/website` 是工具链示例，不投入产品化改进。
 - 提交遵循 Conventional Commits：type/scope 用英文，subject 跟随仓库语言。
 
