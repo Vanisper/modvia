@@ -18,9 +18,27 @@ export type SafeResult<T> =
       readonly value?: undefined;
     };
 
-export interface CodecContext {
-  fail(this: void, code: string, message: string): never;
+export interface CodecIssueInput {
+  readonly code: string;
+  readonly message: string;
+  readonly path?: readonly PathSegment[];
 }
+
+export interface CodecContext {
+  /** 立即中断当前规则并记录一条校验问题 */
+  fail(this: void, code: string, message: string): never;
+  /** 记录一条校验问题但不中断后续检查（支持指定相对子路径） */
+  issue(this: void, detail: CodecIssueInput): void;
+}
+
+export declare const brandSymbol: unique symbol;
+
+export interface Brand<Name extends string | symbol> {
+  readonly [brandSymbol]: { readonly [K in Name]: true };
+}
+
+/** 附加编译期名义品牌标签的业务类型，支持多层品牌叠加 */
+export type Branded<T, Name extends string | symbol> = T & Brand<Name>;
 
 /** Standard Schema v1 互操作接口，零运行时依赖对接表单与全栈框架 */
 export interface StandardSchemaV1<Input = unknown, Output = Input> {
@@ -86,11 +104,33 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   /** 校验业务值并编码，返回判别结果而不抛出校验异常 */
   safeEncode(this: void, value: T): SafeResult<Encoded>;
   /**
-   * 对业务值附加对称校验规则，解码与编码两端均执行同一约束
+   * 对业务值附加过程式对称检查，支持通过 context.issue 收集多条错误与子路径
    *
-   * @description 基础 Codec 通过后才调用回调，通过 context.fail 报告校验问题
+   * @description 基础 Codec 通过后才调用回调；对模型调用时，解码阶段自动将声明字段名路径映射为外部键名
    */
   check(this: void, rule: (value: T, context: CodecContext) => void): Codec<T, Encoded>;
+  /** 用类型守卫谓词在两端对称校验业务值，并将解码侧静态类型收窄为子类型 Narrowed */
+  refine<Narrowed extends T>(
+    this: void,
+    predicate: (value: T) => value is Narrowed,
+    code: string,
+    message: string,
+  ): Codec<Narrowed, Encoded>;
+  /** 用布尔谓词在解码与编码两端对称校验业务值，强制指定稳定错误码 */
+  refine(
+    this: void,
+    predicate: (value: T) => boolean,
+    code: string,
+    message: string,
+  ): Codec<T, Encoded>;
+  /**
+   * 对业务值执行同类型幂等规范化清洗，解码与编码两端共同维持规范形态
+   *
+   * @description 基础 Codec 校验通过后执行；确保任意合法值往返满足收敛律
+   */
+  normalize(this: void, fn: (value: T) => T): Codec<T, Encoded>;
+  /** 为解码出的业务值附加编译期名义品牌标签，编码端保持原外部类型且运行时零额外包装 */
+  brand<const Name extends string | symbol>(this: void): Codec<Branded<T, Name>, Encoded>;
   /**
    * 将当前 Codec 与下游 Codec 串联为双向管道
    *

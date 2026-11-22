@@ -4,11 +4,13 @@ import {
   arrayOf,
   defineCodec,
   field,
+  fromStandard,
   isValidationError,
   isoDateTime,
   number,
   string,
   ValidationError,
+  type Branded,
   type Codec,
   type CodecLike,
   type InferEncoded,
@@ -170,5 +172,66 @@ describe("codec kernel", () => {
     expect(() => arrayOf(field(string()))).toThrow(TypeError);
 
     expectTypeOf(arrayOf(string())).toEqualTypeOf<Codec<string[], string[]>>();
+  });
+
+  test("fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
+    const emailStandard: StandardSchemaV1<string, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "custom-validator",
+        validate(value) {
+          if (typeof value !== "string" || !value.includes("@")) {
+            return {
+              issues: [{ message: "Invalid email", path: [{ key: "address" }] }],
+            };
+          }
+          return { value: value.trim() };
+        },
+      },
+    };
+
+    const Email = fromStandard(emailStandard);
+    expect(Email.decode(" a@b.com ")).toBe("a@b.com");
+    expect(Email.encode(" a@b.com ")).toBe("a@b.com");
+    expect(Email.safeDecode("invalid")).toStrictEqual({
+      ok: false,
+      issues: [{ path: ["address"], code: "standard.invalid", message: "Invalid email" }],
+    });
+
+    const asyncSchema: StandardSchemaV1<string, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "async-validator",
+        validate: async (value) => ({ value: String(value) }),
+      },
+    };
+    const AsyncWrapped = fromStandard(asyncSchema);
+    expect(() => AsyncWrapped.safeDecode("x")).toThrow(TypeError);
+  });
+
+  test("brand 在解码端附加编译期名义类型且编码端保持原始外部类型，运行时零额外包装", () => {
+    const base = string({ trim: true, minLength: 1 });
+    const UserId = base.brand<"UserId">();
+    const OrderId = base.brand<"OrderId">();
+
+    // 运行时直接复用原 Codec 实例
+    expect(UserId).toBe(base);
+
+    const uid = UserId.decode("  u-1  ");
+    expect(uid).toBe("u-1");
+    expect(UserId.encode(uid)).toBe("u-1");
+
+    expectTypeOf(uid).toEqualTypeOf<Branded<string, "UserId">>();
+    expectTypeOf<InferEncoded<typeof UserId>>().toEqualTypeOf<string>();
+
+    function acceptUserId(id: Branded<string, "UserId">): string {
+      return id;
+    }
+    acceptUserId(uid);
+    const oid = OrderId.decode("o-1");
+    // @ts-expect-error 不同品牌名义类型不可混用
+    acceptUserId(oid);
+    // @ts-expect-error 裸 string 不可直接传入品牌参数
+    acceptUserId("u-1");
   });
 });

@@ -1,6 +1,14 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
-import { boolean, isoDateTime, number, oneOf, string } from "../../src/codec/index.ts";
+import {
+  boolean,
+  int,
+  isoDateTime,
+  number,
+  oneOf,
+  string,
+  unknown,
+} from "../../src/codec/index.ts";
 import { defineModel } from "../../src/index.ts";
 
 const instant = isoDateTime();
@@ -49,6 +57,21 @@ describe("built-in scalars", () => {
       ok: false,
       issues: [{ code: "string.one_of" }],
     });
+
+    const safeInt = int();
+    expect(safeInt.decode(0)).toBe(0);
+    expect(safeInt.encode(-42)).toBe(-42);
+    for (const invalid of [1.5, 1e25, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
+      expect(safeInt.safeDecode(invalid)).toMatchObject({
+        ok: false,
+        issues: [{ code: "type.integer" }],
+      });
+    }
+
+    const passthrough = unknown();
+    const complex = { nested: [1, true, null] };
+    expect(passthrough.decode(complex)).toBe(complex);
+    expect(passthrough.encode(undefined)).toBeUndefined();
   });
 
   test("isoDateTime 支持四位年与扩展年份按同一时间点往返", () => {

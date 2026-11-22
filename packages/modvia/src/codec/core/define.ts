@@ -1,4 +1,4 @@
-import { isAbortSignal, sharedContext } from "./collector.ts";
+import { createScopedContext, INVALID, isAbortSignal } from "./collector.ts";
 import { isValidationError } from "./errors.ts";
 import {
   createCodec,
@@ -14,15 +14,19 @@ export interface CodecHandlers<T, Encoded> {
   encode(this: void, value: T, context: CodecContext): Encoded;
 }
 
-/** 通过一对双向转换函数创建标准 Codec，两端均可通过 context.fail 报告校验失败 */
+/** 通过一对双向转换函数创建标准 Codec，两端均可通过 context.fail 或 context.issue 报告校验失败 */
 export function defineCodec<T, Encoded = T>(
   handlers: CodecHandlers<T, Encoded>,
 ): Codec<T, Encoded> {
   return createCodec<T, Encoded>((input, direction, collector) => {
+    const mark = collector.mark();
+    const context = createScopedContext(collector);
     try {
-      return direction === "decode"
-        ? handlers.decode(input, sharedContext)
-        : handlers.encode(input as T, sharedContext);
+      const output =
+        direction === "decode"
+          ? handlers.decode(input, context)
+          : handlers.encode(input as T, context);
+      return collector.mark() > mark ? INVALID : output;
     } catch (error) {
       if (isAbortSignal(error)) {
         return collector.add(error.code, error.message);

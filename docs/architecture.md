@@ -55,8 +55,9 @@ packages/modvia/src/
 │   │   ├── primitives.ts         # [公开] string、number、boolean、oneOf、literal
 │   │   └── datetime.ts           # [公开] isoDateTime（独立维护日历与时区换算逻辑）
 │   └── operators/                # 高阶容器与组合算子（严禁导入 scalars）
-│       ├── containers.ts         # [公开] arrayOf、recordOf
-│       └── combinators.ts        # [公开] pipe、invert、lazy、unionOf
+│       ├── containers.ts         # [公开] arrayOf、recordOf、tupleOf
+│       ├── combinators.ts        # [公开] pipe、invert、lazy、unionOf
+│       └── standard.ts           # [公开] StandardSchemaV1 同步输入桥接 fromStandard
 └── model/                        # 领域模型模块（单向依赖 codec + shared）
     ├── core/                     # 模型内核（严禁导入 model/operators）
     │   ├── types.ts              # [公开] Model 接口、字段表静态布局与类型提取工具

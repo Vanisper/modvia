@@ -70,6 +70,80 @@ describe("codec combinators", () => {
     });
   });
 
+  test("check 支持通过 context.issue 非中断收集多条错误及相对子路径", () => {
+    const Span = defineModel({
+      fields: {
+        min: number(),
+        max: number(),
+      },
+    }).check((span, context) => {
+      if (span.min < 0) {
+        context.issue({ code: "span.negative_min", message: "min must be >= 0", path: ["min"] });
+      }
+      if (span.max < span.min) {
+        context.issue({ code: "span.inverted", message: "max must be >= min", path: ["max"] });
+      }
+    });
+
+    const failure = Span.safeDecode({ min: -5, max: -10 });
+    expect(failure).toStrictEqual({
+      ok: false,
+      issues: [
+        { path: ["min"], code: "span.negative_min", message: "min must be >= 0" },
+        { path: ["max"], code: "span.inverted", message: "max must be >= min" },
+      ],
+    });
+  });
+
+  test("refine 支持布尔断言与 TypeScript 子类型收窄，强制要求稳定错误码", () => {
+    const Positive = number().refine((n) => n > 0, "number.positive", "Expected > 0");
+    expect(Positive.decode(3)).toBe(3);
+    expect(Positive.safeDecode(0)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.positive", message: "Expected > 0" }],
+    });
+    expect(Positive.safeEncode(-1)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.positive" }],
+    });
+
+    const NonEmptyList = arrayOf(string()).refine(
+      (items): items is [string, ...string[]] => items.length > 0,
+      "array.non_empty",
+      "At least one item required",
+    );
+    const decoded = NonEmptyList.decode(["first"]);
+    expectTypeOf(decoded).toEqualTypeOf<[string, ...string[]]>();
+    expectTypeOf<InferEncoded<typeof NonEmptyList>>().toEqualTypeOf<string[]>();
+    expect(NonEmptyList.safeDecode([])).toMatchObject({
+      ok: false,
+      issues: [{ code: "array.non_empty" }],
+    });
+
+    expect(() => number().refine((n) => n > 0, "", "msg")).toThrow(TypeError);
+  });
+
+  test("normalize 在解码与编码两端维持幂等规范形态且满足往返收敛", () => {
+    const Email = string({ trim: true })
+      .normalize((value) => value.toLowerCase())
+      .refine((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value), "string.email", "Invalid email");
+
+    const decoded = Email.decode("  Alice@Example.COM  ");
+    expect(decoded).toBe("alice@example.com");
+    expect(Email.encode("Alice@Example.COM")).toBe("alice@example.com");
+    expect(Email.decode(Email.encode(decoded))).toBe(decoded);
+
+    // 非法输入在进入 normalize 回调前已被基础 Codec 拦截
+    expect(Email.safeDecode(123)).toMatchObject({
+      ok: false,
+      issues: [{ code: "type.string" }],
+    });
+    expect(Email.safeEncode(123 as unknown as string)).toMatchObject({
+      ok: false,
+      issues: [{ code: "type.string" }],
+    });
+  });
+
   test("check 与 or 混排遵循由内向外的包裹顺序", () => {
     const slugOrNull = string({ trim: true })
       .check((value, context) => {

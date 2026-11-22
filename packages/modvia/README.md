@@ -112,25 +112,42 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 - `.from(name)`：指定父对象读写该字段时使用的外部键名；同一模型内的外部键名不能重复。
 - `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
 - `.optional()` 与 `.required()`：控制父对象是否允许省略该键；显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
-- `arrayOf(elementCodec)`：按位置编解码数组元素；元素参数仅接受值级 `Codec`，若对元素误传带 `.from()` 或 `.optional()` 的 `Field`，编译期与定义期均会直接拦截（可通过 `someField.codec` 提取纯值规则）。
+- `arrayOf(elementCodec)` 与 `tupleOf(...codecs)`：分别编解码不定长同构数组与定长异构元组；元素参数仅接受值级 `Codec`，编译期与定义期拒绝带 `.from()` 或 `.optional()` 的 `Field`（可通过 `someField.codec` 提取纯值规则）。
 - `recordOf(valueCodec)` 与 `recordOf(keyCodec, valueCodec)`：编解码键名动态的普通对象字典（如按语言代码或实体 ID 索引的映射表），错误路径保留对应键名。
-- `literal(...values)`：按 `Object.is` 精确匹配一个或多个原始字面量（支持字符串、数字、布尔值、`null`、`undefined`）。
+- `int()`、`literal(...values)` 与 `unknown()`：分别表达安全整数（`Number.isSafeInteger`）、多类型精确字面量匹配以及显式原样透传的动态载荷。
 
-## 值组合子：对称校验、双向管道与联合
+## 值精化、归一化、品牌类型与双向管道
 
-对于无需手写双份转换的常见场景，可直接使用值级组合原语：
+围绕「变形（Morph）/ 归一化（Normalize）/ 精化（Refine）」三分原则，值级 `Codec` 提供完整的链式组合能力：
 
 ```ts
-import { defineCodec, invert, isoDateTime, number, string, unionOf } from "modvia";
+import {
+  defineCodec,
+  fromStandard,
+  int,
+  invert,
+  isoDateTime,
+  string,
+  unionOf,
+  type Branded,
+} from "modvia";
 
-// 1. 对称校验（解码与编码共用同一条业务规则）
-const slug = string({ trim: true }).check((value, context) => {
-  if (!/^[a-z0-9-]+$/.test(value)) {
-    context.fail("string.slug", "Expected a lowercase slug");
+// 1. 幂等归一化 + 声明式精化 + 编译期名义品牌（编码端仍保持纯净 string）
+const Email = string({ trim: true })
+  .normalize((s) => s.toLowerCase())
+  .refine((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s), "string.email", "Expected a valid email")
+  .brand<"Email">();
+
+type EmailAddress = Branded<string, "Email">;
+
+// 2. 过程式多问题检查（支持通过 context.issue 附加多条错误与相对子路径）
+const Port = int().check((n, ctx) => {
+  if (n < 1 || n > 65535) {
+    ctx.issue({ code: "number.port_range", message: "Port must be between 1 and 65535" });
   }
 });
 
-// 2. 双向管道串联（解码正向执行，编码自动逆向执行）
+// 3. 双向管道串联（解码正向执行，编码自动逆向执行）
 const intFromString = defineCodec<number, string>({
   decode: (raw, ctx) =>
     /^-?\d+$/.test(String(raw)) ? Number(raw) : ctx.fail("number.int", "Invalid integer"),
@@ -138,13 +155,12 @@ const intFromString = defineCodec<number, string>({
 });
 const PositiveCount = string({ trim: true })
   .pipe(intFromString)
-  .check((n, ctx) => {
-    if (n <= 0) ctx.fail("number.positive", "Expected > 0");
-  });
+  .refine((n) => n > 0, "number.positive", "Expected > 0");
 
-// 3. 从左到右多 Codec 联合与方向反转
-const FlexibleTime = unionOf(isoDateTime(), number());
+// 4. 从左到右多 Codec 联合、方向反转与外部 StandardSchemaV1 同步校验器接入
+const FlexibleTime = unionOf(isoDateTime(), int());
 const UtcTextFromDate = invert(isoDateTime());
+const ExternalRule = fromStandard(thirdPartyStandardSchema);
 ```
 
 ## 领域工厂与 Class 实例
@@ -288,9 +304,11 @@ const NodeModel: Model<NodeData, NodeDTO> = defineModel({
 | 错误码                  | 触发条件                                                    |
 | ----------------------- | ----------------------------------------------------------- |
 | `type.object`           | 解码输入不是普通对象，或编码输入为 `null`、数组或非对象     |
-| `type.array`            | `arrayOf` 收到非数组输入                                    |
+| `type.array`            | `arrayOf` 或 `tupleOf` 收到非数组输入                       |
+| `tuple.length`          | `tupleOf` 收到的数组长度与声明的元组长度不一致              |
 | `type.string`           | `string()` 收到非字符串输入                                 |
 | `type.number`           | `number()` 收到非有限数字（含 `NaN`、`±Infinity` 或非数字） |
+| `type.integer`          | `int()` 收到非安全整数（含浮点数或超出双精度安全整数范围）  |
 | `type.boolean`          | `boolean()` 收到非布尔值                                    |
 | `type.datetime`         | `isoDateTime()` 解码输入非字符串，或编码输入不是有效 `Date` |
 | `string.min_length`     | `string({ minLength })` 长度不足（按 UTF-16 码元计）        |
@@ -301,6 +319,7 @@ const NodeModel: Model<NodeData, NodeDTO> = defineModel({
 | `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞             |
 | `union.no_match`        | `unionOf` 的所有候选分支均未匹配当前输入                    |
 | `union.invalid_tag`     | `taggedUnion` 的判别字段值不在已注册的分支标签集合内        |
+| `standard.invalid`      | `fromStandard` 包装的外部校验器未提供错误码时的默认标识     |
 | `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段  |
 
 ## 开发与验证

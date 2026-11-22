@@ -1,14 +1,16 @@
 import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
   createCollector,
+  createScopedContext,
   INVALID,
   isAbortSignal,
-  sharedContext,
   type Invalid,
   type IssueCollector,
+  type SegmentMapper,
 } from "./collector.ts";
 import { isValidationError, ValidationError } from "./errors.ts";
 import type {
+  Branded,
   Codec,
   CodecContext,
   CodecLike,
@@ -31,6 +33,7 @@ export type InternalRunner<T, Encoded> = (
 const runnerSymbol = Symbol.for("modvia.codecRunner");
 const literalStateSymbol = Symbol.for("modvia.literalState");
 const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
+const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
 export const fieldBrand = Symbol.for("modvia.Field");
 
 interface LiteralState {
@@ -41,6 +44,7 @@ interface LiteralState {
 export interface CodecMetadata {
   readonly literalState?: LiteralState;
   readonly allowedLiterals?: readonly FieldLiteral[];
+  readonly decodeSegmentMapper?: SegmentMapper;
 }
 
 export function createCodec<T, Encoded>(
@@ -52,6 +56,7 @@ export function createCodec<T, Encoded>(
   metadata?: CodecMetadata,
 ): Codec<T, Encoded> {
   const literalState = metadata?.literalState;
+  const decodeSegmentMapper = metadata?.decodeSegmentMapper;
   const safeDecode = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
   const safeEncode = (value: T): SafeResult<Encoded> => runSafe<Encoded>(runner, value, "encode");
 
@@ -76,6 +81,39 @@ export function createCodec<T, Encoded>(
     },
   });
 
+  function refine<Narrowed extends T>(
+    predicate: (value: T) => value is Narrowed,
+    code: string,
+    message: string,
+  ): Codec<Narrowed, Encoded>;
+  function refine(
+    predicate: (value: T) => boolean,
+    code: string,
+    message: string,
+  ): Codec<T, Encoded>;
+  function refine(
+    predicate: (value: T) => boolean,
+    code: string,
+    message: string,
+  ): Codec<T, Encoded> {
+    if (typeof predicate !== "function") {
+      throw new TypeError("refine requires a predicate function");
+    }
+    if (typeof code !== "string" || code.length === 0) {
+      throw new TypeError("refine requires a non-empty error code");
+    }
+    if (typeof message !== "string") {
+      throw new TypeError("refine requires an error message string");
+    }
+    return createCheckedCodec(
+      codec,
+      (value, context) => {
+        if (!predicate(value)) context.fail(code, message);
+      },
+      decodeSegmentMapper,
+    );
+  }
+
   const codec: Codec<T, Encoded> = {
     [Symbol.toStringTag]: "modvia.Codec",
     "~standard": standardProps,
@@ -87,7 +125,17 @@ export function createCodec<T, Encoded>(
       if (typeof rule !== "function") {
         throw new TypeError("check requires a validation function");
       }
-      return createCheckedCodec(codec, rule);
+      return createCheckedCodec(codec, rule, decodeSegmentMapper);
+    },
+    refine,
+    normalize(fn: (value: T) => T) {
+      if (typeof fn !== "function") {
+        throw new TypeError("normalize requires a transformation function");
+      }
+      return createNormalizedCodec(codec, fn, decodeSegmentMapper);
+    },
+    brand<const Name extends string | symbol>() {
+      return codec as unknown as Codec<Branded<T, Name>, Encoded>;
     },
     pipe<Next>(next: ValueCodecInput<Next, T>) {
       return createPipedCodec(codec, next);
@@ -117,6 +165,9 @@ export function createCodec<T, Encoded>(
       value: Object.freeze([...metadata.allowedLiterals]),
     });
   }
+  if (decodeSegmentMapper) {
+    Object.defineProperty(codec, segmentMapperSymbol, { value: decodeSegmentMapper });
+  }
   return Object.freeze(codec);
 }
 
@@ -126,12 +177,16 @@ export function extendCodec<T, Encoded, Extra extends object>(
   extraSymbols?: ReadonlyArray<readonly [symbol, unknown]>,
 ): Codec<T, Encoded> & Extra {
   const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
+  const segmentMapper = Reflect.get(base, segmentMapperSymbol) as SegmentMapper | undefined;
   const extended = {
     ...base,
     ...extra,
   };
   if (runner) {
     Object.defineProperty(extended, runnerSymbol, { value: runner });
+  }
+  if (segmentMapper) {
+    Object.defineProperty(extended, segmentMapperSymbol, { value: segmentMapper });
   }
   if (extraSymbols) {
     for (const [sym, value] of extraSymbols) {
@@ -327,25 +382,56 @@ export function getStaticLiterals(
 function createCheckedCodec<T, Encoded>(
   base: Codec<T, Encoded>,
   rule: (value: T, context: CodecContext) => void,
+  decodeSegmentMapper?: SegmentMapper,
 ): Codec<T, Encoded> {
-  return createCodec<T, Encoded>((input, direction, collector) => {
-    const converted = executeCodec(base, input, direction, collector);
-    if (converted === INVALID) return INVALID;
+  return createCodec<T, Encoded>(
+    (input, direction, collector) => {
+      const converted = executeCodec(base, input, direction, collector);
+      if (converted === INVALID) return INVALID;
 
-    const domainValue = (direction === "decode" ? converted : input) as T;
-    try {
-      rule(domainValue, sharedContext);
-      return converted;
-    } catch (error) {
-      if (isAbortSignal(error)) {
-        return collector.add(error.code, error.message);
+      const domainValue = (direction === "decode" ? converted : input) as T;
+      const mark = collector.mark();
+      const context = createScopedContext(
+        collector,
+        direction === "decode" ? decodeSegmentMapper : undefined,
+      );
+      try {
+        rule(domainValue, context);
+        return collector.mark() > mark ? INVALID : converted;
+      } catch (error) {
+        if (isAbortSignal(error)) {
+          return collector.add(error.code, error.message);
+        }
+        if (isValidationError(error)) {
+          return collector.addRelativeIssues(error.issues);
+        }
+        throw error;
       }
-      if (isValidationError(error)) {
-        return collector.addRelativeIssues(error.issues);
+    },
+    { decodeSegmentMapper },
+  );
+}
+
+function createNormalizedCodec<T, Encoded>(
+  base: Codec<T, Encoded>,
+  fn: (value: T) => T,
+  decodeSegmentMapper?: SegmentMapper,
+): Codec<T, Encoded> {
+  return createCodec<T, Encoded>(
+    (input, direction, collector) => {
+      if (direction === "decode") {
+        const decoded = executeCodec(base, input, "decode", collector);
+        return decoded === INVALID ? INVALID : fn(decoded);
       }
-      throw error;
-    }
-  });
+
+      const firstPass = executeCodec(base, input, "encode", collector);
+      if (firstPass === INVALID) return INVALID;
+      const normalized = fn(input as T);
+      if (Object.is(normalized, input)) return firstPass;
+      return executeCodec(base, normalized, "encode", collector);
+    },
+    { decodeSegmentMapper },
+  );
 }
 
 function runSafe<Result>(

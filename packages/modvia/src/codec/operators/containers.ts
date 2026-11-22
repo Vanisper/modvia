@@ -1,11 +1,19 @@
 import { isPlainObject, writeOwnField } from "../../shared/object.ts";
 import { INVALID } from "../core/collector.ts";
 import { assertValueCodec, createCodec, executeCodec } from "../core/runtime.ts";
-import type { Codec, CodecLike, ValueCodecInput } from "../core/types.ts";
+import type { Codec, CodecLike, InferEncoded, InferValue, ValueCodecInput } from "../core/types.ts";
 
 export type RecordShape<Key extends string, Value> = string extends Key
   ? Record<string, Value>
   : Partial<Record<Key, Value>>;
+
+export type TupleValues<Items extends readonly CodecLike<unknown, unknown>[]> = {
+  -readonly [Index in keyof Items]: InferValue<Items[Index]>;
+};
+
+export type TupleEncoded<Items extends readonly CodecLike<unknown, unknown>[]> = {
+  -readonly [Index in keyof Items]: InferEncoded<Items[Index]>;
+};
 
 /**
  * 按元素规则双向编解码数组，元素校验错误保留下标路径
@@ -103,4 +111,48 @@ export function recordOf(
       return failed ? INVALID : output;
     },
   );
+}
+
+/** 按固定长度与各位置 Codec 双向编解码异构元组 */
+export function tupleOf<const Items extends readonly ValueCodecInput<unknown, unknown>[]>(
+  ...items: Items
+): Codec<TupleValues<Items>, TupleEncoded<Items>> {
+  for (const item of items) {
+    assertValueCodec(item, "tupleOf");
+  }
+
+  type DecodedTuple = TupleValues<Items>;
+  type EncodedTuple = TupleEncoded<Items>;
+
+  return createCodec<DecodedTuple, EncodedTuple>((input, direction, collector) => {
+    if (!Array.isArray(input)) {
+      return collector.add("type.array", "Expected an array");
+    }
+    if (input.length !== items.length) {
+      return collector.add(
+        "tuple.length",
+        `Expected tuple of length ${items.length}, got ${input.length}`,
+      );
+    }
+
+    const output: unknown[] = [];
+    let failed = false;
+
+    for (let index = 0; index < items.length; index++) {
+      const itemCodec = items[index] as CodecLike<unknown, unknown>;
+      collector.pushSegment(index);
+      try {
+        const converted = executeCodec(itemCodec, input[index], direction, collector);
+        if (converted === INVALID) {
+          failed = true;
+        } else if (!failed) {
+          output.push(converted);
+        }
+      } finally {
+        collector.popSegment();
+      }
+    }
+
+    return failed ? INVALID : (output as DecodedTuple | EncodedTuple);
+  });
 }

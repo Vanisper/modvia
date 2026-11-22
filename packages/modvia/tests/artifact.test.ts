@@ -75,12 +75,20 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     expect("defineModel" in codecEntry).toBe(false);
 
     const positiveMap = codecEntry.recordOf(
-      codecEntry.number().check((n, ctx) => {
-        if (n <= 0) ctx.fail("number.positive", "Expected > 0");
-      }),
+      codecEntry
+        .int()
+        .refine((n) => n > 0, "number.positive", "Expected > 0")
+        .brand<"PositiveInt">(),
     );
     expect(positiveMap.decode({ a: 1 })).toStrictEqual({ a: 1 });
     expect(positiveMap.safeDecode({ a: 0 }).ok).toBe(false);
+    expect(positiveMap.safeDecode({ a: 1.5 }).ok).toBe(false);
+
+    const pair = codecEntry.tupleOf(
+      codecEntry.string({ trim: true }).normalize((s) => s.toLowerCase()),
+      codecEntry.unknown(),
+    );
+    expect(pair.decode(["  OK ", { raw: 1 }])).toStrictEqual(["ok", { raw: 1 }]);
 
     const nums = codecEntry.arrayOf(codecEntry.number().or("auto", null));
     expect(nums.safeDecode([1, "auto", null])).toStrictEqual({

@@ -2,6 +2,14 @@
 
 Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外部输入解码为业务值，写出层按同一份声明将业务值编码回 DTO。本文定义核心抽象的语义契约与执行不变量。
 
+## 双向收敛与操作三分原则
+
+所有编解码操作严格划分为三类互不越界的原语，共同维持「合法业务值往返收敛（`decode(encode(t)) ≡ t`）」的核心不变量：
+
+- **跨表示变形（Morph，`E ↔ T`）**：改变值的外部与内部表示（如 `string ↔ Date`、`DTO ↔ 领域实体`），必须显式声明正向 `decode` 与反向 `encode`（如 `defineCodec`、`pipe`），禁止引入破坏编码可逆性的单向转换或隐式宽泛强转。
+- **同类型规范化（Normalize，`T → T`）**：不改变类型，仅将合法值投影至幂等规范形态（如 `.normalize(s => s.toLowerCase())`、空白裁剪、UTC 归一化）；解码与编码两端共同保证输出处于同一规范形态。
+- **域内精化与品牌（Refine / Check / Brand，`T ⊇ SubT`）**：不改写值，仅收窄合法值子集（`.refine`、`.check`）或附加零运行时开销的编译期名义标签（`.brand`）；精化约束在入口解码与出口编码两端对称执行，防止非法状态流入领域层或流出至外部协议。
+
 ## 核心抽象与作用域
 
 系统由四个渐进接口构成：
@@ -13,10 +21,10 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 | `Field<T, E, Source, Presence>` | 对象属性级 | 将 `Codec` 绑定到具名属性槽位，承载外部键名（`source`）与键缺省规则（`presence`）。               |
 | `Model<Data, DTO, Out>`         | 领域模型级 | 组合字段表形成对象契约，本身亦是 `Codec<Out, DTO>`，支持通过 `withFactory` 派生领域实例输出。     |
 
-内置标量（`string`、`number`、`boolean`、`oneOf`、`literal`、`isoDateTime`）、值容器（`arrayOf`、`recordOf`）、组合子（`pipe`、`invert`、`lazy`、`unionOf`）与模型（`defineModel`）均返回标准 `Codec`：
+内置标量（`string`、`number`、`int`、`boolean`、`oneOf`、`literal`、`unknown`、`isoDateTime`）、值容器（`arrayOf`、`tupleOf`、`recordOf`）、组合子（`pipe`、`invert`、`lazy`、`unionOf`、`fromStandard`）与模型（`defineModel`）均返回标准 `Codec`：
 
 - 任意 `Codec`（包括嵌套 `Model`）都可直接调用 `.from(name)` 或 `.optional()` 跃迁为 `Field`，无需额外包装函数。
-- 值级容器与组合子（`arrayOf`、`recordOf`、`pipe`、`invert`、`lazy`、`unionOf`）仅接受值级 `Codec` 或裸 `CodecLike`，在编译期与定义期同时拒绝带键绑定元数据的 `Field`。
+- 值级容器与组合子（`arrayOf`、`tupleOf`、`recordOf`、`pipe`、`invert`、`lazy`、`unionOf`）仅接受值级 `Codec` 或裸 `CodecLike`，在编译期与定义期同时拒绝带键绑定元数据的 `Field`。
 - 若需复用已有 `Field` 的底层值规则作为容器元素，可通过 `field.codec` 显式取回纯值级 `Codec`。
 
 ## 执行模型与错误协议
@@ -25,8 +33,8 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 - `safeDecode` 与 `safeEncode` 直接返回冻结的判别联合 `SafeResult<T>`，全程不构造 `Error` 实例。
 - `decode` 与 `encode` 在收集到校验问题时，仅在顶层出口一次性构造并抛出 `ValidationError`。
-- 自定义规则通过 `context.fail(code, message)` 报告预期内的输入问题；getter、工厂函数或自定义逻辑抛出的其他普通异常均原样向外传播。
-- 所有 `Codec`、`Field` 与 `Model` 均原生挂载 `StandardSchemaV1` 的 `"~standard"` 属性，其输入类型对应编码端 `E`，输出类型对应解码端 `T`。
+- 自定义规则可通过 `context.fail(code, message)` 立即中断当前规则，或通过 `context.issue({ code, message, path? })` 非中断收集多条错误及相对子路径；getter、工厂函数或自定义逻辑抛出的其他普通异常均原样向外传播。
+- 所有 `Codec`、`Field` 与 `Model` 均原生挂载 `StandardSchemaV1` 的 `"~standard"` 属性，同时可通过零依赖的 `fromStandard(schema)` 将外部同步 `StandardSchemaV1` 校验器桥接为对称 `Codec`。
 
 ## 组合代数与链式规则
 

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
-import { isoDateTime, number, oneOf, recordOf, string } from "../../src/codec/index.ts";
+import { isoDateTime, number, oneOf, recordOf, string, tupleOf } from "../../src/codec/index.ts";
 import { defineModel, type InferEncoded, type InferValue } from "../../src/index.ts";
 
 const Metric = defineModel({
@@ -79,5 +79,33 @@ describe("containers (recordOf)", () => {
 
     // @ts-expect-error recordOf 不接受带属性修饰的 Field
     expect(() => recordOf(string().optional())).toThrow(TypeError);
+  });
+
+  test("tupleOf 校验定长异构元组并保留各位置转换与错误下标", () => {
+    const Range = tupleOf(isoDateTime(), number());
+    const stamp = "2026-11-09T00:00:00.000Z";
+
+    const decoded = Range.decode([stamp, 10]);
+    expect(decoded).toStrictEqual([new Date(stamp), 10]);
+    expect(Range.encode(decoded)).toStrictEqual([stamp, 10]);
+
+    expectTypeOf<InferValue<typeof Range>>().toEqualTypeOf<[Date, number]>();
+    expectTypeOf<InferEncoded<typeof Range>>().toEqualTypeOf<[string, number]>();
+
+    expect(Range.safeDecode("not-array")).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "type.array" }],
+    });
+    expect(Range.safeDecode([stamp])).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "tuple.length" }],
+    });
+    expect(Range.safeDecode([stamp, "bad"])).toMatchObject({
+      ok: false,
+      issues: [{ path: [1], code: "type.number" }],
+    });
+
+    // @ts-expect-error tupleOf 不接受带属性修饰的 Field
+    expect(() => tupleOf(string().optional())).toThrow(TypeError);
   });
 });

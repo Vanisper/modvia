@@ -37,6 +37,16 @@ export function number(): Codec<number, number> {
   });
 }
 
+/** 安全整数双向编解码器（Number.isSafeInteger），拒绝浮点数与超出双精度安全整数范围的值 */
+export function int(): Codec<number, number> {
+  return createCodec<number, number>((input, _direction, collector) => {
+    if (typeof input !== "number" || !Number.isSafeInteger(input)) {
+      return collector.add("type.integer", "Expected a safe integer");
+    }
+    return input;
+  });
+}
+
 /** 布尔值双向编解码器 */
 export function boolean(): Codec<boolean, boolean> {
   return createCodec<boolean, boolean>((input, _direction, collector) => {
@@ -45,6 +55,11 @@ export function boolean(): Codec<boolean, boolean> {
     }
     return input;
   });
+}
+
+/** 零开销原样透传编解码器，用于在模型或字典中显式声明任意动态载荷字段 */
+export function unknown(): Codec<unknown, unknown> {
+  return createCodec<unknown, unknown>((input) => input);
 }
 
 /** 字符串字面量枚举双向编解码器 */
