@@ -89,6 +89,7 @@ describe("field binding", () => {
       nullable,
       optional,
       required,
+      default: withDefault,
       decode,
       encode,
       safeDecode,
@@ -104,6 +105,7 @@ describe("field binding", () => {
       nullable,
       optional,
       required,
+      default: withDefault,
       decode,
       encode,
       safeDecode,
@@ -172,5 +174,36 @@ describe("field binding", () => {
       readonly event_dates?: (string | null)[] | false;
     }>();
     expectTypeOf<InferDTO<typeof reordered>>().toEqualTypeOf<InferDTO<typeof wrapped>>();
+  });
+
+  test("default 仅在父对象缺键时填入业务默认值，防可变共享引用且满足往返收敛", () => {
+    const Pagination = defineModel({
+      fields: {
+        page: number().default(1).from("page_no"),
+        tags: arrayOf(string()).default(() => []),
+      },
+    });
+
+    const first = Pagination.decode({});
+    const second = Pagination.decode({});
+    expect(first).toStrictEqual({ page: 1, tags: [] });
+    expect(first.tags).not.toBe(second.tags);
+    expect(Pagination.encode(first)).toStrictEqual({ page_no: 1, tags: [] });
+
+    // 键显式存在但值非法时照常报错，不静默兜底
+    expect(Pagination.safeDecode({ page_no: undefined }).ok).toBe(false);
+    expect(Pagination.safeDecode({ page_no: null }).ok).toBe(false);
+
+    expectTypeOf<InferData<typeof Pagination>>().toEqualTypeOf<{
+      readonly page: number;
+      readonly tags: string[];
+    }>();
+    expectTypeOf<InferDTO<typeof Pagination>>().toMatchTypeOf<{
+      page_no?: number;
+      tags?: string[];
+    }>();
+
+    // @ts-expect-error 非原始可变值必须通过工厂函数提供默认值，防止实例间共享同一引用
+    expect(() => arrayOf(string()).default([])).toThrow(TypeError);
   });
 });

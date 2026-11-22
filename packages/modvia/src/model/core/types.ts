@@ -8,6 +8,20 @@ export type MergeFields<Base extends FieldRecord, Extra extends FieldRecord> = O
 > &
   Extra;
 
+export type OptionalizeField<C> =
+  C extends Field<infer T, infer E, infer Source, infer _Presence>
+    ? Field<T, E, Source, "optional">
+    : C extends CodecLike<infer T, infer E>
+      ? Field<T, E, undefined, "optional">
+      : never;
+
+export type PartialFields<
+  Fields extends FieldRecord,
+  Keys extends PropertyKey = Exclude<keyof Fields, symbol>,
+> = {
+  readonly [K in keyof Fields]: K extends Keys ? OptionalizeField<Fields[K]> : Fields[K];
+};
+
 /** 从声明字段构造业务对象，并将业务输出编码回外部 DTO */
 export interface Model<
   Data,
@@ -27,6 +41,13 @@ export interface Model<
     this: void,
     ...keys: readonly Key[]
   ): ModelOf<Omit<Fields, Key>>;
+  /** 将全部字段转为可选键派生新模型（保留外部别名，移除创建期缺键默认值） */
+  partial(this: void): ModelOf<PartialFields<Fields>>;
+  /** 将指定字段转为可选键派生新模型（保留外部别名，移除创建期缺键默认值） */
+  partial<const Key extends Exclude<keyof Fields, symbol>>(
+    this: void,
+    ...keys: readonly [Key, ...Key[]]
+  ): ModelOf<PartialFields<Fields, Key>>;
   /** 追加或覆写字段派生新模型，定义期重新检查外部键唯一性 */
   extend<const Extra extends FieldRecord>(
     this: void,
@@ -58,14 +79,17 @@ export type InferDTO<M> =
 export type InferModel<M> =
   M extends Model<infer _Data, infer _DTO, infer Out, infer _Fields> ? Out : never;
 
-type AnyField = Field<unknown, unknown, string | undefined, FieldPresence>;
+interface FieldMeta<
+  Source extends string | undefined = string | undefined,
+  Presence extends FieldPresence = FieldPresence,
+> {
+  readonly [Symbol.toStringTag]: "modvia.Field";
+  readonly source: Source;
+  readonly presence: Presence;
+}
 
 type SourceOf<C, Key extends PropertyKey> =
-  C extends Field<infer _T, infer _E, infer Source, infer _P>
-    ? Source extends string
-      ? Source
-      : Key
-    : Key;
+  C extends FieldMeta<infer Source, infer _P> ? (Source extends string ? Source : Key) : Key;
 
 // 别名由运行时分支决定时，DTO 中的各个候选键均可能省略
 type VariableKey<Key extends PropertyKey, All = Key> = Key extends unknown
@@ -76,10 +100,15 @@ type VariableKey<Key extends PropertyKey, All = Key> = Key extends unknown
       : true
   : never;
 
-type CanOmit<C, Key extends PropertyKey, Side> = "optional" extends Extract<C, AnyField>["presence"]
+type CanOmit<C, Key extends PropertyKey, Side> = "optional" extends Extract<
+  C,
+  FieldMeta
+>["presence"]
   ? true
   : Side extends "dto"
-    ? VariableKey<SourceOf<C, Key>>
+    ? "defaulted" extends Extract<C, FieldMeta>["presence"]
+      ? true
+      : VariableKey<SourceOf<C, Key>>
     : false;
 
 // 逐个字段表推导必填与可选键，保留联合分支与索引签名中的已知字段

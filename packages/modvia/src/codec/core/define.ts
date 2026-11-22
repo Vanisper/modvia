@@ -3,6 +3,7 @@ import { isValidationError } from "./errors.ts";
 import {
   createCodec,
   createField,
+  getDefaultResolver,
   isFieldDescriptor,
   isStandardCodec,
   promoteToCodec,
@@ -56,10 +57,13 @@ export function field<T, Encoded>(
   }
   const { source, presence } = input;
   const inner = isStandardCodec(input.codec) ? input.codec : promoteToCodec(input);
+  const normalizedPresence: FieldPresence =
+    presence === "optional" ? "optional" : presence === "defaulted" ? "defaulted" : "required";
   return createField(
     inner,
     typeof source === "string" ? source : undefined,
-    presence === "optional" ? "optional" : "required",
+    normalizedPresence,
+    normalizedPresence === "defaulted" ? getDefaultResolver(input) : undefined,
   );
 }
 

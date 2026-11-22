@@ -61,6 +61,7 @@ packages/modvia/src/
 └── model/                        # 领域模型模块（单向依赖 codec + shared）
     ├── core/                     # 模型内核（严禁导入 model/operators）
     │   ├── types.ts              # [公开] Model 接口、字段表静态布局与类型提取工具
+    │   ├── naming.ts             # [公开] 编译期与运行期同步的字段批量命名策略（snakeCase、kebabCase）
     │   ├── define.ts             # [公开] defineModel、字段内省、结构派生与工厂派生
     │   └── fields.ts             # [内部] 字段解析、外部键去重与原型链 getter 读取
     └── operators/                # 多模型高阶组合算子

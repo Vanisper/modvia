@@ -1,12 +1,13 @@
-import { isFieldDescriptor } from "../../codec/core/runtime.ts";
-import type { CodecLike } from "../../codec/core/types.ts";
+import { getDefaultResolver, isFieldDescriptor } from "../../codec/core/runtime.ts";
+import type { CodecLike, FieldPresence } from "../../codec/core/types.ts";
 import { isObjectPrototype } from "../../shared/object.ts";
 import type { FieldRecord } from "./types.ts";
 
 export interface ResolvedField {
   readonly key: string;
   readonly source: string;
-  readonly optional: boolean;
+  readonly presence: FieldPresence;
+  readonly resolveDefault?: () => unknown;
   readonly codec: CodecLike<unknown, unknown>;
 }
 
@@ -17,11 +18,23 @@ export function resolveFields(fields: FieldRecord): readonly ResolvedField[] {
   const resolved = Object.entries(fields).map(([key, entry]) => {
     const field = isFieldDescriptor(entry) ? entry : undefined;
     const source = field?.source;
+    const presence: FieldPresence =
+      field?.presence === "optional"
+        ? "optional"
+        : field?.presence === "defaulted"
+          ? "defaulted"
+          : "required";
+    const resolveDefault = presence === "defaulted" ? getDefaultResolver(field) : undefined;
+    if (presence === "defaulted" && resolveDefault === undefined) {
+      throw new TypeError(`Defaulted field "${key}" is missing a default value resolver`);
+    }
+
     return Object.freeze({
       key,
       codec: field?.codec ?? entry,
       source: typeof source === "string" ? source : key,
-      optional: field?.presence === "optional",
+      presence,
+      ...(resolveDefault ? { resolveDefault } : {}),
     });
   });
   assertUniqueSources(resolved);

@@ -6,6 +6,7 @@ import {
   isoDateTime,
   literal,
   oneOf,
+  snakeCase,
   string,
   taggedUnion,
   type InferData,
@@ -143,6 +144,19 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
       type: "system",
       code: 200,
     });
+
+    const Config = defineModel({
+      naming: snakeCase,
+      fields: {
+        maxRetries: codecEntry.int().default(3),
+        serviceUrl: string(),
+      },
+    });
+    expect(Config.encode(Config.decode({ service_url: "https://api.example.com" }))).toStrictEqual({
+      max_retries: 3,
+      service_url: "https://api.example.com",
+    });
+    expect(Config.partial().decode({})).toStrictEqual({});
   });
 
   test("通过 dist 完成完整实例往返与 Standard Schema 校验", () => {

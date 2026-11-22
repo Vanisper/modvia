@@ -49,7 +49,7 @@ export function taggedUnion<
     if (!discField) {
       throw new RangeError(`Branch model is missing discriminator field "${discriminator}"`);
     }
-    if (discField.optional) {
+    if (discField.presence !== "required") {
       throw new RangeError(
         `Discriminator field "${discriminator}" must be required in every branch`,
       );

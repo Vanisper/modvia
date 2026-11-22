@@ -93,8 +93,11 @@ export type ValueCodecInput<T, Encoded = T> = CodecLike<T, Encoded> & {
   readonly [Symbol.toStringTag]?: "modvia.Codec";
 };
 
-export type FieldPresence = "required" | "optional";
+export type FieldPresence = "required" | "optional" | "defaulted";
 export type FieldLiteral = string | number | boolean | null | undefined;
+
+/** 原始字面量可直接作为默认值传入，对象/数组等非原始值须通过工厂函数 () => T 提供以防实例间共享引用 */
+export type DefaultProvider<T> = (T extends FieldLiteral ? T : never) | (() => T);
 
 /** 标准双向值编解码器，支持安全解析、字面量豁免与向对象字段跃迁 */
 export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSchemaV1<Encoded, T> {
@@ -155,6 +158,8 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   ): Field<T, Encoded, NextSource, "required">;
   /** 允许父对象省略此键，跃迁为可选字段描述符 */
   optional(this: void): Field<T, Encoded, undefined, "optional">;
+  /** 指定父对象解码缺键时的业务默认值，跃迁为带默认值的字段描述符（DTO 可选，模型必填） */
+  default(this: void, provider: DefaultProvider<T>): Field<T, Encoded, undefined, "defaulted">;
 }
 
 /** 绑定了外部键名与键缺省规则的对象字段描述符 */
@@ -185,6 +190,8 @@ export interface Field<
   optional(this: void): Field<T, Encoded, Source, "optional">;
   /** 将字段恢复为父对象必填键 */
   required(this: void): Field<T, Encoded, Source, "required">;
+  /** 指定父对象解码缺键时的业务默认值（DTO 可选，模型必填） */
+  default(this: void, provider: DefaultProvider<T>): Field<T, Encoded, Source, "defaulted">;
   /** 在保留字段外部名与缺省性的前提下，向值规则追加哨兵字面量 */
   or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(
     this: void,

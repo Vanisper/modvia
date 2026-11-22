@@ -2,10 +2,13 @@ import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
   defineModel,
+  defineNaming,
   isoDateTime,
+  kebabCase,
   literal,
   number,
   oneOf,
+  snakeCase,
   string,
   taggedUnion,
   type InferData,
@@ -117,6 +120,166 @@ describe("model introspection & derivation", () => {
         registeredAt: isoDateTime().from("created_at"),
       }),
     ).toThrow(RangeError);
+  });
+
+  test("partial 支持全量与指定字段可选化，保留外部别名并移除创建期默认值避免覆盖", () => {
+    const WithDefault = BaseUser.extend({
+      status: oneOf("active", "archived").default("active").from("account_status"),
+    });
+
+    const FullPatch = WithDefault.partial();
+    expect(FullPatch.decode({})).toStrictEqual({});
+    expect(FullPatch.decode({ created_at: "2026-11-09T00:00:00.000Z" })).toStrictEqual({
+      createdAt: new Date("2026-11-09T00:00:00.000Z"),
+    });
+    expect(FullPatch.encode({ status: "archived" })).toStrictEqual({ account_status: "archived" });
+
+    expectTypeOf<InferData<typeof FullPatch>>().toEqualTypeOf<{
+      readonly id?: string;
+      readonly name?: string;
+      readonly role?: "admin" | "member";
+      readonly createdAt?: Date;
+      readonly bio?: string;
+      readonly status?: "active" | "archived";
+    }>();
+
+    const SelectivePatch = BaseUser.partial("name", "createdAt");
+    expect(SelectivePatch.decode({ id: "u-1", role: "member" })).toStrictEqual({
+      id: "u-1",
+      role: "member",
+    });
+    expectTypeOf<InferData<typeof SelectivePatch>>().toEqualTypeOf<{
+      readonly id: string;
+      readonly name?: string;
+      readonly role: "admin" | "member";
+      readonly createdAt?: Date;
+      readonly bio?: string;
+    }>();
+
+    // @ts-expect-error 不存在的字段名在编译期与定义期均被拒绝
+    expect(() => BaseUser.partial("missing")).toThrow(RangeError);
+  });
+
+  test("naming 策略自动同步编译期与运行时外部键映射，显式 .from() 优先", () => {
+    const Profile = defineModel({
+      naming: snakeCase,
+      fields: {
+        userId: string(),
+        isEmailVerified: literal(true, false).default(false),
+        htmlURL: string().optional(),
+        legacyCode: string().from("USR_CODE"),
+      },
+    });
+
+    const decoded = Profile.decode({
+      user_id: "u-1",
+      html_url: "https://example.com",
+      USR_CODE: "L-9",
+    });
+    expect(decoded).toStrictEqual({
+      userId: "u-1",
+      isEmailVerified: false,
+      htmlURL: "https://example.com",
+      legacyCode: "L-9",
+    });
+    expect(Profile.encode(decoded)).toStrictEqual({
+      user_id: "u-1",
+      is_email_verified: false,
+      html_url: "https://example.com",
+      USR_CODE: "L-9",
+    });
+
+    expectTypeOf<InferDTO<typeof Profile>>().toMatchTypeOf<{
+      user_id: string;
+      is_email_verified?: boolean;
+      html_url?: string;
+      USR_CODE: string;
+    }>();
+
+    // 派生子模型完整保留命名策略生成的外部键名
+    const Picked = Profile.pick("userId", "legacyCode");
+    expect(Picked.encode({ userId: "u-1", legacyCode: "L-9" })).toStrictEqual({
+      user_id: "u-1",
+      USR_CODE: "L-9",
+    });
+
+    const HeaderModel = defineModel({
+      naming: kebabCase,
+      fields: { traceId: string(), clientVersion: string() },
+    });
+    expect(HeaderModel.encode({ traceId: "t-1", clientVersion: "1.0" })).toStrictEqual({
+      "trace-id": "t-1",
+      "client-version": "1.0",
+    });
+    expectTypeOf<InferDTO<typeof HeaderModel>>().toMatchTypeOf<{
+      "trace-id": string;
+      "client-version": string;
+    }>();
+
+    const UpperNaming = defineNaming((key) => key.toUpperCase());
+    const EnvModel = defineModel({
+      naming: UpperNaming,
+      fields: { appPort: number() },
+    });
+    expect(EnvModel.decode({ APPPORT: 8080 })).toStrictEqual({ appPort: 8080 });
+
+    // 命名转换后若与已有字段名碰撞则在定义期抛 RangeError
+    expect(() =>
+      defineModel({
+        naming: snakeCase,
+        fields: { userId: string(), user_id: string() },
+      }),
+    ).toThrow(RangeError);
+  });
+
+  test("对模型调用 check 时自动将声明字段路径双向翻译为 DTO 外部键与模型内部键", () => {
+    const PasswordReset = defineModel({
+      naming: snakeCase,
+      fields: {
+        newPassword: string({ minLength: 6 }),
+        confirmPassword: string({ minLength: 6 }),
+      },
+    }).check((data, context) => {
+      if (data.newPassword !== data.confirmPassword) {
+        context.issue({
+          code: "password.mismatch",
+          message: "Passwords do not match",
+          path: ["confirmPassword"],
+        });
+      }
+    });
+
+    expect(
+      PasswordReset.safeDecode({
+        new_password: "secret-1",
+        confirm_password: "secret-2",
+      }),
+    ).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: ["confirm_password"],
+          code: "password.mismatch",
+          message: "Passwords do not match",
+        },
+      ],
+    });
+
+    expect(
+      PasswordReset.safeEncode({
+        newPassword: "secret-1",
+        confirmPassword: "secret-2",
+      }),
+    ).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: ["confirmPassword"],
+          code: "password.mismatch",
+          message: "Passwords do not match",
+        },
+      ],
+    });
   });
 });
 

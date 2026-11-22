@@ -111,7 +111,7 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 
 - `.from(name)`：指定父对象读写该字段时使用的外部键名；同一模型内的外部键名不能重复。
 - `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
-- `.optional()` 与 `.required()`：控制父对象是否允许省略该键；显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
+- `.optional()`、`.required()` 与 `.default(provider)`：`.optional()` 允许父对象省略该键；`.default(...)` 在父对象解码缺键时填入业务默认值（DTO 侧键可选、模型侧键必填，对象或数组默认值须传入工厂函数 `() => value`）。显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
 - `arrayOf(elementCodec)` 与 `tupleOf(...codecs)`：分别编解码不定长同构数组与定长异构元组；元素参数仅接受值级 `Codec`，编译期与定义期拒绝带 `.from()` 或 `.optional()` 的 `Field`（可通过 `someField.codec` 提取纯值规则）。
 - `recordOf(valueCodec)` 与 `recordOf(keyCodec, valueCodec)`：编解码键名动态的普通对象字典（如按语言代码或实体 ID 索引的映射表），错误路径保留对应键名。
 - `int()`、`literal(...values)` 与 `unknown()`：分别表达安全整数（`Number.isSafeInteger`）、多类型精确字面量匹配以及显式原样透传的动态载荷。
@@ -201,21 +201,42 @@ const entityDTO: UserDTO = UserEntityModel.encode(entity);
 - `UserEntityModel` 与 `User` 共享相同的 `InferData` 与 `InferDTO`，原模型保持不变。
 - 编码时优先读取实例自有属性；缺少自有属性时沿原型链读取最近的同名 getter（止于 `Object.prototype` 之前），非声明字段（如 `displayName`、`canManage`）不会写出到 DTO。
 
-## 模型派生与多态联合
+## 批量命名策略、模型派生与多态联合
 
-通过 `pick`、`omit`、`extend` 可从已有模型无拷贝地派生新模型，通过 `taggedUnion` 可组合按标签区分的多态模型：
+对接统一采用 `snake_case` 或 `kebab-case` 的外部协议时，可通过 `naming` 自动映射全部字段外部键（单字段显式 `.from(...)` 优先）；通过 `pick`、`omit`、`partial`、`extend` 可从已有模型派生新契约，通过 `taggedUnion` 组合多态模型：
 
 ```ts
-import { arrayOf, defineModel, literal, string, taggedUnion } from "modvia";
+import { arrayOf, defineModel, literal, snakeCase, string, taggedUnion } from "modvia";
 
-// 1. 裁剪与扩展已有模型（自动保留原有的 .from 别名与可选性）
-const UserSummary = User.pick("id", "name", "role");
-const CreateUserInput = User.omit("id", "createdAt");
-const AdminUser = User.extend({
-  permissions: arrayOf(string()),
+// 1. 批量 snake_case 外部键映射（编译期 InferDTO 与运行期同步推导）
+const Account = defineModel({
+  naming: snakeCase,
+  fields: {
+    userId: string(),
+    displayName: string({ trim: true, minLength: 1 }),
+    role: literal("admin", "member").default("member"),
+    legacyCode: string().from("USR_CODE"), // 显式 .from 优先于 naming
+  },
 });
 
-// 2. 按标签字段 O(1) 双向分发的多态模型
+// 2. 裁剪、局部更新可选化与扩展（自动保留原字段外部别名）
+const AccountSummary = Account.pick("userId", "displayName");
+const PatchAccountInput = Account.partial("displayName", "role");
+const AdminAccount = Account.extend({
+  permissions: arrayOf(string()).from("perm_list"),
+});
+
+// 3. 跨字段对称校验（解码报错路径自动翻译为外部键名，编码保持内部键名）
+const PasswordPair = defineModel({
+  naming: snakeCase,
+  fields: { newPassword: string(), confirmPassword: string() },
+}).check((data, ctx) => {
+  if (data.newPassword !== data.confirmPassword) {
+    ctx.issue({ code: "password.mismatch", message: "Mismatch", path: ["confirmPassword"] });
+  }
+});
+
+// 4. 按标签字段 O(1) 双向分发的多态模型
 const TextBlock = defineModel({
   fields: { kind: literal("text"), body: string() },
 });

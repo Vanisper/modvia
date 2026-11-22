@@ -14,6 +14,7 @@ import type {
   Codec,
   CodecContext,
   CodecLike,
+  DefaultProvider,
   Field,
   FieldLiteral,
   FieldPresence,
@@ -34,6 +35,7 @@ const runnerSymbol = Symbol.for("modvia.codecRunner");
 const literalStateSymbol = Symbol.for("modvia.literalState");
 const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
 const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
+const defaultResolverSymbol = Symbol.for("modvia.defaultResolver");
 export const fieldBrand = Symbol.for("modvia.Field");
 
 interface LiteralState {
@@ -154,6 +156,9 @@ export function createCodec<T, Encoded>(
     optional() {
       return createField(codec, undefined, "optional");
     },
+    default(provider: DefaultProvider<T>) {
+      return createField(codec, undefined, "defaulted", toDefaultResolver(provider));
+    },
   };
 
   Object.defineProperty(codec, runnerSymbol, { value: runner });
@@ -266,7 +271,9 @@ export function isFieldDescriptor(
     const candidate = value as Partial<Field<unknown, unknown, string | undefined, FieldPresence>>;
     return (
       candidate[Symbol.toStringTag] === "modvia.Field" &&
-      (candidate.presence === "required" || candidate.presence === "optional") &&
+      (candidate.presence === "required" ||
+        candidate.presence === "optional" ||
+        candidate.presence === "defaulted") &&
       (candidate.source === undefined || typeof candidate.source === "string") &&
       typeof candidate.decode === "function" &&
       typeof candidate.encode === "function" &&
@@ -295,6 +302,12 @@ export function assertValueCodec<T, Encoded>(codec: CodecLike<T, Encoded>, calle
   }
 }
 
+export function getDefaultResolver(value: unknown): (() => unknown) | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const resolver = Reflect.get(value, defaultResolverSymbol);
+  return typeof resolver === "function" ? (resolver as () => unknown) : undefined;
+}
+
 export function createField<
   T,
   Encoded,
@@ -304,11 +317,16 @@ export function createField<
   codec: Codec<T, Encoded>,
   source: Source,
   presence: Presence,
+  defaultResolver?: () => unknown,
 ): Field<T, Encoded, Source, Presence> {
   const runner = Reflect.get(codec, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
 
-  const fieldDescriptor: Field<T, Encoded, Source, Presence> & { readonly [fieldBrand]: true } = {
+  const fieldDescriptor: Field<T, Encoded, Source, Presence> & {
+    readonly [fieldBrand]: true;
+    readonly [defaultResolverSymbol]?: () => unknown;
+  } = {
     [fieldBrand]: true,
+    ...(defaultResolver ? { [defaultResolverSymbol]: defaultResolver } : {}),
     [Symbol.toStringTag]: "modvia.Field",
     "~standard": codec["~standard"],
     codec,
@@ -320,7 +338,7 @@ export function createField<
     safeEncode: codec.safeEncode,
     from<NextSource extends string>(nextSource: NextSource) {
       assertValidSource(nextSource);
-      return createField(codec, nextSource, presence);
+      return createField(codec, nextSource, presence, defaultResolver);
     },
     optional() {
       if (presence === "optional") {
@@ -334,11 +352,14 @@ export function createField<
       }
       return createField(codec, source, "required");
     },
+    default(provider: DefaultProvider<T>) {
+      return createField(codec, source, "defaulted", toDefaultResolver(provider));
+    },
     or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(...values: Literals) {
-      return createField(codec.or(...values), source, presence);
+      return createField(codec.or(...values), source, presence, defaultResolver);
     },
     nullable() {
-      return createField(codec.nullable(), source, presence);
+      return createField(codec.nullable(), source, presence, defaultResolver);
     },
   };
 
@@ -473,6 +494,18 @@ function createLiteralExtendedCodec<
         literals: mergedLiterals,
       },
     },
+  );
+}
+
+function toDefaultResolver<T>(provider: unknown): () => T {
+  if (typeof provider === "function") {
+    return provider as () => T;
+  }
+  if (isPrimitiveLiteral(provider)) {
+    return () => provider as T;
+  }
+  throw new TypeError(
+    "Non-primitive default values must be provided via a factory function () => value",
   );
 }
 
