@@ -12,6 +12,7 @@
   "exports": {
     ".": "./dist/index.mjs",
     "./codec": "./dist/codec.mjs",
+    "./formats": "./dist/formats.mjs",
     "./package.json": "./package.json"
   },
   "scripts": {
