@@ -1,14 +1,15 @@
-import { INVALID } from "../codec/collector.ts";
-import { isObject, isPlainObject } from "../codec/object-utils.ts";
-import { createCodec, executeCodec, getStaticLiterals } from "../codec/runtime.ts";
-import type { Codec, FieldLiteral, InferEncoded, InferValue } from "../codec/types.ts";
+import { INVALID } from "../../codec/core/collector.ts";
+import { createCodec, executeCodec, getStaticLiterals } from "../../codec/core/runtime.ts";
+import type { Codec, FieldLiteral, InferEncoded, InferValue } from "../../codec/core/types.ts";
+import { isObject, isPlainObject } from "../../shared/object.ts";
+import { formatLiteral } from "../../shared/value.ts";
 import {
   missingField,
   readModelField,
   resolvedFieldsSymbol,
   type ResolvedField,
-} from "./object.ts";
-import type { TaggedModelLike } from "./types.ts";
+} from "../core/fields.ts";
+import type { TaggedModelLike } from "../core/types.ts";
 
 /**
  * 按共有字面量判别字段组合多个模型，实现 O(1) 多态双向分发
@@ -73,7 +74,7 @@ export function taggedUnion<
       }
       if (branchByTag.has(tag)) {
         throw new RangeError(
-          `Duplicate discriminator tag ${formatTag(tag)} for "${discriminator}"`,
+          `Duplicate discriminator tag ${formatLiteral(tag)} for "${discriminator}"`,
         );
       }
       branchByTag.set(tag, branch);
@@ -81,7 +82,7 @@ export function taggedUnion<
   }
 
   const externalKey = wireSource as string;
-  const expectedTagsText = [...branchByTag.keys()].map(formatTag).join(", ");
+  const expectedTagsText = [...branchByTag.keys()].map(formatLiteral).join(", ");
 
   type UnionModel = InferValue<Branches[number]>;
   type UnionDTO = InferEncoded<Branches[number]>;
@@ -135,8 +136,4 @@ export function taggedUnion<
     }
     return executeCodec(branch, input, "encode", collector) as UnionDTO;
   });
-}
-
-function formatTag(value: FieldLiteral): string {
-  return typeof value === "string" ? JSON.stringify(value) : String(value);
 }

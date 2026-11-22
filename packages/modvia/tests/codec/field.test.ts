@@ -10,7 +10,7 @@ import {
   type Field,
   type InferData,
   type InferDTO,
-} from "../src/index.ts";
+} from "../../src/index.ts";
 
 describe("field binding", () => {
   test("复用纯 Codec 或带别名 Field 时保留全部候选外部键名", () => {

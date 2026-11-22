@@ -1,7 +1,7 @@
-import { INVALID } from "./collector.ts";
-import { isPlainObject, writeOwnField } from "./object-utils.ts";
-import { assertValueCodec, createCodec, executeCodec } from "./runtime.ts";
-import type { Codec, CodecLike, ValueCodecInput } from "./types.ts";
+import { isPlainObject, writeOwnField } from "../../shared/object.ts";
+import { INVALID } from "../core/collector.ts";
+import { assertValueCodec, createCodec, executeCodec } from "../core/runtime.ts";
+import type { Codec, CodecLike, ValueCodecInput } from "../core/types.ts";
 
 export type RecordShape<Key extends string, Value> = string extends Key
   ? Record<string, Value>

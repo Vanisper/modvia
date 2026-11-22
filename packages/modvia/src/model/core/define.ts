@@ -1,14 +1,14 @@
-import { INVALID, type Invalid, type IssueCollector } from "../codec/collector.ts";
-import { isObject, isPlainObject, writeOwnField } from "../codec/object-utils.ts";
-import { createCodec, executeCodec, extendCodec } from "../codec/runtime.ts";
-import type { CodecLike } from "../codec/types.ts";
+import { INVALID, type Invalid, type IssueCollector } from "../../codec/core/collector.ts";
+import { createCodec, executeCodec, extendCodec } from "../../codec/core/runtime.ts";
+import type { CodecLike } from "../../codec/core/types.ts";
+import { isObject, isPlainObject, writeOwnField } from "../../shared/object.ts";
 import {
   missingField,
   readModelField,
   resolvedFieldsSymbol,
   resolveFields,
   type ResolvedField,
-} from "./object.ts";
+} from "./fields.ts";
 import type { FieldRecord, MergeFields, Model, ModelOf } from "./types.ts";
 
 /** 声明对象字段契约，统一完成双向编解码、结构派生与静态类型推导 */

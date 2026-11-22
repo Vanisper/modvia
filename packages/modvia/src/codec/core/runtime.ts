@@ -1,3 +1,4 @@
+import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
   createCollector,
   INVALID,
@@ -320,17 +321,7 @@ export function getStaticLiterals(
   const state = Reflect.get(codec, literalStateSymbol) as LiteralState | undefined;
   if (!state) return undefined;
   const inner = getStaticLiterals(state.base);
-  return inner ? mergeLiterals(state.literals, inner) : undefined;
-}
-
-export function isFieldLiteral(value: unknown): value is FieldLiteral {
-  return (
-    value === null ||
-    value === undefined ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
+  return inner ? deduplicateLiterals(state.literals, inner) : undefined;
 }
 
 function createCheckedCodec<T, Encoded>(
@@ -381,7 +372,7 @@ function createLiteralExtendedCodec<
   existingState?: LiteralState,
 ): Codec<T | Literals[number], Encoded | Literals[number]> {
   const base = (existingState?.base ?? current) as Codec<T, Encoded>;
-  const mergedLiterals = mergeLiterals(existingState?.literals ?? [], addedLiterals);
+  const mergedLiterals = deduplicateLiterals(existingState?.literals ?? [], addedLiterals);
 
   return createCodec<T | Literals[number], Encoded | Literals[number]>(
     (input, direction, collector) => {
@@ -399,19 +390,6 @@ function createLiteralExtendedCodec<
   );
 }
 
-function mergeLiterals(
-  existing: readonly FieldLiteral[],
-  added: readonly FieldLiteral[],
-): readonly FieldLiteral[] {
-  const result = [...existing];
-  for (const candidate of added) {
-    if (!result.some((item) => Object.is(item, candidate))) {
-      result.push(candidate);
-    }
-  }
-  return Object.freeze(result);
-}
-
 function assertValidSource(source: unknown): asserts source is string {
   if (typeof source !== "string") {
     throw new TypeError("Field source must be a string");
@@ -421,7 +399,7 @@ function assertValidSource(source: unknown): asserts source is string {
 function assertValidLiterals(
   values: readonly unknown[],
 ): asserts values is readonly FieldLiteral[] {
-  if (values.length === 0 || !values.every(isFieldLiteral)) {
+  if (values.length === 0 || !values.every(isPrimitiveLiteral)) {
     throw new TypeError(
       "or requires at least one string, number, boolean, null, or undefined literal",
     );

@@ -11,8 +11,8 @@ import {
   oneOf,
   string,
   ValidationError,
-} from "../src/index.ts";
-import type { CodecLike, InferData, InferDTO, InferModel } from "../src/index.ts";
+} from "../../src/index.ts";
+import type { CodecLike, InferData, InferDTO, InferModel } from "../../src/index.ts";
 
 const DepartmentModel = defineModel({
   fields: {

@@ -1,6 +1,6 @@
-import { INVALID } from "./collector.ts";
-import { assertValueCodec, createCodec, createPipedCodec, executeCodec } from "./runtime.ts";
-import type { Codec, CodecLike, InferEncoded, InferValue, ValueCodecInput } from "./types.ts";
+import { INVALID } from "../core/collector.ts";
+import { assertValueCodec, createCodec, createPipedCodec, executeCodec } from "../core/runtime.ts";
+import type { Codec, CodecLike, InferEncoded, InferValue, ValueCodecInput } from "../core/types.ts";
 
 /**
  * 将两个值级 Codec 首尾串联为双向管道

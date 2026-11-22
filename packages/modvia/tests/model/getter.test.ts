@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
-import { defineModel, number } from "../src/index.ts";
+import { defineModel, number } from "../../src/index.ts";
 
 const Quantity = defineModel({ fields: { count: number().from("quantity") } });
 const missingCount = expect.objectContaining({

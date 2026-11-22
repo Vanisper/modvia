@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
-import { boolean, isoDateTime, number, oneOf, string } from "../src/codec/index.ts";
-import { defineModel } from "../src/index.ts";
+import { boolean, isoDateTime, number, oneOf, string } from "../../src/codec/index.ts";
+import { defineModel } from "../../src/index.ts";
 
 const instant = isoDateTime();
 

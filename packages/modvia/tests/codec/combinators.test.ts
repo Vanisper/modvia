@@ -13,8 +13,8 @@ import {
   type Codec,
   type InferEncoded,
   type InferValue,
-} from "../src/codec/index.ts";
-import { defineModel, type Model } from "../src/index.ts";
+} from "../../src/codec/index.ts";
+import { defineModel, type Model } from "../../src/index.ts";
 
 const intFromString = defineCodec<number, string>({
   decode(input, context) {

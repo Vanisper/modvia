@@ -13,7 +13,7 @@ import {
   type InferEncoded,
   type InferModel,
   type InferValue,
-} from "../src/index.ts";
+} from "../../src/index.ts";
 
 const BaseUser = defineModel({
   fields: {

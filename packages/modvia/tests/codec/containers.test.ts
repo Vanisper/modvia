@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
-import { isoDateTime, number, oneOf, recordOf, string } from "../src/codec/index.ts";
-import { defineModel, type InferEncoded, type InferValue } from "../src/index.ts";
+import { isoDateTime, number, oneOf, recordOf, string } from "../../src/codec/index.ts";
+import { defineModel, type InferEncoded, type InferValue } from "../../src/index.ts";
 
 const Metric = defineModel({
   fields: {

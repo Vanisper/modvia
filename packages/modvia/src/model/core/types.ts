@@ -1,4 +1,4 @@
-import type { Codec, CodecLike, Field, FieldPresence } from "../codec/types.ts";
+import type { Codec, CodecLike, Field, FieldPresence } from "../../codec/core/types.ts";
 
 export type FieldRecord = Readonly<Record<string, CodecLike<unknown, unknown>>>;
 

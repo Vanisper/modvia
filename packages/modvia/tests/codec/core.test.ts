@@ -14,7 +14,7 @@ import {
   type InferEncoded,
   type InferValue,
   type StandardSchemaV1,
-} from "../src/codec/index.ts";
+} from "../../src/codec/index.ts";
 
 const intFromString = defineCodec<number, string>({
   decode(input, context) {

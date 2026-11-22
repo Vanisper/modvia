@@ -1,6 +1,6 @@
-import { isObjectPrototype } from "../codec/object-utils.ts";
-import { isFieldDescriptor } from "../codec/runtime.ts";
-import type { CodecLike } from "../codec/types.ts";
+import { isFieldDescriptor } from "../../codec/core/runtime.ts";
+import type { CodecLike } from "../../codec/core/types.ts";
+import { isObjectPrototype } from "../../shared/object.ts";
 import type { FieldRecord } from "./types.ts";
 
 export interface ResolvedField {

@@ -11,12 +11,67 @@ export default defineConfig({
     options: { typeAware: true, typeCheck: true },
     overrides: [
       {
+        files: ["packages/modvia/src/shared/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../codec", "../codec/**", "../model", "../model/**"],
+            },
+          ],
+        },
+      },
+      {
         files: ["packages/modvia/src/codec/**"],
         rules: {
           "no-restricted-imports": [
             "error",
             {
-              patterns: ["../model", "../model/*", "**/model", "**/model/*"],
+              patterns: ["../model", "../model/**", "../../model", "../../model/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/core/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../scalars", "../scalars/**", "../operators", "../operators/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/scalars/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../operators", "../operators/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/operators/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../scalars", "../scalars/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/model/core/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../operators", "../operators/**"],
             },
           ],
         },
