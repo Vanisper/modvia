@@ -1,3 +1,23 @@
+# Modvia
+
+面向 TypeScript 应用的双向编解码与领域模型层基础库，核心包位于 `packages/modvia`（架构与目录边界见 `docs/architecture.md`）。
+
+## 工作原则
+
+- 核心包保持零运行时依赖，不引入 HTTP、UI、缓存或平台耦合；第三方生态桥接（如 `@modvia/zod`）必须在独立包中通过 `peerDependencies` 承接。
+- 严守单向分层：`src/shared`（无领域工具）→ `src/codec`（双向编解码底座）→ `src/model`（领域模型层），且领域内 `core`、`scalars`、`operators` 按无环边界归类，下层及平级原子/算子层不得违规互引。
+- 派生优于开关：通过不可变派生方法返回新定义，不引入 `partial`/`mode`/`raw` 类配置开关。
+- 正向设计优先：代码与文档始终从当前一致的体系出发直接表述契约，不堆叠历史兼容补丁或返工说明；内部模块各自导出自身定义，消费方直接从定义处导入，不做中间模块二次转出（re-export）。
+- 公共行为用测试锁定：新语义先补公共入口的用例，再扩展实现。
+- 行为、类型推导、文档是同一次变更的完整交付物，同步更新。
+- 文档一段一个主题：多主题并列的内容拆成条目列表，不把并列信息挤进长段落。
+
+## 操作事实
+
+- `vp run ready` 顺序为 构建 → 检查 → 测试：产物测试通过包出口消费 `dist`（含 `modvia` 与 `modvia/codec`），顺序是依赖不是风格。
+- `packages/utils` 与 `apps/website` 是工具链示例，不投入产品化改进。
+- 提交遵循 Conventional Commits：type/scope 用英文，subject 跟随仓库语言。
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web

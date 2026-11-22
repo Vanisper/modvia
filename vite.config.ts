@@ -9,6 +9,74 @@ export default defineConfig({
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
+    overrides: [
+      {
+        files: ["packages/modvia/src/shared/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../codec", "../codec/**", "../model", "../model/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../model", "../model/**", "../../model", "../../model/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/core/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../scalars", "../scalars/**", "../operators", "../operators/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/scalars/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../operators", "../operators/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/codec/operators/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../scalars", "../scalars/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/model/core/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../operators", "../operators/**"],
+            },
+          ],
+        },
+      },
+    ],
   },
   run: {
     cache: true,

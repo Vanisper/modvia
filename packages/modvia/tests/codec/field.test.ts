@@ -1,0 +1,176 @@
+import { describe, expect, expectTypeOf, test } from "vite-plus/test";
+import {
+  arrayOf,
+  defineModel,
+  field,
+  isoDateTime,
+  number,
+  string,
+  type Codec,
+  type Field,
+  type InferData,
+  type InferDTO,
+} from "../../src/index.ts";
+
+describe("field binding", () => {
+  test("复用纯 Codec 或带别名 Field 时保留全部候选外部键名", () => {
+    function product(sku: Codec<string, string> | Field<string, string, "product_code">) {
+      return defineModel({ fields: { sku } });
+    }
+
+    type DTO = InferDTO<ReturnType<typeof product>>;
+    expectTypeOf<DTO["sku"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<DTO["product_code"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<InferData<ReturnType<typeof product>>>().toEqualTypeOf<{ readonly sku: string }>();
+    expect(product(string()).encode({ sku: "A" })).toStrictEqual({ sku: "A" });
+    expect(product(string().from("product_code")).encode({ sku: "A" })).toStrictEqual({
+      product_code: "A",
+    });
+  });
+
+  test("from 覆盖生效，optional 与 required 幂等转换且不改变值规则", () => {
+    const base = number();
+    const first = base.from("old_key").optional();
+    expect(first.optional()).toBe(first);
+
+    const rebound = first.from("new_key").required();
+    expect(rebound.required()).toBe(rebound);
+    expect(rebound.source).toBe("new_key");
+    expect(rebound.presence).toBe("required");
+    expect(rebound.codec).toBe(base);
+
+    const Model = defineModel({ fields: { count: rebound } });
+    expect(Model.decode({ new_key: 5 })).toStrictEqual({ count: 5 });
+    expect(Model.safeDecode({})).toMatchObject({
+      ok: false,
+      issues: [{ path: ["new_key"], code: "field.required" }],
+    });
+  });
+
+  test("optional 控制父对象缺键，显式 undefined 仍由值规则决定", () => {
+    const SKU = string({ minLength: 1 });
+    const required = defineModel({ fields: { sku: SKU.or(undefined) } });
+    const optional = defineModel({ fields: { sku: SKU.optional() } });
+    const both = defineModel({ fields: { sku: SKU.optional().or(undefined) } });
+
+    expect(required.safeDecode({})).toMatchObject({
+      ok: false,
+      issues: [{ path: ["sku"], code: "field.required" }],
+    });
+    // @ts-expect-error 缺少必填键时编码也会失败
+    expect(() => required.encode({})).toThrow();
+    expect(required.decode({ sku: undefined })).toStrictEqual({ sku: undefined });
+    expect(required.encode({ sku: undefined })).toStrictEqual({ sku: undefined });
+
+    expect(optional.decode({})).toStrictEqual({});
+    expect(optional.encode({})).toStrictEqual({});
+    expect(optional.safeDecode({ sku: undefined }).ok).toBe(false);
+    expect(() => Reflect.apply(optional.encode, undefined, [{ sku: undefined }])).toThrow();
+
+    expect(both.decode({})).toStrictEqual({});
+    expect(both.encode({})).toStrictEqual({});
+    expect(both.decode({ sku: undefined })).toStrictEqual({ sku: undefined });
+    expect(both.encode({ sku: undefined })).toStrictEqual({ sku: undefined });
+
+    expectTypeOf<InferData<typeof required>>().toEqualTypeOf<{
+      readonly sku: string | undefined;
+    }>();
+    expectTypeOf<InferData<typeof both>>().toEqualTypeOf<{ readonly sku?: string | undefined }>();
+  });
+
+  test("对象展开拷贝保留字段元数据，无标识对象的同名属性不参与字段声明", () => {
+    const copy = { ...string().optional().from("external") };
+    const {
+      codec,
+      source,
+      presence,
+      from,
+      or,
+      nullable,
+      optional,
+      required,
+      decode,
+      encode,
+      safeDecode,
+      safeEncode,
+      "~standard": standard,
+    } = string().from("ignored").optional();
+    const plain = {
+      codec,
+      source,
+      presence,
+      from,
+      or,
+      nullable,
+      optional,
+      required,
+      decode,
+      encode,
+      safeDecode,
+      safeEncode,
+      "~standard": standard,
+    };
+    const tagged = { ...plain, [Symbol.toStringTag]: "modvia.Field" } as const;
+
+    const named = defineModel({ fields: { title: tagged } });
+    expectTypeOf<InferDTO<typeof named>>().toEqualTypeOf<{ readonly ignored?: string }>();
+    expect(named.encode({ title: "B" })).toStrictEqual({ ignored: "B" });
+
+    const model = defineModel({ fields: { code: copy, title: plain } });
+    expectTypeOf<InferDTO<typeof model>>().toEqualTypeOf<{
+      readonly external?: string;
+      readonly title: string;
+    }>();
+    expect(model.decode({ external: "A", title: "B" })).toStrictEqual({ code: "A", title: "B" });
+    expect(model.encode({ title: "B" })).toStrictEqual({ title: "B" });
+    expect(model.encode({ code: "A", title: "B" })).toStrictEqual({ external: "A", title: "B" });
+    expect(model.safeDecode({ ignored: "B" })).toMatchObject({
+      ok: false,
+      issues: [{ path: ["title"], code: "field.required" }],
+    });
+  });
+
+  test("数组元素值域与数组字段属性修饰换序等价", () => {
+    const list = arrayOf(isoDateTime().nullable());
+    const required = defineModel({ fields: { dates: list } });
+    const wrapped = defineModel({
+      fields: { dates: field(list.or(false).from("event_dates").optional()) },
+    });
+    const reordered = defineModel({
+      fields: { dates: list.optional().or(false).from("event_dates") },
+    });
+
+    const stamp = "2026-01-01T00:00:00.000Z";
+    expect(required.decode({ dates: [null, stamp] })).toStrictEqual({
+      dates: [null, new Date(stamp)],
+    });
+    expect(required.safeDecode({}).ok).toBe(false);
+    expect(list.safeDecode([undefined]).ok).toBe(false);
+
+    for (const model of [wrapped, reordered]) {
+      expect(model.decode({})).toStrictEqual({});
+      expect(model.encode({})).toStrictEqual({});
+      expect(model.decode({ event_dates: false })).toStrictEqual({ dates: false });
+      expect(model.encode({ dates: [new Date(stamp), null] })).toStrictEqual({
+        event_dates: [stamp, null],
+      });
+      expect(model.safeDecode({ event_dates: [null, false] })).toMatchObject({
+        ok: false,
+        issues: [{ path: ["event_dates", 1], code: "type.datetime" }],
+      });
+      expect(model.safeEncode({ dates: [new Date(Number.NaN)] })).toMatchObject({
+        ok: false,
+        issues: [{ path: ["dates", 0], code: "type.datetime" }],
+      });
+    }
+
+    expectTypeOf<InferData<typeof required>>().toEqualTypeOf<{ readonly dates: (Date | null)[] }>();
+    expectTypeOf<InferData<typeof wrapped>>().toEqualTypeOf<{
+      readonly dates?: (Date | null)[] | false;
+    }>();
+    expectTypeOf<InferDTO<typeof wrapped>>().toEqualTypeOf<{
+      readonly event_dates?: (string | null)[] | false;
+    }>();
+    expectTypeOf<InferDTO<typeof reordered>>().toEqualTypeOf<InferDTO<typeof wrapped>>();
+  });
+});
