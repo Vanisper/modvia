@@ -1,5 +1,5 @@
-import { createCodec, isFieldLiteral } from "./kernel.ts";
-import type { IssueCollector } from "./errors.ts";
+import type { IssueCollector } from "./collector.ts";
+import { createCodec, isFieldLiteral } from "./runtime.ts";
 import type { Codec, FieldLiteral } from "./types.ts";
 
 export interface StringOptions {

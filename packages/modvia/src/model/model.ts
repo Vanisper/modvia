@@ -1,32 +1,106 @@
-import { INVALID, type Invalid, type IssueCollector } from "../codec/errors.ts";
-import { createCodec, executeCodec, extendCodec } from "../codec/kernel.ts";
+import { INVALID, type Invalid, type IssueCollector } from "../codec/collector.ts";
 import { isObject, isPlainObject, writeOwnField } from "../codec/object-utils.ts";
-import { missingField, readModelField, resolveFields, type ResolvedField } from "./object.ts";
-import type { FieldRecord, Model, ModelOf } from "./types.ts";
+import { createCodec, executeCodec, extendCodec } from "../codec/runtime.ts";
+import type { CodecLike } from "../codec/types.ts";
+import {
+  missingField,
+  readModelField,
+  resolvedFieldsSymbol,
+  resolveFields,
+  type ResolvedField,
+} from "./object.ts";
+import type { FieldRecord, MergeFields, Model, ModelOf } from "./types.ts";
 
-/** 声明对象字段契约，统一完成双向编解码与静态类型推导 */
+/** 声明对象字段契约，统一完成双向编解码、结构派生与静态类型推导 */
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
 }): ModelOf<Fields> {
-  const resolvedFields = resolveFields(options.fields);
-  return createModel(resolvedFields, (data) => data);
+  if (!isPlainObject(options) || !isPlainObject(options.fields)) {
+    throw new TypeError("defineModel requires an options object with a plain fields table");
+  }
+  const ownFields = snapshotOwnFields(options.fields);
+  const resolvedFields = resolveFields(ownFields);
+  return createModel(ownFields, resolvedFields, (data) => data);
 }
 
-function createModel<Data, DTO, Out extends Data>(
+function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
+  ownFields: Readonly<Fields>,
   resolvedFields: readonly ResolvedField[],
   factory: (data: Data) => Out,
-): Model<Data, DTO, Out> {
+): Model<Data, DTO, Out, Fields> {
   const baseCodec = createCodec<Out, DTO>((input, direction, collector) =>
     direction === "decode"
       ? decodeModelObject(resolvedFields, factory, input, collector)
       : encodeModelObject(resolvedFields, input, collector),
   );
 
-  return extendCodec(baseCodec, {
-    withFactory<Next extends Data>(nextFactory: (data: Data) => Next): Model<Data, DTO, Next> {
-      return createModel<Data, DTO, Next>(resolvedFields, nextFactory);
+  return extendCodec(
+    baseCodec,
+    {
+      fields: ownFields,
+      pick<const Key extends Exclude<keyof Fields, symbol>>(
+        ...keys: readonly Key[]
+      ): ModelOf<Pick<Fields, Key>> {
+        const picked: Record<string, CodecLike<unknown, unknown>> = {};
+        for (const rawKey of keys) {
+          const key = String(rawKey);
+          if (!Object.hasOwn(ownFields, key)) {
+            throw new RangeError(`Unknown model field: ${key}`);
+          }
+          writeOwnField(picked, key, ownFields[key]);
+        }
+        return defineModel({ fields: picked }) as unknown as ModelOf<Pick<Fields, Key>>;
+      },
+      omit<const Key extends Exclude<keyof Fields, symbol>>(
+        ...keys: readonly Key[]
+      ): ModelOf<Omit<Fields, Key>> {
+        const excluded = new Set<string>();
+        for (const rawKey of keys) {
+          const key = String(rawKey);
+          if (!Object.hasOwn(ownFields, key)) {
+            throw new RangeError(`Unknown model field: ${key}`);
+          }
+          excluded.add(key);
+        }
+        const remaining: Record<string, CodecLike<unknown, unknown>> = {};
+        for (const [key, entry] of Object.entries(ownFields)) {
+          if (!excluded.has(key)) {
+            writeOwnField(remaining, key, entry);
+          }
+        }
+        return defineModel({ fields: remaining }) as unknown as ModelOf<Omit<Fields, Key>>;
+      },
+      extend<const Extra extends FieldRecord>(
+        extraFields: Extra,
+      ): ModelOf<MergeFields<Fields, Extra>> {
+        if (!isPlainObject(extraFields)) {
+          throw new TypeError("extend requires a plain fields object");
+        }
+        const merged: Record<string, CodecLike<unknown, unknown>> = {};
+        for (const [key, entry] of Object.entries(ownFields)) {
+          writeOwnField(merged, key, entry);
+        }
+        for (const [key, entry] of Object.entries(extraFields)) {
+          writeOwnField(merged, key, entry);
+        }
+        return defineModel({ fields: merged }) as unknown as ModelOf<MergeFields<Fields, Extra>>;
+      },
+      withFactory<Next extends Data>(
+        nextFactory: (data: Data) => Next,
+      ): Model<Data, DTO, Next, Fields> {
+        return createModel<Fields, Data, DTO, Next>(ownFields, resolvedFields, nextFactory);
+      },
     },
-  });
+    [[resolvedFieldsSymbol, resolvedFields]],
+  );
+}
+
+function snapshotOwnFields<Fields extends FieldRecord>(fields: Fields): Readonly<Fields> {
+  const copy: Record<string, CodecLike<unknown, unknown>> = {};
+  for (const [key, entry] of Object.entries(fields)) {
+    writeOwnField(copy, key, entry);
+  }
+  return Object.freeze(copy) as unknown as Readonly<Fields>;
 }
 
 function decodeModelObject<Data, Out extends Data>(

@@ -1,6 +1,6 @@
-import { INVALID } from "./errors.ts";
-import { assertValueCodec, createCodec, executeCodec } from "./kernel.ts";
+import { INVALID } from "./collector.ts";
 import { isPlainObject, writeOwnField } from "./object-utils.ts";
+import { assertValueCodec, createCodec, executeCodec } from "./runtime.ts";
 import type { Codec, CodecLike, ValueCodecInput } from "./types.ts";
 
 export type RecordShape<Key extends string, Value> = string extends Key

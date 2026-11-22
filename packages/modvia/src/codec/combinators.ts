@@ -1,5 +1,5 @@
-import { INVALID } from "./errors.ts";
-import { assertValueCodec, createCodec, createPipedCodec, executeCodec } from "./kernel.ts";
+import { INVALID } from "./collector.ts";
+import { assertValueCodec, createCodec, createPipedCodec, executeCodec } from "./runtime.ts";
 import type { Codec, CodecLike, InferEncoded, InferValue, ValueCodecInput } from "./types.ts";
 
 /**

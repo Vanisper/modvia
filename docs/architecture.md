@@ -37,20 +37,23 @@ Modvia 以双向编解码契约为底座，围绕应用数据边界组织校验�
 
 ```text
 packages/modvia/src/
-├── index.ts            # 主入口（"modvia"）：聚合导出 codec 层与 model 层
+├── index.ts            # 主入口（"modvia"）：聚合导出 codec 层与 model 层公开模块
 ├── codec/              # 编解码底座层（严禁导入 ../model）
-│   ├── index.ts        # 子入口（"modvia/codec"）
-│   ├── types.ts        # 核心契约、结果类型、StandardSchemaV1 与字段接口
-│   ├── errors.ts       # ValidationError 与内部零栈开销 IssueCollector
-│   ├── object-utils.ts # 纯对象判定与自有数据属性定义工具
-│   ├── kernel.ts       # Codec/Field 构造器、defineCodec、check 与哨兵扩展
-│   ├── combinators.ts  # 通用值组合子（pipe、invert、lazy、unionOf）
-│   ├── scalars.ts      # 内置标量规则（string、number、boolean、oneOf、literal、isoDateTime）
-│   └── containers.ts   # 值容器规则（arrayOf、recordOf）
+│   ├── index.ts        # 子入口（"modvia/codec"）：聚合导出 codec 公开模块
+│   ├── types.ts        # 公开契约、结果类型、StandardSchemaV1 与字段接口
+│   ├── errors.ts       # 公开 ValidationError 与类型守卫
+│   ├── codec.ts        # 公开 defineCodec、field 与 isField
+│   ├── combinators.ts  # 公开通用值组合子（pipe、invert、lazy、unionOf）
+│   ├── scalars.ts      # 公开内置标量规则（string、number、boolean、oneOf、literal、isoDateTime）
+│   ├── containers.ts   # 公开值容器规则（arrayOf、recordOf）
+│   ├── collector.ts    # [内部] 零异常栈开销 IssueCollector 与中断信号
+│   ├── runtime.ts      # [内部] Codec/Field 实例构造与执行调度器
+│   └── object-utils.ts # [内部] 纯对象判定与自有数据属性定义工具
 └── model/              # 领域模型层（单向依赖 ../codec）
-    ├── types.ts        # Model 接口、字段表静态布局与类型提取工具
-    ├── object.ts       # 字段解析、纯对象判定、自有属性写入与原型链 getter 读取
-    └── model.ts        # defineModel、工厂派生与结构派生实现
+    ├── types.ts        # 公开 Model 接口、字段表静态布局与类型提取工具
+    ├── model.ts        # 公开 defineModel、字段内省、结构派生与工厂派生实现
+    ├── union.ts        # 公开按共有判别字段分发的多态模型组合器 taggedUnion
+    └── object.ts       # [内部] 字段解析、外部键去重与原型链 getter 读取
 ```
 
 根级 `vite.config.ts` 通过静态检查规则强制约束 `packages/modvia/src/codec/**` 不得导入上层 `model` 目录。

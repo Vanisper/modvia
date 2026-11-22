@@ -185,6 +185,31 @@ const entityDTO: UserDTO = UserEntityModel.encode(entity);
 - `UserEntityModel` 与 `User` 共享相同的 `InferData` 与 `InferDTO`，原模型保持不变。
 - 编码时优先读取实例自有属性；缺少自有属性时沿原型链读取最近的同名 getter（止于 `Object.prototype` 之前），非声明字段（如 `displayName`、`canManage`）不会写出到 DTO。
 
+## 模型派生与多态联合
+
+通过 `pick`、`omit`、`extend` 可从已有模型无拷贝地派生新模型，通过 `taggedUnion` 可组合按标签区分的多态模型：
+
+```ts
+import { arrayOf, defineModel, literal, string, taggedUnion } from "modvia";
+
+// 1. 裁剪与扩展已有模型（自动保留原有的 .from 别名与可选性）
+const UserSummary = User.pick("id", "name", "role");
+const CreateUserInput = User.omit("id", "createdAt");
+const AdminUser = User.extend({
+  permissions: arrayOf(string()),
+});
+
+// 2. 按标签字段 O(1) 双向分发的多态模型
+const TextBlock = defineModel({
+  fields: { kind: literal("text"), body: string() },
+});
+const ImageBlock = defineModel({
+  fields: { kind: literal("image"), imageUrl: string().from("image_url") },
+});
+
+const ContentBlock = taggedUnion("kind", [TextBlock, ImageBlock]);
+```
+
 ## 自定义 Codec
 
 当业务值与外部表示类型不同时，使用 `defineCodec` 声明双向转换逻辑，并通过 `context.fail(code, message)` 报告校验错误：
@@ -275,6 +300,7 @@ const NodeModel: Model<NodeData, NodeDTO> = defineModel({
 | `datetime.out_of_range` | 日期时间换算为 UTC 后超出原生 `Date` 可表示范围             |
 | `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞             |
 | `union.no_match`        | `unionOf` 的所有候选分支均未匹配当前输入                    |
+| `union.invalid_tag`     | `taggedUnion` 的判别字段值不在已注册的分支标签集合内        |
 | `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段  |
 
 ## 开发与验证

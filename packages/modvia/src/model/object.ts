@@ -1,5 +1,5 @@
-import { isField } from "../codec/kernel.ts";
 import { isObjectPrototype } from "../codec/object-utils.ts";
+import { isFieldDescriptor } from "../codec/runtime.ts";
 import type { CodecLike } from "../codec/types.ts";
 import type { FieldRecord } from "./types.ts";
 
@@ -10,11 +10,12 @@ export interface ResolvedField {
   readonly codec: CodecLike<unknown, unknown>;
 }
 
+export const resolvedFieldsSymbol = Symbol.for("modvia.resolvedFields");
 export const missingField = Symbol("modvia.missingField");
 
 export function resolveFields(fields: FieldRecord): readonly ResolvedField[] {
   const resolved = Object.entries(fields).map(([key, entry]) => {
-    const field = isField(entry) ? entry : undefined;
+    const field = isFieldDescriptor(entry) ? entry : undefined;
     const source = field?.source;
     return Object.freeze({
       key,

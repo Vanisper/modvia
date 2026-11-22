@@ -2,12 +2,11 @@ import {
   createCollector,
   INVALID,
   isAbortSignal,
-  isValidationError,
   sharedContext,
-  ValidationError,
   type Invalid,
   type IssueCollector,
-} from "./errors.ts";
+} from "./collector.ts";
+import { isValidationError, ValidationError } from "./errors.ts";
 import type {
   Codec,
   CodecContext,
@@ -30,41 +29,15 @@ export type InternalRunner<T, Encoded> = (
 
 const runnerSymbol = Symbol.for("modvia.codecRunner");
 const literalStateSymbol = Symbol.for("modvia.literalState");
-export const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
-const fieldBrand = Symbol.for("modvia.Field");
+const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
+export const fieldBrand = Symbol.for("modvia.Field");
 
 interface LiteralState {
   readonly base: Codec<unknown, unknown>;
   readonly literals: readonly FieldLiteral[];
 }
 
-export interface CodecHandlers<T, Encoded> {
-  decode(this: void, input: unknown, context: CodecContext): T;
-  encode(this: void, value: T, context: CodecContext): Encoded;
-}
-
-/** 通过一对双向转换函数创建标准 Codec，两端均可通过 context.fail 报告校验失败 */
-export function defineCodec<T, Encoded = T>(
-  handlers: CodecHandlers<T, Encoded>,
-): Codec<T, Encoded> {
-  return createCodec<T, Encoded>((input, direction, collector) => {
-    try {
-      return direction === "decode"
-        ? handlers.decode(input, sharedContext)
-        : handlers.encode(input as T, sharedContext);
-    } catch (error) {
-      if (isAbortSignal(error)) {
-        return collector.add(error.code, error.message);
-      }
-      if (isValidationError(error)) {
-        return collector.addRelativeIssues(error.issues);
-      }
-      throw error;
-    }
-  });
-}
-
-interface CodecMetadata {
+export interface CodecMetadata {
   readonly literalState?: LiteralState;
   readonly allowedLiterals?: readonly FieldLiteral[];
 }
@@ -149,6 +122,7 @@ export function createCodec<T, Encoded>(
 export function extendCodec<T, Encoded, Extra extends object>(
   base: Codec<T, Encoded>,
   extra: Extra,
+  extraSymbols?: ReadonlyArray<readonly [symbol, unknown]>,
 ): Codec<T, Encoded> & Extra {
   const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
   const extended = {
@@ -157,6 +131,11 @@ export function extendCodec<T, Encoded, Extra extends object>(
   };
   if (runner) {
     Object.defineProperty(extended, runnerSymbol, { value: runner });
+  }
+  if (extraSymbols) {
+    for (const [sym, value] of extraSymbols) {
+      Object.defineProperty(extended, sym, { value });
+    }
   }
   return Object.freeze(extended);
 }
@@ -209,37 +188,20 @@ export function promoteToCodec<T, Encoded>(codec: CodecLike<T, Encoded>): Codec<
   );
 }
 
-/** 包装已有字段并保留外部键名与缺省性 */
-export function field<
-  T,
-  Encoded,
-  Source extends string | undefined,
-  Presence extends FieldPresence = "required",
->(input: Field<T, Encoded, Source, Presence>): Field<T, Encoded, Source, Presence>;
-/** 将任意 Codec 或自定义 CodecLike 转为字段描述符 */
-export function field<T, Encoded>(input: CodecLike<T, Encoded>): Field<T, Encoded>;
-export function field<T, Encoded>(
-  input: CodecLike<T, Encoded>,
-): Field<T, Encoded, string | undefined, FieldPresence> {
-  if (!isField(input)) {
-    return createField(promoteToCodec(input), undefined, "required");
-  }
-  const { source, presence } = input;
-  const inner = isStandardCodec(input.codec) ? input.codec : promoteToCodec(input);
-  return createField(
-    inner,
-    typeof source === "string" ? source : undefined,
-    presence === "optional" ? "optional" : "required",
+export function isStandardCodec<T, Encoded>(
+  value: CodecLike<T, Encoded>,
+): value is Codec<T, Encoded>;
+export function isStandardCodec(value: unknown): value is Codec<unknown, unknown>;
+export function isStandardCodec(value: unknown): value is Codec<unknown, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Partial<Codec<unknown, unknown>>)[Symbol.toStringTag] === "modvia.Codec" &&
+    typeof Reflect.get(value, runnerSymbol) === "function"
   );
 }
 
-export function isField<T, Encoded>(
-  value: CodecLike<T, Encoded>,
-): value is Field<T, Encoded, string | undefined, FieldPresence>;
-export function isField(
-  value: unknown,
-): value is Field<unknown, unknown, string | undefined, FieldPresence>;
-export function isField(
+export function isFieldDescriptor(
   value: unknown,
 ): value is Field<unknown, unknown, string | undefined, FieldPresence> {
   if (typeof value !== "object" || value === null) return false;
@@ -270,7 +232,7 @@ export function assertValueCodec<T, Encoded>(codec: CodecLike<T, Encoded>, calle
   ) {
     throw new TypeError(`${caller} requires a valid Codec`);
   }
-  if (isField(codec)) {
+  if (isFieldDescriptor(codec)) {
     throw new TypeError(
       `${caller} accepts a value Codec, not a Field with .from() or .optional(); apply field modifiers on the outer container or pass field.codec`,
     );
@@ -347,6 +309,18 @@ export function createPipedCodec<Mid, Encoded, Out>(
     if (mid === INVALID) return INVALID;
     return executeCodec(first, mid, "encode", collector);
   });
+}
+
+export function getStaticLiterals(
+  codec: CodecLike<unknown, unknown>,
+): readonly FieldLiteral[] | undefined {
+  const direct = Reflect.get(codec, allowedLiteralsSymbol) as readonly FieldLiteral[] | undefined;
+  if (Array.isArray(direct)) return direct;
+
+  const state = Reflect.get(codec, literalStateSymbol) as LiteralState | undefined;
+  if (!state) return undefined;
+  const inner = getStaticLiterals(state.base);
+  return inner ? mergeLiterals(state.literals, inner) : undefined;
 }
 
 export function isFieldLiteral(value: unknown): value is FieldLiteral {
@@ -436,17 +410,6 @@ function mergeLiterals(
     }
   }
   return Object.freeze(result);
-}
-
-function isStandardCodec<T, Encoded>(value: CodecLike<T, Encoded>): value is Codec<T, Encoded>;
-function isStandardCodec(value: unknown): value is Codec<unknown, unknown>;
-function isStandardCodec(value: unknown): value is Codec<unknown, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Partial<Codec<unknown, unknown>>)[Symbol.toStringTag] === "modvia.Codec" &&
-    typeof Reflect.get(value, runnerSymbol) === "function"
-  );
 }
 
 function assertValidSource(source: unknown): asserts source is string {

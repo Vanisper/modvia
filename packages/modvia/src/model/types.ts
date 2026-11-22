@@ -2,17 +2,61 @@ import type { Codec, CodecLike, Field, FieldPresence } from "../codec/types.ts";
 
 export type FieldRecord = Readonly<Record<string, CodecLike<unknown, unknown>>>;
 
+export type MergeFields<Base extends FieldRecord, Extra extends FieldRecord> = Omit<
+  Base,
+  keyof Extra
+> &
+  Extra;
+
 /** 从声明字段构造业务对象，并将业务输出编码回外部 DTO */
-export interface Model<Data, DTO, Out extends Data = Data> extends Codec<Out, DTO> {
+export interface Model<
+  Data,
+  DTO,
+  Out extends Data = Data,
+  Fields extends FieldRecord = Record<never, never>,
+> extends Codec<Out, DTO> {
+  /** 模型声明的只读字段描述符表 */
+  readonly fields: Readonly<Fields>;
+  /** 挑选指定字段派生子模型，保留原字段的外部别名与缺省规则 */
+  pick<const Key extends Exclude<keyof Fields, symbol>>(
+    this: void,
+    ...keys: readonly Key[]
+  ): ModelOf<Pick<Fields, Key>>;
+  /** 剔除指定字段派生子模型，保留其余字段的外部别名与缺省规则 */
+  omit<const Key extends Exclude<keyof Fields, symbol>>(
+    this: void,
+    ...keys: readonly Key[]
+  ): ModelOf<Omit<Fields, Key>>;
+  /** 追加或覆写字段派生新模型，定义期重新检查外部键唯一性 */
+  extend<const Extra extends FieldRecord>(
+    this: void,
+    fields: Extra,
+  ): ModelOf<MergeFields<Fields, Extra>>;
   /** 用新工厂替换实例构造步骤，工厂接收完整校验后的基础字段数据 */
-  withFactory<Next extends Data>(this: void, factory: (data: Data) => Next): Model<Data, DTO, Next>;
+  withFactory<Next extends Data>(
+    this: void,
+    factory: (data: Data) => Next,
+  ): Model<Data, DTO, Next, Fields>;
 }
 
-export type InferData<M> = M extends Model<infer Data, infer _DTO, infer _Out> ? Data : never;
+/** 具备指定判别字段的模型分支契约，供 taggedUnion 编译期校验分支结构 */
+export interface TaggedModelLike<
+  Discriminator extends string,
+  Out = Record<Discriminator, unknown>,
+  DTO = unknown,
+> extends CodecLike<Out, DTO> {
+  readonly [Symbol.toStringTag]: "modvia.Codec";
+  readonly fields: Readonly<Record<Discriminator, CodecLike<unknown, unknown>>>;
+}
 
-export type InferDTO<M> = M extends Model<infer _Data, infer DTO, infer _Out> ? DTO : never;
+export type InferData<M> =
+  M extends Model<infer Data, infer _DTO, infer _Out, infer _Fields> ? Data : never;
 
-export type InferModel<M> = M extends Model<infer _Data, infer _DTO, infer Out> ? Out : never;
+export type InferDTO<M> =
+  M extends Model<infer _Data, infer DTO, infer _Out, infer _Fields> ? DTO : never;
+
+export type InferModel<M> =
+  M extends Model<infer _Data, infer _DTO, infer Out, infer _Fields> ? Out : never;
 
 type AnyField = Field<unknown, unknown, string | undefined, FieldPresence>;
 
@@ -67,5 +111,7 @@ type DTOOf<Fields> = {
 
 export type ModelOf<Fields extends FieldRecord> = Model<
   DataOf<FieldLayout<Fields, "data">>,
-  DTOOf<FieldLayout<Fields, "dto">>
+  DTOOf<FieldLayout<Fields, "dto">>,
+  DataOf<FieldLayout<Fields, "data">>,
+  Fields
 >;

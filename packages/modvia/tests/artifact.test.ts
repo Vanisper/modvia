@@ -4,8 +4,10 @@ import {
   defineModel,
   isValidationError,
   isoDateTime,
+  literal,
   oneOf,
   string,
+  taggedUnion,
   type InferData,
   type InferDTO,
 } from "modvia";
@@ -113,6 +115,26 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     expect(Calendars.encode(Calendars.decode(dto))).toStrictEqual(dto);
     expect(Schedule.encode(Schedule.decode({}))).toStrictEqual({});
     expect(Calendars.encode(Calendars.decode({}))).toStrictEqual({ event_dates: [] });
+
+    const MemberSummary = MemberEntity.pick("id", "joinedAt");
+    expect(
+      MemberSummary.encode(
+        MemberSummary.decode({ id: "m-1", joined_at: "2026-11-09T00:00:00.000Z" }),
+      ),
+    ).toStrictEqual({
+      id: "m-1",
+      joined_at: "2026-11-09T00:00:00.000Z",
+    });
+
+    const TextEvent = defineModel({ fields: { type: literal("text"), message: string() } });
+    const SystemEvent = defineModel({
+      fields: { type: literal("system"), code: codecEntry.number() },
+    });
+    const EventCodec = taggedUnion("type", [TextEvent, SystemEvent]);
+    expect(EventCodec.encode(EventCodec.decode({ type: "system", code: 200 }))).toStrictEqual({
+      type: "system",
+      code: 200,
+    });
   });
 
   test("通过 dist 完成完整实例往返与 Standard Schema 校验", () => {
