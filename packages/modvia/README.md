@@ -28,7 +28,7 @@ const User = defineModel({
     id: string(),
     name: string({ trim: true, minLength: 1 }),
     role: oneOf("admin", "manager", "member"),
-    createdAt: isoDateTime().from("created_at"),
+    createdAt: isoDateTime().alias("created_at"),
     department: Department,
   },
 });
@@ -36,7 +36,8 @@ const User = defineModel({
 type UserData = InferData<typeof User>;
 type UserDTO = InferDTO<typeof User>;
 
-const user = User.decode({
+// 面向未知外部输入（unknown）：使用 parse 解析并剥离多余字段
+const user = User.parse({
   id: "u-1",
   name: "  林舟  ",
   role: "manager",
@@ -45,6 +46,7 @@ const user = User.decode({
   extra: "ignored",
 });
 
+// 面向已知契约往返（DTO ↔ UserData）：使用 encode / decode（动态来源亦可用 dump）
 const dto: UserDTO = User.encode(user);
 // {
 //   id: "u-1",
@@ -57,16 +59,19 @@ const dto: UserDTO = User.encode(user);
 
 - 解码只接受普通对象，自动剥离未声明的外部属性。
 - `UserData` 的属性推导为只读类型，编解码每次均返回新对象容器。
-- 嵌套模型本身就是标准 `Codec`，可直接作为字段、放入数组或继续调用 `.from()` / `.optional()` / `.nullable()`。
+- 嵌套模型本身就是标准 `Codec`，可直接作为字段、放入数组或继续调用 `.alias()` / `.optional()` / `.nullable()`。
 
-## 安全解析与错误处理
+## 2×2 执行矩阵与错误处理
 
-除抛出 `ValidationError` 的 `decode` / `encode` 外，所有编解码器与模型均提供不抛异常的 `safeDecode` / `safeEncode`：
+所有 `Codec`、`Field` 与 `Model` 统一提供两组正交执行接口，并各自配备不抛异常的 `safe*` 判别结果变体：
+
+- **`parse(unknown)` / `dump(unknown)`（含 `safeParse` / `safeDump`）**：面向未知或动态边界输入（如原始 JSON 响应、未定型的表单草稿或中间件载荷），运行时验明正身并执行正向解析或反向输出。
+- **`decode(Encoded)` / `encode(T)`（含 `safeDecode` / `safeEncode`）**：对称强契约原语，在编译期锁死 `Encoded`（如 SDK 生成的 `DTO`）与业务类型 `T` 并提供字段补全，运行时仍完整执行校验。
 
 ```ts
 import { isValidationError } from "modvia";
 
-const result = User.safeDecode(payload);
+const result = User.safeParse(payload);
 if (!result.ok) {
   for (const issue of result.issues) {
     console.log(issue.path, issue.code, issue.message);
@@ -74,7 +79,7 @@ if (!result.ok) {
 }
 
 try {
-  User.decode(payload);
+  User.parse(payload);
 } catch (error: unknown) {
   if (!isValidationError(error)) throw error;
   console.log(error.issues);
@@ -96,9 +101,9 @@ const SKU = string({ trim: true, minLength: 1 });
 
 const Product = defineModel({
   fields: {
-    sku: SKU.from("product_code"),
+    sku: SKU.alias("product_code"),
     stock: number().or("unlimited", "discontinued"),
-    tags: arrayOf(string().nullable()).from("labels").optional(),
+    tags: arrayOf(string().nullable()).alias("labels").optional(),
   },
 });
 
@@ -109,10 +114,10 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 // { product_code: "A-01", stock: "unlimited", labels: [null, "夏季"] }
 ```
 
-- `.from(name)`：指定父对象读写该字段时使用的外部键名；同一模型内的外部键名不能重复。
+- `.alias(name)`：指定父对象双向读写该字段时使用的外部键别名；同一模型内的外部键名不能重复。
 - `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
 - `.optional()`、`.required()` 与 `.default(provider)`：`.optional()` 允许父对象省略该键；`.default(...)` 在父对象解码缺键时填入业务默认值（DTO 侧键可选、模型侧键必填，对象或数组默认值须传入工厂函数 `() => value`）。显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
-- `arrayOf(elementCodec)` 与 `tupleOf(...codecs)`：分别编解码不定长同构数组与定长异构元组；元素参数仅接受值级 `Codec`，编译期与定义期拒绝带 `.from()` 或 `.optional()` 的 `Field`（可通过 `someField.codec` 提取纯值规则）。
+- `arrayOf(elementCodec)` 与 `tupleOf(...codecs)`：分别编解码不定长同构数组与定长异构元组；元素参数仅接受值级 `Codec`，编译期与定义期拒绝带 `.alias()` 或 `.optional()` 的 `Field`（可通过 `someField.codec` 提取纯值规则）。
 - `recordOf(valueCodec)` 与 `recordOf(keyCodec, valueCodec)`：编解码键名动态的普通对象字典（如按语言代码或实体 ID 索引的映射表），错误路径保留对应键名。
 - `int()`、`literal(...values)` 与 `unknown()`：分别表达安全整数（`Number.isSafeInteger`）、多类型精确字面量匹配以及显式原样透传的动态载荷。
 
@@ -150,8 +155,13 @@ const Port = int().check((n, ctx) => {
 // 3. 双向管道串联（解码正向执行，编码自动逆向执行）
 const intFromString = defineCodec<number, string>({
   decode: (raw, ctx) =>
-    /^-?\d+$/.test(String(raw)) ? Number(raw) : ctx.fail("number.int", "Invalid integer"),
-  encode: (n) => String(n),
+    typeof raw === "string" && /^-?\d+$/.test(raw)
+      ? Number(raw)
+      : ctx.fail("number.int", "Invalid integer"),
+  encode: (n, ctx) =>
+    typeof n === "number" && Number.isSafeInteger(n)
+      ? String(n)
+      : ctx.fail("number.int", "Expected integer"),
 });
 const PositiveCount = string({ trim: true })
   .pipe(intFromString)
@@ -194,28 +204,28 @@ class UserEntity {
 }
 
 const UserEntityModel = User.withFactory((data) => new UserEntity(data));
-const entity = UserEntityModel.decode(payload);
+const entity = UserEntityModel.parse(payload);
 const entityDTO: UserDTO = UserEntityModel.encode(entity);
 ```
 
 - `UserEntityModel` 与 `User` 共享相同的 `InferData` 与 `InferDTO`，原模型保持不变。
 - 编码时优先读取实例自有属性；缺少自有属性时沿原型链读取最近的同名 getter（止于 `Object.prototype` 之前），非声明字段（如 `displayName`、`canManage`）不会写出到 DTO。
 
-## 批量命名策略、模型派生与多态联合
+## 批量别名策略、模型派生与多态联合
 
-对接统一采用 `snake_case` 或 `kebab-case` 的外部协议时，可通过 `naming` 自动映射全部字段外部键（单字段显式 `.from(...)` 优先）；通过 `pick`、`omit`、`partial`、`extend` 可从已有模型派生新契约，通过 `taggedUnion` 组合多态模型：
+对接统一采用 `snake_case` 或 `kebab-case` 的外部协议时，可通过 `alias` 自动映射全部字段外部键（支持 `snakeCase`、`kebabCase` 或 `defineAlias`，单字段显式 `.alias(...)` 优先）；通过 `pick`、`omit`、`partial`、`extend` 可从已有模型派生新契约，通过 `taggedUnion` 组合多态模型：
 
 ```ts
 import { arrayOf, defineModel, literal, snakeCase, string, taggedUnion } from "modvia";
 
 // 1. 批量 snake_case 外部键映射（编译期 InferDTO 与运行期同步推导）
 const Account = defineModel({
-  naming: snakeCase,
+  alias: snakeCase,
   fields: {
     userId: string(),
     displayName: string({ trim: true, minLength: 1 }),
     role: literal("admin", "member").default("member"),
-    legacyCode: string().from("USR_CODE"), // 显式 .from 优先于 naming
+    legacyCode: string().alias("USR_CODE"), // 显式 .alias 优先于模型级 alias
   },
 });
 
@@ -223,12 +233,12 @@ const Account = defineModel({
 const AccountSummary = Account.pick("userId", "displayName");
 const PatchAccountInput = Account.partial("displayName", "role");
 const AdminAccount = Account.extend({
-  permissions: arrayOf(string()).from("perm_list"),
+  permissions: arrayOf(string()).alias("perm_list"),
 });
 
 // 3. 跨字段对称校验（解码报错路径自动翻译为外部键名，编码保持内部键名）
 const PasswordPair = defineModel({
-  naming: snakeCase,
+  alias: snakeCase,
   fields: { newPassword: string(), confirmPassword: string() },
 }).check((data, ctx) => {
   if (data.newPassword !== data.confirmPassword) {
@@ -241,7 +251,7 @@ const TextBlock = defineModel({
   fields: { kind: literal("text"), body: string() },
 });
 const ImageBlock = defineModel({
-  fields: { kind: literal("image"), imageUrl: string().from("image_url") },
+  fields: { kind: literal("image"), imageUrl: string().alias("image_url") },
 });
 
 const ContentBlock = taggedUnion("kind", [TextBlock, ImageBlock]);
@@ -249,7 +259,7 @@ const ContentBlock = taggedUnion("kind", [TextBlock, ImageBlock]);
 
 ## 自定义 Codec
 
-当业务值与外部表示类型不同时，使用 `defineCodec` 声明双向转换逻辑，并通过 `context.fail(code, message)` 报告校验错误：
+当业务值与外部表示类型不同时，使用 `defineCodec` 声明双向转换逻辑，正反两端均须对 `unknown` 输入做类型防御并通过 `context.fail(code, message)` 报告校验错误：
 
 ```ts
 import { defineCodec, defineModel } from "modvia";
@@ -262,7 +272,7 @@ const centsFromYuan = defineCodec<number, string>({
     return Math.round(Number(input) * 100);
   },
   encode(cents, context) {
-    if (!Number.isSafeInteger(cents)) {
+    if (typeof cents !== "number" || !Number.isSafeInteger(cents)) {
       return context.fail("money.cents", "Expected integer cents");
     }
     return (cents / 100).toFixed(2);
@@ -271,12 +281,12 @@ const centsFromYuan = defineCodec<number, string>({
 
 const Order = defineModel({
   fields: {
-    amountCents: centsFromYuan.from("amount_yuan"),
+    amountCents: centsFromYuan.alias("amount_yuan"),
   },
 });
 ```
 
-若两端类型相同且只需附加约束，优先使用 `string().check(...)` 等对称校验方法。若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.from()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
+若两端类型相同且只需附加约束，优先使用 `string().refine(...)` 或 `.check(...)` 等对称校验方法。若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.alias()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
 
 ## 日期时间
 

@@ -80,12 +80,12 @@ export declare namespace StandardSchemaV1 {
   }
 }
 
-/** 最小双向转换协议，允许手写对象直接接入容器与模型 */
+/** 最小双向转换协议，允许手写对象直接接入容器与模型（正反两端均须对 unknown 输入做运行时防御） */
 export interface CodecLike<T, Encoded = T> {
   /** 校验外部输入并返回业务值 */
   decode(this: void, input: unknown): T;
-  /** 校验业务值并转换为外部表示 */
-  encode(this: void, value: T): Encoded;
+  /** 校验候选业务值并转换为外部表示 */
+  encode(this: void, input: unknown): Encoded;
 }
 
 /** 值级容器接受任意 Codec 或自定义 CodecLike，编译期拒绝带键绑定元数据的 Field */
@@ -99,13 +99,25 @@ export type FieldLiteral = string | number | boolean | null | undefined;
 /** 原始字面量可直接作为默认值传入，对象/数组等非原始值须通过工厂函数 () => T 提供以防实例间共享引用 */
 export type DefaultProvider<T> = (T extends FieldLiteral ? T : never) | (() => T);
 
-/** 标准双向值编解码器，支持安全解析、字面量豁免与向对象字段跃迁 */
+/** 标准双向值编解码器，提供强类型契约编解码、未知边界解析/倾倒与向对象字段跃迁 */
 export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSchemaV1<Encoded, T> {
   readonly [Symbol.toStringTag]: "modvia.Codec";
-  /** 校验外部输入并返回判别结果，不抛出校验异常 */
-  safeDecode(this: void, input: unknown): SafeResult<T>;
-  /** 校验业务值并编码，返回判别结果而不抛出校验异常 */
+  /** 按已知外部契约类型校验并解码为业务值 */
+  decode(this: void, input: Encoded): T;
+  /** 按已知业务类型校验并编码为外部表示 */
+  encode(this: void, value: T): Encoded;
+  /** 按已知外部契约类型校验解码并返回判别结果，不抛出校验异常 */
+  safeDecode(this: void, input: Encoded): SafeResult<T>;
+  /** 按已知业务类型校验编码并返回判别结果，不抛出校验异常 */
   safeEncode(this: void, value: T): SafeResult<Encoded>;
+  /** 面向未知外部输入校验并解析为业务值 */
+  parse(this: void, input: unknown): T;
+  /** 面向未知外部输入安全解析并返回判别结果，不抛出校验异常 */
+  safeParse(this: void, input: unknown): SafeResult<T>;
+  /** 面向未知候选输入校验并输出为外部表示 */
+  dump(this: void, input: unknown): Encoded;
+  /** 面向未知候选输入安全输出为外部表示，不抛出校验异常 */
+  safeDump(this: void, input: unknown): SafeResult<Encoded>;
   /**
    * 对业务值附加过程式对称检查，支持通过 context.issue 收集多条错误与子路径
    *
@@ -151,8 +163,8 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   ): Codec<T | Literals[number], Encoded | Literals[number]>;
   /** 允许值为 null，等价于 .or(null) */
   nullable(this: void): Codec<T | null, Encoded | null>;
-  /** 指定作为对象字段时的外部键名，跃迁为必填字段描述符 */
-  from<NextSource extends string>(
+  /** 指定作为对象字段时的外部键别名，跃迁为必填字段描述符 */
+  alias<NextSource extends string>(
     this: void,
     source: NextSource,
   ): Field<T, Encoded, NextSource, "required">;
@@ -162,7 +174,7 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   default(this: void, provider: DefaultProvider<T>): Field<T, Encoded, undefined, "defaulted">;
 }
 
-/** 绑定了外部键名与键缺省规则的对象字段描述符 */
+/** 绑定了外部键别名与键缺省规则的对象字段描述符 */
 export interface Field<
   T,
   Encoded = T,
@@ -171,18 +183,30 @@ export interface Field<
 >
   extends CodecLike<T, Encoded>, StandardSchemaV1<Encoded, T> {
   readonly [Symbol.toStringTag]: "modvia.Field";
-  /** 剥离外部键名与缺省性后的纯值级 Codec */
+  /** 剥离外部键别名与缺省性后的纯值级 Codec */
   readonly codec: Codec<T, Encoded>;
-  /** 外部字段名，未指定时沿用模型属性名 */
+  /** 外部字段别名，未指定时沿用模型属性名 */
   readonly source: Source;
   /** 父对象在编解码时是否允许省略此键 */
   readonly presence: Presence;
-  /** 校验单个外部值并返回判别结果 */
-  safeDecode(this: void, input: unknown): SafeResult<T>;
-  /** 校验单个业务值并编码，返回判别结果 */
+  /** 按已知外部契约类型校验单个值并解码 */
+  decode(this: void, input: Encoded): T;
+  /** 按已知业务类型校验单个值并编码 */
+  encode(this: void, value: T): Encoded;
+  /** 按已知外部契约类型安全解码单个值并返回判别结果 */
+  safeDecode(this: void, input: Encoded): SafeResult<T>;
+  /** 按已知业务类型安全编码单个值并返回判别结果 */
   safeEncode(this: void, value: T): SafeResult<Encoded>;
-  /** 改绑父对象读写此字段时使用的外部键名 */
-  from<NextSource extends string>(
+  /** 面向未知外部输入校验并解析单个值 */
+  parse(this: void, input: unknown): T;
+  /** 面向未知外部输入安全解析单个值并返回判别结果 */
+  safeParse(this: void, input: unknown): SafeResult<T>;
+  /** 面向未知候选输入校验并输出单个外部值 */
+  dump(this: void, input: unknown): Encoded;
+  /** 面向未知候选输入安全输出单个外部值并返回判别结果 */
+  safeDump(this: void, input: unknown): SafeResult<Encoded>;
+  /** 改绑父对象读写此字段时使用的外部键别名 */
+  alias<NextSource extends string>(
     this: void,
     source: NextSource,
   ): Field<T, Encoded, NextSource, Presence>;

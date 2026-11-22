@@ -17,35 +17,35 @@ import {
   resolveFields,
   type ResolvedField,
 } from "./fields.ts";
-import type { ApplyNaming, NamingKind, NamingStrategy } from "./naming.ts";
+import type { AliasKind, AliasStrategy, ApplyAlias } from "./alias.ts";
 import type { FieldRecord, MergeFields, Model, ModelOf, PartialFields } from "./types.ts";
 
-/** 声明对象字段契约并应用统一字段命名策略（显式 .from() 优先于模型级 naming） */
-export function defineModel<const Fields extends FieldRecord, Kind extends NamingKind>(options: {
+/** 声明对象字段契约并应用统一字段外部键别名策略（显式 .alias() 优先于模型级 alias） */
+export function defineModel<const Fields extends FieldRecord, Kind extends AliasKind>(options: {
   readonly fields: Fields;
-  readonly naming: NamingStrategy<Kind>;
-}): ModelOf<ApplyNaming<Fields, Kind>>;
+  readonly alias: AliasStrategy<Kind>;
+}): ModelOf<ApplyAlias<Fields, Kind>>;
 /** 声明对象字段契约，统一完成双向编解码、结构派生与静态类型推导 */
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
 }): ModelOf<Fields>;
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
-  readonly naming?: NamingStrategy<NamingKind>;
+  readonly alias?: AliasStrategy<AliasKind>;
 }): ModelOf<Fields> {
   if (!isPlainObject(options) || !isPlainObject(options.fields)) {
     throw new TypeError("defineModel requires an options object with a plain fields table");
   }
-  if (options.naming !== undefined) {
+  if (options.alias !== undefined) {
     if (
-      typeof options.naming !== "object" ||
-      options.naming === null ||
-      typeof options.naming.mapKey !== "function"
+      typeof options.alias !== "object" ||
+      options.alias === null ||
+      typeof options.alias.mapKey !== "function"
     ) {
-      throw new TypeError("defineModel naming must be a valid NamingStrategy");
+      throw new TypeError("defineModel alias must be a valid AliasStrategy");
     }
   }
-  const ownFields = snapshotOwnFields(options.fields, options.naming);
+  const ownFields = snapshotOwnFields(options.fields, options.alias);
   const resolvedFields = resolveFields(ownFields);
   return createModel(ownFields, resolvedFields, (data) => data);
 }
@@ -163,26 +163,27 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
 
 function snapshotOwnFields<Fields extends FieldRecord>(
   fields: Fields,
-  naming?: NamingStrategy<NamingKind>,
+  aliasStrategy?: AliasStrategy<AliasKind>,
 ): Readonly<Fields> {
   const copy: Record<string, CodecLike<unknown, unknown>> = {};
   for (const [key, entry] of Object.entries(fields)) {
-    const resolvedEntry = naming !== undefined ? applyNamingToEntry(key, entry, naming) : entry;
+    const resolvedEntry =
+      aliasStrategy !== undefined ? applyAliasToEntry(key, entry, aliasStrategy) : entry;
     writeOwnField(copy, key, resolvedEntry);
   }
   return Object.freeze(copy) as unknown as Readonly<Fields>;
 }
 
-function applyNamingToEntry(
+function applyAliasToEntry(
   key: string,
   entry: CodecLike<unknown, unknown>,
-  naming: NamingStrategy<NamingKind>,
+  aliasStrategy: AliasStrategy<AliasKind>,
 ): CodecLike<unknown, unknown> {
   if (isFieldDescriptor(entry)) {
     if (typeof entry.source === "string") return entry;
-    return entry.from(naming.mapKey(key));
+    return entry.alias(aliasStrategy.mapKey(key));
   }
-  return promoteToCodec(entry).from(naming.mapKey(key));
+  return promoteToCodec(entry).alias(aliasStrategy.mapKey(key));
 }
 
 function toOptionalField(entry: CodecLike<unknown, unknown>): CodecLike<unknown, unknown> {

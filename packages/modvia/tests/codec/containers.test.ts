@@ -5,7 +5,7 @@ import { defineModel, type InferEncoded, type InferValue } from "../../src/index
 const Metric = defineModel({
   fields: {
     count: number(),
-    updatedAt: isoDateTime().from("updated_at"),
+    updatedAt: isoDateTime().alias("updated_at"),
   },
 });
 
@@ -26,7 +26,7 @@ describe("containers (recordOf)", () => {
     });
 
     expect(
-      MetricsMap.safeDecode({
+      MetricsMap.safeParse({
         views: { count: "bad", updated_at: "2026-11-09T00:00:00Z" },
       }),
     ).toMatchObject({
@@ -35,7 +35,7 @@ describe("containers (recordOf)", () => {
     });
 
     for (const invalid of [null, [], new Date(), new Map()]) {
-      expect(MetricsMap.safeDecode(invalid)).toMatchObject({
+      expect(MetricsMap.safeParse(invalid)).toMatchObject({
         ok: false,
         issues: [{ path: [], code: "type.object" }],
       });
@@ -50,7 +50,7 @@ describe("containers (recordOf)", () => {
     expect(messages).toStrictEqual({ "zh-CN": "你好" });
     expect(Messages.encode(messages)).toStrictEqual({ "zh-CN": "你好" });
 
-    expect(Messages.safeDecode({ "fr-FR": "Bonjour" })).toMatchObject({
+    expect(Messages.safeParse({ "fr-FR": "Bonjour" })).toMatchObject({
       ok: false,
       issues: [{ path: ["fr-FR"], code: "string.one_of" }],
     });
@@ -72,7 +72,7 @@ describe("containers (recordOf)", () => {
     // __proto__ 自有键安全往返
     const RawDict = recordOf(string());
     const protoPayload: unknown = JSON.parse('{"__proto__":"safe"}');
-    const decodedProto = RawDict.decode(protoPayload);
+    const decodedProto = RawDict.parse(protoPayload);
     expect(Object.getPrototypeOf(decodedProto)).toBe(Object.prototype);
     expect(Object.hasOwn(decodedProto, "__proto__")).toBe(true);
     expect(decodedProto["__proto__"]).toBe("safe");
@@ -92,17 +92,21 @@ describe("containers (recordOf)", () => {
     expectTypeOf<InferValue<typeof Range>>().toEqualTypeOf<[Date, number]>();
     expectTypeOf<InferEncoded<typeof Range>>().toEqualTypeOf<[string, number]>();
 
-    expect(Range.safeDecode("not-array")).toMatchObject({
+    expect(Range.safeParse("not-array")).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "type.array" }],
     });
-    expect(Range.safeDecode([stamp])).toMatchObject({
+    expect(Range.safeParse([stamp])).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "tuple.length" }],
     });
-    expect(Range.safeDecode([stamp, "bad"])).toMatchObject({
+    expect(Range.safeParse([stamp, "bad"])).toMatchObject({
       ok: false,
       issues: [{ path: [1], code: "type.number" }],
+    });
+    expect(Range.safeDump("not-array")).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "type.array" }],
     });
 
     // @ts-expect-error tupleOf 不接受带属性修饰的 Field

@@ -1,8 +1,8 @@
 import type { CodecLike, Field } from "../../codec/core/types.ts";
 
-export type NamingKind = "snake_case" | "kebab-case" | "custom";
+export type AliasKind = "snake_case" | "kebab-case" | "custom";
 
-export interface NamingStrategy<Kind extends NamingKind = "custom"> {
+export interface AliasStrategy<Kind extends AliasKind = "custom"> {
   readonly kind: Kind;
   mapKey(this: void, key: string): string;
 }
@@ -60,7 +60,7 @@ export type SnakeCase<S extends string> = string extends S ? string : DelimitedC
 
 export type KebabCase<S extends string> = string extends S ? string : DelimitedCase<S, "-">;
 
-export type MapNamedKey<Key extends string, Kind extends NamingKind> = Kind extends "snake_case"
+export type MapAliasedKey<Key extends string, Kind extends AliasKind> = Kind extends "snake_case"
   ? SnakeCase<Key>
   : Kind extends "kebab-case"
     ? KebabCase<Key>
@@ -75,42 +75,42 @@ type BindFieldSource<Entry, MappedSource extends string> =
       ? Field<T, E, MappedSource, "required">
       : never;
 
-export type ApplyNaming<
+export type ApplyAlias<
   Fields extends Readonly<Record<string, CodecLike<unknown, unknown>>>,
-  Kind extends NamingKind,
+  Kind extends AliasKind,
 > = {
   readonly [Key in keyof Fields]: Key extends string
-    ? BindFieldSource<Fields[Key], MapNamedKey<Key, Kind>>
+    ? BindFieldSource<Fields[Key], MapAliasedKey<Key, Kind>>
     : Fields[Key];
 };
 
-/** 将模型属性名按编译期与运行期同步规则转换为 snake_case 外部键名 */
-export const snakeCase: NamingStrategy<"snake_case"> = Object.freeze({
+/** 将模型属性名按编译期与运行期同步规则映射为 snake_case 外部键别名 */
+export const snakeCase: AliasStrategy<"snake_case"> = Object.freeze({
   kind: "snake_case",
   mapKey(key: string): string {
     return splitIdentifierWords(key, "_");
   },
 });
 
-/** 将模型属性名按编译期与运行期同步规则转换为 kebab-case 外部键名 */
-export const kebabCase: NamingStrategy<"kebab-case"> = Object.freeze({
+/** 将模型属性名按编译期与运行期同步规则映射为 kebab-case 外部键别名 */
+export const kebabCase: AliasStrategy<"kebab-case"> = Object.freeze({
   kind: "kebab-case",
   mapKey(key: string): string {
     return splitIdentifierWords(key, "-");
   },
 });
 
-/** 创建自定义字段外部键名映射策略（显式 .from() 声明始终优先于模型级命名策略） */
-export function defineNaming(mapKey: (key: string) => string): NamingStrategy<"custom"> {
+/** 创建自定义模型级外部键别名策略（字段显式 .alias() 声明始终优先于模型级 alias 策略） */
+export function defineAlias(mapKey: (key: string) => string): AliasStrategy<"custom"> {
   if (typeof mapKey !== "function") {
-    throw new TypeError("defineNaming requires a key mapping function");
+    throw new TypeError("defineAlias requires a key mapping function");
   }
   return Object.freeze({
     kind: "custom",
     mapKey(key: string): string {
       const mapped = mapKey(key);
       if (typeof mapped !== "string") {
-        throw new TypeError("NamingStrategy.mapKey must return a string");
+        throw new TypeError("AliasStrategy.mapKey must return a string");
       }
       return mapped;
     },

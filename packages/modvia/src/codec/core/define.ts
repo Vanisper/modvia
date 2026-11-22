@@ -12,10 +12,10 @@ import type { Codec, CodecContext, CodecLike, Field, FieldPresence } from "./typ
 
 export interface CodecHandlers<T, Encoded> {
   decode(this: void, input: unknown, context: CodecContext): T;
-  encode(this: void, value: T, context: CodecContext): Encoded;
+  encode(this: void, input: unknown, context: CodecContext): Encoded;
 }
 
-/** 通过一对双向转换函数创建标准 Codec，两端均可通过 context.fail 或 context.issue 报告校验失败 */
+/** 通过一对双向转换函数创建标准 Codec，正反两端均须对 unknown 输入做校验并可通过 context 报告问题 */
 export function defineCodec<T, Encoded = T>(
   handlers: CodecHandlers<T, Encoded>,
 ): Codec<T, Encoded> {
@@ -24,9 +24,7 @@ export function defineCodec<T, Encoded = T>(
     const context = createScopedContext(collector);
     try {
       const output =
-        direction === "decode"
-          ? handlers.decode(input, context)
-          : handlers.encode(input as T, context);
+        direction === "decode" ? handlers.decode(input, context) : handlers.encode(input, context);
       return collector.mark() > mark ? INVALID : output;
     } catch (error) {
       if (isAbortSignal(error)) {

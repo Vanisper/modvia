@@ -75,7 +75,7 @@ export function zodCodec<S extends $ZodType>(
       return result.data;
     },
     encode(domainValue, context) {
-      const result = runZodStep(() => safeEncode(schema, domainValue));
+      const result = runZodStep(() => safeEncode(schema, domainValue as output<S>));
       if (!result.success) {
         reportZodIssues(result.error.issues, context);
         return undefined as never;

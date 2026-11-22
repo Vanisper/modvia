@@ -59,17 +59,18 @@ export function createCodec<T, Encoded>(
 ): Codec<T, Encoded> {
   const literalState = metadata?.literalState;
   const decodeSegmentMapper = metadata?.decodeSegmentMapper;
-  const safeDecode = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
-  const safeEncode = (value: T): SafeResult<Encoded> => runSafe<Encoded>(runner, value, "encode");
+  const safeParse = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
+  const safeDump = (input: unknown): SafeResult<Encoded> =>
+    runSafe<Encoded>(runner, input, "encode");
 
-  const decode = (input: unknown): T => {
-    const result = safeDecode(input);
+  const parse = (input: unknown): T => {
+    const result = safeParse(input);
     if (!result.ok) throw new ValidationError(result.issues);
     return result.value;
   };
 
-  const encode = (value: T): Encoded => {
-    const result = safeEncode(value);
+  const dump = (input: unknown): Encoded => {
+    const result = safeDump(input);
     if (!result.ok) throw new ValidationError(result.issues);
     return result.value;
   };
@@ -78,7 +79,7 @@ export function createCodec<T, Encoded>(
     version: 1,
     vendor: "modvia",
     validate(value: unknown): StandardSchemaV1.Result<T> {
-      const result = safeDecode(value);
+      const result = safeParse(value);
       return result.ok ? { value: result.value } : { issues: result.issues };
     },
   });
@@ -119,10 +120,14 @@ export function createCodec<T, Encoded>(
   const codec: Codec<T, Encoded> = {
     [Symbol.toStringTag]: "modvia.Codec",
     "~standard": standardProps,
-    decode,
-    encode,
-    safeDecode,
-    safeEncode,
+    decode: parse,
+    encode: dump,
+    safeDecode: safeParse,
+    safeEncode: safeDump,
+    parse,
+    safeParse,
+    dump,
+    safeDump,
     check(rule: (value: T, context: CodecContext) => void) {
       if (typeof rule !== "function") {
         throw new TypeError("check requires a validation function");
@@ -149,7 +154,7 @@ export function createCodec<T, Encoded>(
     nullable() {
       return codec.or(null);
     },
-    from<NextSource extends string>(source: NextSource) {
+    alias<NextSource extends string>(source: NextSource) {
       assertValidSource(source);
       return createField(codec, source, "required");
     },
@@ -230,7 +235,7 @@ export function executeCodec<T, Encoded>(
     return runner(input, direction, collector);
   }
   try {
-    return direction === "decode" ? codec.decode(input) : codec.encode(input as T);
+    return direction === "decode" ? codec.decode(input) : codec.encode(input);
   } catch (error) {
     if (isAbortSignal(error)) {
       return collector.add(error.code, error.message);
@@ -277,7 +282,7 @@ export function isFieldDescriptor(
       (candidate.source === undefined || typeof candidate.source === "string") &&
       typeof candidate.decode === "function" &&
       typeof candidate.encode === "function" &&
-      typeof candidate.from === "function" &&
+      typeof candidate.alias === "function" &&
       typeof candidate.optional === "function" &&
       typeof candidate.or === "function"
     );
@@ -297,7 +302,7 @@ export function assertValueCodec<T, Encoded>(codec: CodecLike<T, Encoded>, calle
   }
   if (isFieldDescriptor(codec)) {
     throw new TypeError(
-      `${caller} accepts a value Codec, not a Field with .from() or .optional(); apply field modifiers on the outer container or pass field.codec`,
+      `${caller} accepts a value Codec, not a Field with .alias() or .optional(); apply field modifiers on the outer container or pass field.codec`,
     );
   }
 }
@@ -336,7 +341,11 @@ export function createField<
     encode: codec.encode,
     safeDecode: codec.safeDecode,
     safeEncode: codec.safeEncode,
-    from<NextSource extends string>(nextSource: NextSource) {
+    parse: codec.parse,
+    safeParse: codec.safeParse,
+    dump: codec.dump,
+    safeDump: codec.safeDump,
+    alias<NextSource extends string>(nextSource: NextSource) {
       assertValidSource(nextSource);
       return createField(codec, nextSource, presence, defaultResolver);
     },

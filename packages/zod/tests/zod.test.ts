@@ -9,13 +9,23 @@ describe("@modvia/zod — zodCodec", () => {
     const Email = zodCodec(z.email());
     expect(Email.decode("user@example.com")).toBe("user@example.com");
     expect(Email.encode("user@example.com")).toBe("user@example.com");
+    expect(Email.parse("user@example.com")).toBe("user@example.com");
+    expect(Email.dump("user@example.com")).toBe("user@example.com");
     expect(Email.safeDecode("not-an-email")).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "zod.invalid_format" }],
     });
+    expect(Email.safeParse(123)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "zod.invalid_type" }],
+    });
+    expect(Email.safeDump(123)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "zod.invalid_type" }],
+    });
 
     const Contact = defineModel({
-      naming: snakeCase,
+      alias: snakeCase,
       fields: {
         primaryEmail: Email,
         backupEmails: zodCodec(z.array(z.email()).min(1)).optional(),
@@ -69,7 +79,7 @@ describe("@modvia/zod — zodCodec", () => {
     );
 
     const LedgerEntry = defineModel({
-      naming: snakeCase,
+      alias: snakeCase,
       fields: {
         entryId: string(),
         amountFen: BigIntFromString.default(() => 0n),

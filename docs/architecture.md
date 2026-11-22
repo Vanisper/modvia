@@ -11,7 +11,7 @@ Modvia 以双向编解码契约为底座，围绕应用数据边界组织校验�
    - 按细粒度主题拆分模块，不设聚合入口，不感知任何编解码或模型概念。
 2. **编解码内核（Codec Core）**
    - 定义双向转换协议 `CodecLike<T, E>`、标准实例 `Codec<T, E>` 与具名槽位绑定描述符 `Field`。
-   - 提供零异常栈开销的内部问题收集器，统一支撑抛错调用（`decode` / `encode`）与结果调用（`safeDecode` / `safeEncode`），并原生实现 `StandardSchemaV1`（`~standard`）。
+   - 提供零异常栈开销的内部问题收集器，统一支撑强契约编解码（`decode` / `encode` 与 `safeDecode` / `safeEncode`）及面向未知边界的解析/输出（`parse` / `dump` 与 `safeParse` / `safeDump`），并原生实现 `StandardSchemaV1`（`~standard`）。
 3. **原子标量与值级算子（Codec Scalars & Operators）**
    - **原子层（Scalars）**：构建字符串、有限数字、布尔值、枚举/字面量及 ISO 日期时间等基础规则。
    - **算子层（Operators）**：构建数组、动态字典等值容器，以及管道串联、方向反转、惰性递归与顺序联合等高阶组合子；原子层与算子层平级互不依赖，均单向依赖内核层。
@@ -62,7 +62,7 @@ packages/modvia/src/
 └── model/                        # 领域模型模块（单向依赖 codec + shared）
     ├── core/                     # 模型内核（严禁导入 model/operators）
     │   ├── types.ts              # [公开] Model 接口、字段表静态布局与类型提取工具
-    │   ├── naming.ts             # [公开] 编译期与运行期同步的字段批量命名策略（snakeCase、kebabCase）
+    │   ├── alias.ts              # [公开] 编译期与运行期同步的字段批量别名策略（snakeCase、kebabCase、defineAlias）
     │   ├── define.ts             # [公开] defineModel、字段内省、结构派生与工厂派生
     │   └── fields.ts             # [内部] 字段解析、外部键去重与原型链 getter 读取
     └── operators/                # 多模型高阶组合算子
@@ -85,7 +85,7 @@ packages/modvia/src/
 ## 演进路线
 
 1. **阶段一：分层底座与校验引擎收敛**（已完成）
-   - 建立 `modvia/codec` 与 `modvia` 双入口、零异常栈收集引擎、`safeDecode` / `safeEncode`、`StandardSchemaV1` 以及 `Codec` / `Field` 作用域隔离。
+   - 建立 `modvia/codec` 与 `modvia` 双入口、零异常栈收集引擎、强契约 `decode`/`encode` 与宽边界 `parse`/`dump` 2×2 执行矩阵、`StandardSchemaV1` 以及 `Codec` / `Field` 作用域隔离。
 2. **阶段二：值组合原语与精化规范体系补齐**（已完成）
    - 确立跨表示变形、同类型规范化（`normalize`）与对称精化/品牌（`refine` / 多错 `check` / `brand`）三分体系，落地 `pipe`、`invert`、`lazy`、`literal`、`int`、`unknown`、`tupleOf`、`unionOf`、`recordOf` 与零依赖 `fromStandard`。
 3. **阶段三：模型结构内省、派生与多态联合**（已完成）

@@ -30,7 +30,7 @@ const intFromString = defineCodec<number, string>({
     return parsed;
   },
   encode(value, context) {
-    if (!Number.isSafeInteger(value)) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
       return context.fail("number.safe_integer", "Expected a safe integer");
     }
     return String(value);
@@ -38,7 +38,7 @@ const intFromString = defineCodec<number, string>({
 });
 
 describe("codec kernel", () => {
-  test("safeDecode 与 safeEncode 返回冻结的判别结果且不抛异常", () => {
+  test("2×2 执行矩阵：decode/encode 约束编译期契约，parse/dump 面向 unknown 动态边界", () => {
     const okDecoded = intFromString.safeDecode("42");
     expect(okDecoded).toStrictEqual({ ok: true, value: 42 });
     expect(Object.isFrozen(okDecoded)).toBe(true);
@@ -58,6 +58,27 @@ describe("codec kernel", () => {
       ok: false,
       issues: [{ path: [], code: "number.safe_integer" }],
     });
+
+    // @ts-expect-error decode 编译期拒绝非 Encoded 类型
+    expect(intFromString.safeDecode(42).ok).toBe(false);
+    // @ts-expect-error encode 编译期拒绝非 T 类型
+    expect(intFromString.safeEncode("42").ok).toBe(false);
+
+    // parse / safeParse 与 dump / safeDump 接收任意 unknown 并在运行时安全校验
+    const rawIn: unknown = "42";
+    const rawOut: unknown = 42;
+    expect(intFromString.parse(rawIn)).toBe(42);
+    expect(intFromString.dump(rawOut)).toBe("42");
+    expect(intFromString.safeParse(null)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "number.integer_string" }],
+    });
+    expect(intFromString.safeDump(null)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "number.safe_integer" }],
+    });
+    expect(() => intFromString.parse({})).toThrow(ValidationError);
+    expect(() => intFromString.dump({})).toThrow(ValidationError);
 
     expectTypeOf<InferValue<typeof intFromString>>().toEqualTypeOf<number>();
     expectTypeOf<InferEncoded<typeof intFromString>>().toEqualTypeOf<string>();
@@ -92,7 +113,7 @@ describe("codec kernel", () => {
         throw boom;
       },
       encode(value) {
-        return value;
+        return String(value);
       },
     });
 
@@ -157,17 +178,17 @@ describe("codec kernel", () => {
   test("arrayOf 接受纯值 Codec 或自定义 CodecLike，拒绝带属性修饰的 Field", () => {
     const plainCodec: CodecLike<string, string> = {
       decode: (input) => String(input),
-      encode: (value) => value,
+      encode: (value) => String(value),
     };
-    expect(arrayOf(plainCodec).decode([1, "a"])).toStrictEqual(["1", "a"]);
+    expect(arrayOf(plainCodec).parse([1, "a"])).toStrictEqual(["1", "a"]);
 
-    const aliasedField = string().from("item_code").optional();
+    const aliasedField = string().alias("item_code").optional();
     expect(arrayOf(aliasedField.codec).decode(["a"])).toStrictEqual(["a"]);
 
     // @ts-expect-error Field 携带对象属性修饰，不能直接作为数组元素 Codec
     expect(() => arrayOf(string().optional())).toThrow(TypeError);
     // @ts-expect-error Field 携带外部键别名，不能直接作为数组元素 Codec
-    expect(() => arrayOf(string().from("code"))).toThrow(TypeError);
+    expect(() => arrayOf(string().alias("code"))).toThrow(TypeError);
     // @ts-expect-error field() 显式包装后的属性描述符同样不可直接放入数组
     expect(() => arrayOf(field(string()))).toThrow(TypeError);
 

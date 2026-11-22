@@ -8,8 +8,8 @@ Modvia 是面向 TypeScript 应用的双向编解码与领域模型层基础库�
 
 - **分层双入口**：`modvia/codec` 提供独立的值级双向编解码底座，`modvia` 在其上构建对象字段映射与领域模型。
 - **普通对象优先，class 可选**：默认产出零额外开销的普通对象；通过 `withFactory` 可按需构造真实 `class` 实例并保留原型行为。
-- **作用域严格正交**：值域扩展（`.or` / `.nullable`）与对象键规则（`.from` / `.optional`）职责分离，编译期拦截容器作用域误用。
-- **双模式执行与生态互操作**：同时提供抛错调用与 `safeDecode` / `safeEncode` 判别结果，原生实现 `StandardSchemaV1`（`~standard` / `fromStandard`），并通过独立包 `@modvia/zod` 双向桥接 Zod v4。
+- **作用域严格正交**：值域扩展（`.or` / `.nullable`）与对象键规则（`.alias` / `.optional` / `.default`）职责分离，编译期拦截容器作用域误用。
+- **2×2 执行矩阵与生态互操作**：同时提供面向 `unknown` 动态边界的 `parse` / `dump` 与编译期锁死契约的对称原语 `decode` / `encode`（均含零异常栈 `safe*` 变体），原生实现 `StandardSchemaV1`（`~standard` / `fromStandard`），并通过独立包 `@modvia/zod` 双向桥接 Zod v4。
 
 ## 快速示例
 
@@ -20,14 +20,14 @@ const User = defineModel({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
-    createdAt: isoDateTime().from("created_at"),
+    createdAt: isoDateTime().alias("created_at"),
   },
 });
 
 type UserData = InferData<typeof User>;
 type UserDTO = InferDTO<typeof User>;
 
-const user = User.decode({
+const user = User.parse({
   id: "u-1",
   name: "  林舟  ",
   created_at: "2026-11-09T02:00:00+02:00",

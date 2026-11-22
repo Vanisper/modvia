@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
+  defineAlias,
   defineModel,
-  defineNaming,
   isoDateTime,
   kebabCase,
   literal,
@@ -23,7 +23,7 @@ const BaseUser = defineModel({
     id: string(),
     name: string({ trim: true, minLength: 1 }),
     role: oneOf("admin", "member"),
-    createdAt: isoDateTime().from("created_at"),
+    createdAt: isoDateTime().alias("created_at"),
     bio: string().optional(),
   },
 });
@@ -94,7 +94,7 @@ describe("model introspection & derivation", () => {
   test("extend 支持扩展与覆写字段，并在定义期拦截外部别名冲突", () => {
     const SuperAdmin = BaseUser.extend({
       role: literal("superadmin"),
-      permissions: arrayOf(string()).from("perm_list"),
+      permissions: arrayOf(string()).alias("perm_list"),
     });
 
     const decoded = SuperAdmin.decode({
@@ -117,14 +117,14 @@ describe("model introspection & derivation", () => {
     // 新字段与已有字段的外部键名碰撞时立即抛 RangeError
     expect(() =>
       BaseUser.extend({
-        registeredAt: isoDateTime().from("created_at"),
+        registeredAt: isoDateTime().alias("created_at"),
       }),
     ).toThrow(RangeError);
   });
 
   test("partial 支持全量与指定字段可选化，保留外部别名并移除创建期默认值避免覆盖", () => {
     const WithDefault = BaseUser.extend({
-      status: oneOf("active", "archived").default("active").from("account_status"),
+      status: oneOf("active", "archived").default("active").alias("account_status"),
     });
 
     const FullPatch = WithDefault.partial();
@@ -160,14 +160,14 @@ describe("model introspection & derivation", () => {
     expect(() => BaseUser.partial("missing")).toThrow(RangeError);
   });
 
-  test("naming 策略自动同步编译期与运行时外部键映射，显式 .from() 优先", () => {
+  test("alias 策略自动同步编译期与运行时外部键映射，字段显式 .alias() 优先", () => {
     const Profile = defineModel({
-      naming: snakeCase,
+      alias: snakeCase,
       fields: {
         userId: string(),
         isEmailVerified: literal(true, false).default(false),
         htmlURL: string().optional(),
-        legacyCode: string().from("USR_CODE"),
+        legacyCode: string().alias("USR_CODE"),
       },
     });
 
@@ -196,7 +196,7 @@ describe("model introspection & derivation", () => {
       USR_CODE: string;
     }>();
 
-    // 派生子模型完整保留命名策略生成的外部键名
+    // 派生子模型完整保留别名策略生成的外部键名
     const Picked = Profile.pick("userId", "legacyCode");
     expect(Picked.encode({ userId: "u-1", legacyCode: "L-9" })).toStrictEqual({
       user_id: "u-1",
@@ -204,7 +204,7 @@ describe("model introspection & derivation", () => {
     });
 
     const HeaderModel = defineModel({
-      naming: kebabCase,
+      alias: kebabCase,
       fields: { traceId: string(), clientVersion: string() },
     });
     expect(HeaderModel.encode({ traceId: "t-1", clientVersion: "1.0" })).toStrictEqual({
@@ -216,17 +216,17 @@ describe("model introspection & derivation", () => {
       "client-version": string;
     }>();
 
-    const UpperNaming = defineNaming((key) => key.toUpperCase());
+    const UpperAlias = defineAlias((key) => key.toUpperCase());
     const EnvModel = defineModel({
-      naming: UpperNaming,
+      alias: UpperAlias,
       fields: { appPort: number() },
     });
     expect(EnvModel.decode({ APPPORT: 8080 })).toStrictEqual({ appPort: 8080 });
 
-    // 命名转换后若与已有字段名碰撞则在定义期抛 RangeError
+    // 别名策略转换后若与已有字段名碰撞则在定义期抛 RangeError
     expect(() =>
       defineModel({
-        naming: snakeCase,
+        alias: snakeCase,
         fields: { userId: string(), user_id: string() },
       }),
     ).toThrow(RangeError);
@@ -234,7 +234,7 @@ describe("model introspection & derivation", () => {
 
   test("对模型调用 check 时自动将声明字段路径双向翻译为 DTO 外部键与模型内部键", () => {
     const PasswordReset = defineModel({
-      naming: snakeCase,
+      alias: snakeCase,
       fields: {
         newPassword: string({ minLength: 6 }),
         confirmPassword: string({ minLength: 6 }),
@@ -286,7 +286,7 @@ describe("model introspection & derivation", () => {
 describe("taggedUnion", () => {
   const TextBlock = defineModel({
     fields: {
-      kind: oneOf("text").from("block_type"),
+      kind: oneOf("text").alias("block_type"),
       body: string({ trim: true, minLength: 1 }),
     },
   });
@@ -306,8 +306,8 @@ describe("taggedUnion", () => {
 
   const ImageBlock = defineModel({
     fields: {
-      kind: literal("image").from("block_type"),
-      url: string({ minLength: 1 }).from("image_url"),
+      kind: literal("image").alias("block_type"),
+      url: string({ minLength: 1 }).alias("image_url"),
     },
   }).withFactory((data) => new ImageBlockEntity(data));
 
@@ -337,12 +337,12 @@ describe("taggedUnion", () => {
   });
 
   test("精确定位缺失标签、非法标签及命中分支内部字段的错误路径", () => {
-    expect(ContentBlock.safeDecode({})).toMatchObject({
+    expect(ContentBlock.safeParse({})).toMatchObject({
       ok: false,
       issues: [{ path: ["block_type"], code: "field.required" }],
     });
 
-    expect(ContentBlock.safeDecode({ block_type: "video" })).toMatchObject({
+    expect(ContentBlock.safeParse({ block_type: "video" })).toMatchObject({
       ok: false,
       issues: [{ path: ["block_type"], code: "union.invalid_tag" }],
     });
@@ -352,12 +352,12 @@ describe("taggedUnion", () => {
       issues: [{ path: ["image_url"], code: "string.min_length" }],
     });
 
-    expect(Reflect.apply(ContentBlock.safeEncode, undefined, [{}])).toMatchObject({
+    expect(ContentBlock.safeDump({})).toMatchObject({
       ok: false,
       issues: [{ path: ["kind"], code: "field.required" }],
     });
 
-    expect(Reflect.apply(ContentBlock.safeEncode, undefined, [{ kind: "video" }])).toMatchObject({
+    expect(ContentBlock.safeDump({ kind: "video" })).toMatchObject({
       ok: false,
       issues: [{ path: ["kind"], code: "union.invalid_tag" }],
     });
@@ -365,7 +365,7 @@ describe("taggedUnion", () => {
 
   test("定义期拒绝重复标签、可选判别键、不一致外部名或非常量判别规则", () => {
     const DuplicateText = defineModel({
-      fields: { kind: literal("text").from("block_type"), note: number() },
+      fields: { kind: literal("text").alias("block_type"), note: number() },
     });
     expect(() => taggedUnion("kind", [TextBlock, DuplicateText])).toThrow(RangeError);
 
@@ -375,7 +375,7 @@ describe("taggedUnion", () => {
     expect(() => taggedUnion("kind", [TextBlock, InconsistentSource])).toThrow(RangeError);
 
     const OptionalTag = defineModel({
-      fields: { kind: literal("quote").from("block_type").optional() },
+      fields: { kind: literal("quote").alias("block_type").optional() },
     });
     // @ts-expect-error 可选判别键在编译期与定义期均被拒绝
     expect(() => taggedUnion("kind", [TextBlock, OptionalTag])).toThrow(RangeError);
@@ -387,7 +387,7 @@ describe("taggedUnion", () => {
     expect(() => taggedUnion("kind", [TextBlock, MissingTag])).toThrow(RangeError);
 
     const DynamicTag = defineModel({
-      fields: { kind: string().from("block_type") },
+      fields: { kind: string().alias("block_type") },
     });
     expect(() => taggedUnion("kind", [TextBlock, DynamicTag])).toThrow(TypeError);
   });

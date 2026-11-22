@@ -14,7 +14,7 @@ pnpm add modvia @modvia/zod zod
 
 ### 桥接对称校验规则与模型字段修饰
 
-`zodCodec(schema)` 返回标准 `Codec<Output, Input>`，可直接接入 `defineModel`、`.from()`、`.optional()`、`.default()`、`.brand()` 等全部 Modvia 原语：
+`zodCodec(schema)` 返回标准 `Codec<Output, Input>`（完整具备 `parse` / `dump` 与强契约 `decode` / `encode`），可直接接入 `defineModel`、`.alias()`、`.optional()`、`.default()`、`.brand()` 等全部 Modvia 原语：
 
 ```ts
 import { zodCodec } from "@modvia/zod";
@@ -22,14 +22,14 @@ import { defineModel, snakeCase } from "modvia";
 import { z } from "zod";
 
 const Contact = defineModel({
-  naming: snakeCase,
+  alias: snakeCase,
   fields: {
     primaryEmail: zodCodec(z.email()),
     backupEmails: zodCodec(z.array(z.email()).min(1)).optional(),
   },
 });
 
-const contact = Contact.decode({
+const contact = Contact.parse({
   primary_email: "ops@example.com",
   backup_emails: ["team@example.com"],
 });
@@ -56,7 +56,7 @@ const BigIntFromString = zodCodec(
 );
 
 const LedgerEntry = defineModel({
-  naming: snakeCase,
+  alias: snakeCase,
   fields: {
     entryId: string(),
     amountFen: BigIntFromString.default(() => 0n),

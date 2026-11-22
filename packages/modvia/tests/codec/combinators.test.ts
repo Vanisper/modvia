@@ -24,7 +24,7 @@ const intFromString = defineCodec<number, string>({
     return Number(input);
   },
   encode(value, context) {
-    if (!Number.isSafeInteger(value)) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
       return context.fail("number.safe_integer", "Expected a safe integer");
     }
     return String(value);
@@ -134,11 +134,11 @@ describe("codec combinators", () => {
     expect(Email.decode(Email.encode(decoded))).toBe(decoded);
 
     // 非法输入在进入 normalize 回调前已被基础 Codec 拦截
-    expect(Email.safeDecode(123)).toMatchObject({
+    expect(Email.safeParse(123)).toMatchObject({
       ok: false,
       issues: [{ code: "type.string" }],
     });
-    expect(Email.safeEncode(123 as unknown as string)).toMatchObject({
+    expect(Email.safeDump(123)).toMatchObject({
       ok: false,
       issues: [{ code: "type.string" }],
     });
@@ -195,7 +195,7 @@ describe("codec combinators", () => {
 
     expect(utcStringFromDate.decode(date)).toBe("2026-11-09T00:00:00.000Z");
     expect(utcStringFromDate.encode("2026-11-09T02:00:00+02:00")).toEqual(date);
-    expect(utcStringFromDate.safeDecode("not-a-date")).toMatchObject({
+    expect(utcStringFromDate.safeParse("not-a-date")).toMatchObject({
       ok: false,
       issues: [{ code: "type.datetime" }],
     });
@@ -250,7 +250,7 @@ describe("codec combinators", () => {
       expect(status.decode(item)).toBe(item);
       expect(status.encode(item)).toBe(item);
     }
-    expect(status.safeDecode(500)).toMatchObject({
+    expect(status.safeParse(500)).toMatchObject({
       ok: false,
       issues: [{ code: "value.literal" }],
     });
@@ -270,7 +270,7 @@ describe("codec combinators", () => {
     expect(timestampOrIso.encode(date)).toBe("2026-01-01T00:00:00.000Z");
     expect(timestampOrIso.encode(1700000000)).toBe(1700000000);
 
-    expect(timestampOrIso.safeDecode(true)).toStrictEqual({
+    expect(timestampOrIso.safeParse(true)).toStrictEqual({
       ok: false,
       issues: [
         { path: [], code: "union.no_match", message: "Input did not match any union branch" },

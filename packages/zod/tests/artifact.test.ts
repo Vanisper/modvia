@@ -13,15 +13,15 @@ describe("@modvia/zod packaged artifact", () => {
     );
 
     const AuditLog = defineModel({
-      naming: snakeCase,
+      alias: snakeCase,
       fields: {
         actorEmail: zodCodec(z.email()),
-        occurredAtMs: IsoToTimestamp.from("occurred_at"),
+        occurredAtMs: IsoToTimestamp.alias("occurred_at"),
         note: string().optional(),
       },
     });
 
-    const decoded = AuditLog.decode({
+    const decoded = AuditLog.parse({
       actor_email: "ops@example.com",
       occurred_at: "2026-11-09T00:00:00.000Z",
     });
@@ -29,7 +29,7 @@ describe("@modvia/zod packaged artifact", () => {
       actorEmail: "ops@example.com",
       occurredAtMs: 1794182400000,
     });
-    expect(AuditLog.encode(decoded)).toStrictEqual({
+    expect(AuditLog.dump(decoded)).toStrictEqual({
       actor_email: "ops@example.com",
       occurred_at: "2026-11-09T00:00:00.000Z",
     });
