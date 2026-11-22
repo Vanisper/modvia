@@ -1,6 +1,6 @@
-import { createCodec } from "./kernel.ts";
+import { createCodec, isFieldLiteral } from "./kernel.ts";
 import type { IssueCollector } from "./errors.ts";
-import type { Codec } from "./types.ts";
+import type { Codec, FieldLiteral } from "./types.ts";
 
 export interface StringOptions {
   readonly trim?: boolean;
@@ -58,12 +58,51 @@ export function oneOf<const Values extends readonly string[]>(
   const expectedMessage = `Expected one of: ${[...values].join(", ")}`;
   const isAllowed = (value: string): value is Values[number] => values.has(value);
 
-  return createCodec<Values[number], Values[number]>((input, _direction, collector) => {
-    if (typeof input !== "string" || !isAllowed(input)) {
-      return collector.add("string.one_of", expectedMessage);
+  return createCodec<Values[number], Values[number]>(
+    (input, _direction, collector) => {
+      if (typeof input !== "string" || !isAllowed(input)) {
+        return collector.add("string.one_of", expectedMessage);
+      }
+      return input;
+    },
+    { allowedLiterals: [...values] },
+  );
+}
+
+/** 精确匹配一个或多个原始字面量（按 Object.is 比较） */
+export function literal<const Values extends readonly [FieldLiteral, ...FieldLiteral[]]>(
+  ...allowedValues: Values
+): Codec<Values[number], Values[number]> {
+  if (allowedValues.length === 0) {
+    throw new RangeError("literal requires at least one value");
+  }
+  if (!allowedValues.every(isFieldLiteral)) {
+    throw new TypeError("literal only accepts string, number, boolean, null, or undefined values");
+  }
+
+  const uniqueValues: FieldLiteral[] = [];
+  for (const candidate of allowedValues) {
+    if (!uniqueValues.some((existing) => Object.is(existing, candidate))) {
+      uniqueValues.push(candidate);
     }
-    return input;
-  });
+  }
+  const expectedMessage = `Expected literal: ${uniqueValues.map(formatLiteral).join(", ")}`;
+
+  return createCodec<Values[number], Values[number]>(
+    (input, _direction, collector) => {
+      for (const candidate of uniqueValues) {
+        if (Object.is(input, candidate)) return candidate as Values[number];
+      }
+      return collector.add("value.literal", expectedMessage);
+    },
+    { allowedLiterals: uniqueValues },
+  );
+}
+
+function formatLiteral(value: FieldLiteral): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Object.is(value, -0)) return "-0";
+  return String(value);
 }
 
 /**

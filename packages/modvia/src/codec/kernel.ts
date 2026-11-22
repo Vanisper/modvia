@@ -17,6 +17,7 @@ import type {
   FieldPresence,
   SafeResult,
   StandardSchemaV1,
+  ValueCodecInput,
 } from "./types.ts";
 
 export type CodecDirection = "decode" | "encode";
@@ -29,6 +30,7 @@ export type InternalRunner<T, Encoded> = (
 
 const runnerSymbol = Symbol.for("modvia.codecRunner");
 const literalStateSymbol = Symbol.for("modvia.literalState");
+export const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
 const fieldBrand = Symbol.for("modvia.Field");
 
 interface LiteralState {
@@ -62,14 +64,20 @@ export function defineCodec<T, Encoded = T>(
   });
 }
 
+interface CodecMetadata {
+  readonly literalState?: LiteralState;
+  readonly allowedLiterals?: readonly FieldLiteral[];
+}
+
 export function createCodec<T, Encoded>(
   runner: (
     input: unknown,
     direction: CodecDirection,
     collector: IssueCollector,
   ) => (T | Encoded) | Invalid,
-  literalState?: LiteralState,
+  metadata?: CodecMetadata,
 ): Codec<T, Encoded> {
+  const literalState = metadata?.literalState;
   const safeDecode = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
   const safeEncode = (value: T): SafeResult<Encoded> => runSafe<Encoded>(runner, value, "encode");
 
@@ -101,6 +109,15 @@ export function createCodec<T, Encoded>(
     encode,
     safeDecode,
     safeEncode,
+    check(rule: (value: T, context: CodecContext) => void) {
+      if (typeof rule !== "function") {
+        throw new TypeError("check requires a validation function");
+      }
+      return createCheckedCodec(codec, rule);
+    },
+    pipe<Next>(next: ValueCodecInput<Next, T>) {
+      return createPipedCodec(codec, next);
+    },
     or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(...values: Literals) {
       assertValidLiterals(values);
       return createLiteralExtendedCodec<T, Encoded, Literals>(codec, values, literalState);
@@ -121,6 +138,11 @@ export function createCodec<T, Encoded>(
   if (literalState) {
     Object.defineProperty(codec, literalStateSymbol, { value: literalState });
   }
+  if (metadata?.allowedLiterals) {
+    Object.defineProperty(codec, allowedLiteralsSymbol, {
+      value: Object.freeze([...metadata.allowedLiterals]),
+    });
+  }
   return Object.freeze(codec);
 }
 
@@ -139,6 +161,24 @@ export function extendCodec<T, Encoded, Extra extends object>(
   return Object.freeze(extended);
 }
 
+export function executeCodec<T, Encoded>(
+  codec: CodecLike<T, Encoded>,
+  input: unknown,
+  direction: "decode",
+  collector: IssueCollector,
+): T | Invalid;
+export function executeCodec<T, Encoded>(
+  codec: CodecLike<T, Encoded>,
+  input: unknown,
+  direction: "encode",
+  collector: IssueCollector,
+): Encoded | Invalid;
+export function executeCodec<T, Encoded>(
+  codec: CodecLike<T, Encoded>,
+  input: unknown,
+  direction: CodecDirection,
+  collector: IssueCollector,
+): (T | Encoded) | Invalid;
 export function executeCodec<T, Encoded>(
   codec: CodecLike<T, Encoded>,
   input: unknown,
@@ -290,6 +330,59 @@ export function createField<
   return Object.freeze(fieldDescriptor);
 }
 
+export function createPipedCodec<Mid, Encoded, Out>(
+  first: ValueCodecInput<Mid, Encoded>,
+  second: ValueCodecInput<Out, Mid>,
+): Codec<Out, Encoded> {
+  assertValueCodec(first, "pipe");
+  assertValueCodec(second, "pipe");
+
+  return createCodec<Out, Encoded>((input, direction, collector) => {
+    if (direction === "decode") {
+      const mid = executeCodec(first, input, "decode", collector);
+      if (mid === INVALID) return INVALID;
+      return executeCodec(second, mid, "decode", collector);
+    }
+    const mid = executeCodec(second, input, "encode", collector);
+    if (mid === INVALID) return INVALID;
+    return executeCodec(first, mid, "encode", collector);
+  });
+}
+
+export function isFieldLiteral(value: unknown): value is FieldLiteral {
+  return (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function createCheckedCodec<T, Encoded>(
+  base: Codec<T, Encoded>,
+  rule: (value: T, context: CodecContext) => void,
+): Codec<T, Encoded> {
+  return createCodec<T, Encoded>((input, direction, collector) => {
+    const converted = executeCodec(base, input, direction, collector);
+    if (converted === INVALID) return INVALID;
+
+    const domainValue = (direction === "decode" ? converted : input) as T;
+    try {
+      rule(domainValue, sharedContext);
+      return converted;
+    } catch (error) {
+      if (isAbortSignal(error)) {
+        return collector.add(error.code, error.message);
+      }
+      if (isValidationError(error)) {
+        return collector.addRelativeIssues(error.issues);
+      }
+      throw error;
+    }
+  });
+}
+
 function runSafe<Result>(
   runner: (input: unknown, direction: CodecDirection, collector: IssueCollector) => unknown,
   input: unknown,
@@ -324,8 +417,10 @@ function createLiteralExtendedCodec<
       return executeCodec(base, input, direction, collector);
     },
     {
-      base: base as Codec<unknown, unknown>,
-      literals: mergedLiterals,
+      literalState: {
+        base: base as Codec<unknown, unknown>,
+        literals: mergedLiterals,
+      },
     },
   );
 }
@@ -368,14 +463,4 @@ function assertValidLiterals(
       "or requires at least one string, number, boolean, null, or undefined literal",
     );
   }
-}
-
-function isFieldLiteral(value: unknown): value is FieldLiteral {
-  return (
-    value === null ||
-    value === undefined ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
 }

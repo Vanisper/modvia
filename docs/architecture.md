@@ -42,10 +42,11 @@ packages/modvia/src/
 │   ├── index.ts        # 子入口（"modvia/codec"）
 │   ├── types.ts        # 核心契约、结果类型、StandardSchemaV1 与字段接口
 │   ├── errors.ts       # ValidationError 与内部零栈开销 IssueCollector
-│   ├── kernel.ts       # Codec 构造器、defineCodec 与通用值组合子
-│   ├── field.ts        # Field 描述符构造、识别与作用域转换
-│   ├── scalars.ts      # 内置标量规则（string、number、boolean、oneOf、isoDateTime 等）
-│   └── containers.ts   # 值容器规则（arrayOf、recordOf 等）
+│   ├── object-utils.ts # 纯对象判定与自有数据属性定义工具
+│   ├── kernel.ts       # Codec/Field 构造器、defineCodec、check 与哨兵扩展
+│   ├── combinators.ts  # 通用值组合子（pipe、invert、lazy、unionOf）
+│   ├── scalars.ts      # 内置标量规则（string、number、boolean、oneOf、literal、isoDateTime）
+│   └── containers.ts   # 值容器规则（arrayOf、recordOf）
 └── model/              # 领域模型层（单向依赖 ../codec）
     ├── types.ts        # Model 接口、字段表静态布局与类型提取工具
     ├── object.ts       # 字段解析、纯对象判定、自有属性写入与原型链 getter 读取

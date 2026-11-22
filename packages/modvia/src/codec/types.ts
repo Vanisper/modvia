@@ -86,6 +86,18 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   /** 校验业务值并编码，返回判别结果而不抛出校验异常 */
   safeEncode(this: void, value: T): SafeResult<Encoded>;
   /**
+   * 对业务值附加对称校验规则，解码与编码两端均执行同一约束
+   *
+   * @description 基础 Codec 通过后才调用回调，通过 context.fail 报告校验问题
+   */
+  check(this: void, rule: (value: T, context: CodecContext) => void): Codec<T, Encoded>;
+  /**
+   * 将当前 Codec 与下游 Codec 串联为双向管道
+   *
+   * @description 解码按「当前 → next」顺序执行，编码按「next → 当前」逆序执行
+   */
+  pipe<Next>(this: void, next: ValueCodecInput<Next, T>): Codec<Next, Encoded>;
+  /**
    * 将一个或多个显式字面量作为哨兵值加入双向取值范围
    *
    * @description 编解码均先按 Object.is 优先匹配字面量，命中时原样返回

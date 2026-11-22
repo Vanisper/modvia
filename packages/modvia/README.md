@@ -113,6 +113,39 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 - `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
 - `.optional()` 与 `.required()`：控制父对象是否允许省略该键；显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
 - `arrayOf(elementCodec)`：按位置编解码数组元素；元素参数仅接受值级 `Codec`，若对元素误传带 `.from()` 或 `.optional()` 的 `Field`，编译期与定义期均会直接拦截（可通过 `someField.codec` 提取纯值规则）。
+- `recordOf(valueCodec)` 与 `recordOf(keyCodec, valueCodec)`：编解码键名动态的普通对象字典（如按语言代码或实体 ID 索引的映射表），错误路径保留对应键名。
+- `literal(...values)`：按 `Object.is` 精确匹配一个或多个原始字面量（支持字符串、数字、布尔值、`null`、`undefined`）。
+
+## 值组合子：对称校验、双向管道与联合
+
+对于无需手写双份转换的常见场景，可直接使用值级组合原语：
+
+```ts
+import { defineCodec, invert, isoDateTime, number, string, unionOf } from "modvia";
+
+// 1. 对称校验（解码与编码共用同一条业务规则）
+const slug = string({ trim: true }).check((value, context) => {
+  if (!/^[a-z0-9-]+$/.test(value)) {
+    context.fail("string.slug", "Expected a lowercase slug");
+  }
+});
+
+// 2. 双向管道串联（解码正向执行，编码自动逆向执行）
+const intFromString = defineCodec<number, string>({
+  decode: (raw, ctx) =>
+    /^-?\d+$/.test(String(raw)) ? Number(raw) : ctx.fail("number.int", "Invalid integer"),
+  encode: (n) => String(n),
+});
+const PositiveCount = string({ trim: true })
+  .pipe(intFromString)
+  .check((n, ctx) => {
+    if (n <= 0) ctx.fail("number.positive", "Expected > 0");
+  });
+
+// 3. 从左到右多 Codec 联合与方向反转
+const FlexibleTime = unionOf(isoDateTime(), number());
+const UtcTextFromDate = invert(isoDateTime());
+```
 
 ## 领域工厂与 Class 实例
 
@@ -154,34 +187,34 @@ const entityDTO: UserDTO = UserEntityModel.encode(entity);
 
 ## 自定义 Codec
 
-使用 `defineCodec` 创建标准双向编解码器，并通过 `context.fail(code, message)` 报告校验错误：
+当业务值与外部表示类型不同时，使用 `defineCodec` 声明双向转换逻辑，并通过 `context.fail(code, message)` 报告校验错误：
 
 ```ts
 import { defineCodec, defineModel } from "modvia";
 
-const slug = defineCodec<string, string>({
+const centsFromYuan = defineCodec<number, string>({
   decode(input, context) {
-    if (typeof input !== "string" || !/^[a-z0-9-]+$/.test(input)) {
-      return context.fail("string.slug", "Expected a lowercase slug");
+    if (typeof input !== "string" || !/^\d+(\.\d{1,2})?$/.test(input)) {
+      return context.fail("money.format", "Expected decimal yuan string");
     }
-    return input;
+    return Math.round(Number(input) * 100);
   },
-  encode(value, context) {
-    if (!/^[a-z0-9-]+$/.test(value)) {
-      return context.fail("string.slug", "Expected a lowercase slug");
+  encode(cents, context) {
+    if (!Number.isSafeInteger(cents)) {
+      return context.fail("money.cents", "Expected integer cents");
     }
-    return value;
+    return (cents / 100).toFixed(2);
   },
 });
 
-const Article = defineModel({
+const Order = defineModel({
   fields: {
-    slug: slug.from("article_slug"),
+    amountCents: centsFromYuan.from("amount_yuan"),
   },
 });
 ```
 
-若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.from()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
+若两端类型相同且只需附加约束，优先使用 `string().check(...)` 等对称校验方法。若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.from()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
 
 ## 日期时间
 
@@ -201,10 +234,10 @@ timestamp.encode(instant); // "2026-11-18T16:15:00.123Z"
 
 ## 递归模型
 
-自引用结构需先为外层变量声明显式类型以帮助 TypeScript 结束递归推导：
+自引用结构通过 `lazy(() => Model)` 延迟求值，并为外层变量声明显式类型以帮助 TypeScript 收敛递归推导：
 
 ```ts
-import { arrayOf, defineCodec, defineModel, string, type Codec, type Model } from "modvia";
+import { arrayOf, defineModel, lazy, string, type Model } from "modvia";
 
 interface NodeData {
   readonly id: string;
@@ -215,13 +248,11 @@ interface NodeDTO {
   children: NodeDTO[];
 }
 
-const nodeCodec: Codec<NodeData, NodeDTO> = defineCodec({
-  decode: (input) => nodeModel.decode(input),
-  encode: (value) => nodeModel.encode(value),
-});
-
-const nodeModel: Model<NodeData, NodeDTO> = defineModel({
-  fields: { id: string(), children: arrayOf(nodeCodec) },
+const NodeModel: Model<NodeData, NodeDTO> = defineModel({
+  fields: {
+    id: string(),
+    children: arrayOf(lazy(() => NodeModel)),
+  },
 });
 ```
 
@@ -239,8 +270,11 @@ const nodeModel: Model<NodeData, NodeDTO> = defineModel({
 | `type.datetime`         | `isoDateTime()` 解码输入非字符串，或编码输入不是有效 `Date` |
 | `string.min_length`     | `string({ minLength })` 长度不足（按 UTF-16 码元计）        |
 | `string.one_of`         | `oneOf()` 收到枚举集合之外的值                              |
+| `value.literal`         | `literal()` 收到声明字面量集合之外的值                      |
 | `datetime.invalid`      | 日期时间字符串的格式、日历日期、时分秒或时区偏移非法        |
 | `datetime.out_of_range` | 日期时间换算为 UTC 后超出原生 `Date` 可表示范围             |
+| `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞             |
+| `union.no_match`        | `unionOf` 的所有候选分支均未匹配当前输入                    |
 | `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段  |
 
 ## 开发与验证

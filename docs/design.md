@@ -13,10 +13,10 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 | `Field<T, E, Source, Presence>` | 对象属性级 | 将 `Codec` 绑定到具名属性槽位，承载外部键名（`source`）与键缺省规则（`presence`）。               |
 | `Model<Data, DTO, Out>`         | 领域模型级 | 组合字段表形成对象契约，本身亦是 `Codec<Out, DTO>`，支持通过 `withFactory` 派生领域实例输出。     |
 
-内置标量（`string`、`number`、`boolean`、`oneOf`、`isoDateTime`）、数组容器（`arrayOf`）与模型（`defineModel`）均返回标准 `Codec`：
+内置标量（`string`、`number`、`boolean`、`oneOf`、`literal`、`isoDateTime`）、值容器（`arrayOf`、`recordOf`）、组合子（`pipe`、`invert`、`lazy`、`unionOf`）与模型（`defineModel`）均返回标准 `Codec`：
 
 - 任意 `Codec`（包括嵌套 `Model`）都可直接调用 `.from(name)` 或 `.optional()` 跃迁为 `Field`，无需额外包装函数。
-- 值级容器（如 `arrayOf`）仅接受值级 `Codec` 或裸 `CodecLike`，在编译期与定义期同时拒绝带键绑定元数据的 `Field`。
+- 值级容器与组合子（`arrayOf`、`recordOf`、`pipe`、`invert`、`lazy`、`unionOf`）仅接受值级 `Codec` 或裸 `CodecLike`，在编译期与定义期同时拒绝带键绑定元数据的 `Field`。
 - 若需复用已有 `Field` 的底层值规则作为容器元素，可通过 `field.codec` 显式取回纯值级 `Codec`。
 
 ## 执行模型与错误协议
@@ -30,12 +30,16 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 ## 组合代数与链式规则
 
-每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。各方法遵循明确的代数规则：
+每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。系统不提供通用的黑盒交集算子（`.and()`），而是将「单值叠加约束」与「对象合并字段」分别交由值级管道（`.check` / `pipe`）与模型扩展承接。各方法遵循明确的代数规则：
 
-- **字面量哨兵优先（`.or` / `.nullable`）**：接受一个或多个原始字面量（`string | number | boolean | null | undefined`），编解码两端均先按 `Object.is` 短路匹配字面量，未命中时再交由基础 `Codec` 处理。连续链式调用 `.or(a).or(b)` 与单次调用 `.or(a, b)` 等价，内部自动扁平化合并字面量列表。
+- **管道包裹顺序（`.check` / `.pipe`）**：`.check(rule)` 在基础 `Codec` 通过后对业务值执行对称约束，解码与编码均按书写顺序由内向外执行；`pipe(first, second)` 在解码时按 `first → second` 正向传递，在编码时按 `second → first` 逆向传递。
+- **字面量哨兵优先（`.or` / `.nullable`）**：接受一个或多个原始字面量（`string | number | boolean | null | undefined`），编解码两端均先按 `Object.is` 短路匹配字面量，未命中时再交由当前内部 `Codec` 处理。连续相邻调用 `.or(a).or(b)` 与单次调用 `.or(a, b)` 等价，内部自动扁平化合并；与 `.check` 交错时严格遵循外层包裹内层的洋葱顺序。
+- **多分支从左到右联合（`unionOf`）**：按参数顺序依次尝试分支，首个无错误返回的分支胜出并回滚前序分支的试探记录；全部分支均不匹配时报 `union.no_match`。
+- **方向反转与惰性引用（`invert` / `lazy`）**：`invert` 对调 `decode` 与 `encode` 方向；`lazy` 将目标 `Codec` 的求值推迟到首次运行并缓存解析结果，支持自引用递归结构。
+- **动态字典容器（`recordOf`）**：接受纯对象输入，逐个自有可枚举键执行键与值的双向转换；若键转换后产生同名碰撞则报 `record.duplicate_key`。
 - **外部键重绑覆盖（`.from`）**：多次调用 `.from("a").from("b")` 以最后一次声明的外部键名为准，不叠加底层转换层。
 - **键存在性幂等转换（`.optional` / `.required`）**：重复调用 `.optional()` 或 `.required()` 保持幂等，并支持在复用字段时双向切换必填与可选状态。
-- **属性修饰换序等价**：同一字段上的 `.from(name)`、`.optional()` 与字面量扩展 `.or(...)` 互换调用顺序得到相同的静态类型与运行时行为。
+- **属性修饰换序等价**：进入属性态后，同一字段上的 `.from(name)`、`.optional()` 与字面量扩展 `.or(...)` 互换调用顺序得到相同的静态类型与运行时行为。
 
 ### 缺键与特殊值的正交矩阵
 
