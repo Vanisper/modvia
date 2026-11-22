@@ -148,8 +148,7 @@ describe("声明字段的 getter", () => {
     const Numeric = defineModel({ fields: { count: quantity } });
     const Clearable = defineModel({ fields: { count: quantity.or(undefined) } });
 
-    const encode = Numeric.encode.bind(Numeric);
-    expect(() => Reflect.apply(encode, undefined, [draft])).toThrow(
+    expect(() => Reflect.apply(Numeric.encode, undefined, [draft])).toThrow(
       expect.objectContaining({
         issues: [expect.objectContaining({ path: ["count"], code: "type.number" })],
       }),

@@ -1,49 +1,61 @@
 # Modvia
 
-Modvia 是面向 TypeScript 应用的模型层基础库。它以业务模型为中心，统一运行时校验、DTO 映射与双向序列化，让 Service 和页面消费可信模型，而不是重复编写字段检查与对象拷贝。
+Modvia 是面向 TypeScript 应用的双向编解码与领域模型层基础库，核心保持零运行时依赖。
 
-## 核心思路
+它以双向契约为中心，统一外部数据校验、DTO 键名映射、嵌套对象构造与反向序列化，使业务模块直接消费可信模型，无需重复编写入参检查与字段搬运代码。
 
-- **普通对象优先**：不继承基类即可获得完整的定义、校验、嵌套转换与编码能力。
-- **class 可选**：通过真实工厂创建领域实例，保留构造器、原型方法和领域行为。
-- **双向契约明确**：同一份模型定义连接外部 DTO 与内部模型，不依赖类型断言或隐式字段猜测。
-- **模型层独立**：不依赖 HTTP、Service 框架、UI、缓存或具体平台。
+## 核心特性
+
+- **分层双入口**：`modvia/codec` 提供独立的值级双向编解码底座，`modvia` 在其上构建对象字段映射与领域模型。
+- **普通对象优先，class 可选**：默认产出零额外开销的普通对象；通过 `withFactory` 可按需构造真实 `class` 实例并保留原型行为。
+- **作用域严格正交**：值域扩展（`.or` / `.nullable`）与对象键规则（`.from` / `.optional`）职责分离，编译期拦截容器作用域误用。
+- **双模式执行与生态互操作**：同时提供抛错调用与 `safeDecode` / `safeEncode` 判别结果，原生实现 `StandardSchemaV1`（`~standard`）。
 
 ## 快速示例
 
 ```ts
-import { defineModel, string, type InferData } from "modvia";
+import { defineModel, isoDateTime, string, type InferData, type InferDTO } from "modvia";
 
 const User = defineModel({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
+    createdAt: isoDateTime().from("created_at"),
   },
 });
 
 type UserData = InferData<typeof User>;
+type UserDTO = InferDTO<typeof User>;
 
-const user = User.decode({ id: "u-1", name: "  林舟  ", extra: "ignored" });
-// { id: "u-1", name: "林舟" }
+const user = User.decode({
+  id: "u-1",
+  name: "  林舟  ",
+  created_at: "2026-11-09T02:00:00+02:00",
+  extra: "ignored",
+});
+// { id: "u-1", name: "林舟", createdAt: Date("2026-11-09T00:00:00.000Z") }
 
 const dto = User.encode(user);
+// { id: "u-1", name: "林舟", created_at: "2026-11-09T00:00:00.000Z" }
 ```
 
-字段别名、可选键、字面量、数组与工厂的用法见[模型包使用说明](packages/modvia/README.md)。接口职责与模型读写契约见[设计文档](docs/design.md)。
+## 文档导航
 
-## 开发
+- [包使用手册](packages/modvia/README.md)：API 用法、场景示例与稳定错误码表。
+- [架构与包规划](docs/architecture.md)：分层模型、模块边界与演进路线。
+- [语义与设计规范](docs/design.md)：编解码契约、组合代数与对象读写不变量。
+
+## 工作区开发
 
 ```sh
 vp install --frozen-lockfile
 vp run ready
 ```
 
-`ready` 依次执行：
+`vp run ready` 按依赖顺序执行：
 
-1. 工作区构建；
-2. 格式与静态检查；
-3. 测试。
+1. 工作区构建（生成 `dist` 与类型声明）；
+2. 格式、静态检查与分层依赖守卫；
+3. 单元与产物集成测试（`tests/artifact.test.ts` 直接通过 `modvia` 与 `modvia/codec` 包出口验证构建产物）。
 
-构建排在最前，是因为产物测试 `packages/modvia/tests/artifact.test.ts` 通过包名消费 `dist` 产物；未构建时单独运行 `vp test`，会在该文件上报导入失败。
-
-模型包位于 `packages/modvia`；`apps/website` 与 `packages/utils` 保留为 Vite+ 工具链示例。
+核心实现位于 `packages/modvia`；`apps/website` 与 `packages/utils` 仅保留为 Vite+ 工具链示例。

@@ -9,6 +9,19 @@ export default defineConfig({
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
+    overrides: [
+      {
+        files: ["packages/modvia/src/codec/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../model", "../model/*", "**/model", "**/model/*"],
+            },
+          ],
+        },
+      },
+    ],
   },
   run: {
     cache: true,

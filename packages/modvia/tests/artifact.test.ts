@@ -1,9 +1,18 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
-import { arrayOf, defineModel, isModelValidationError, isoDateTime, oneOf, string } from "modvia";
-import type { InferData, InferDTO } from "modvia";
+import {
+  arrayOf,
+  defineModel,
+  isValidationError,
+  isoDateTime,
+  oneOf,
+  string,
+  type InferData,
+  type InferDTO,
+} from "modvia";
+import * as codecEntry from "modvia/codec";
 
-// 通过包名自引用消费打包产物（exports → dist/index.mjs），
-// 因此本文件必须在工作区构建之后运行（ready 已按 构建 → 检查 → 测试 排序）。
+// 通过包出口消费打包产物（modvia → dist/index.mjs，modvia/codec → dist/codec.mjs），
+// 必须在工作区构建之后运行（vp run ready 已按 构建 → 检查 → 测试 排序）。
 
 const Department = defineModel({
   fields: {
@@ -55,19 +64,24 @@ const dtoList = [
   },
 ];
 
-function captureError(run: () => unknown): unknown {
-  try {
-    run();
-    return undefined;
-  } catch (error) {
-    return error;
-  }
-}
+describe("packaged artifacts (modvia & modvia/codec)", () => {
+  test("主入口与 ./codec 子路径共享同一套编解码原语引用", () => {
+    expect(string).toBe(codecEntry.string);
+    expect(arrayOf).toBe(codecEntry.arrayOf);
+    expect(isoDateTime).toBe(codecEntry.isoDateTime);
+    expect(isValidationError).toBe(codecEntry.isValidationError);
+    expect("defineModel" in codecEntry).toBe(false);
 
-describe("packaged artifact", () => {
+    const nums = codecEntry.arrayOf(codecEntry.number().or("auto", null));
+    expect(nums.safeDecode([1, "auto", null])).toStrictEqual({
+      ok: true,
+      value: [1, "auto", null],
+    });
+  });
+
   test("从包入口组合可选日期数组并编码工厂实例的公开字段", () => {
     const Schedule = defineModel({
-      fields: { dates: arrayOf(isoDateTime().or(null)).optional().from("event_dates") },
+      fields: { dates: arrayOf(isoDateTime().nullable()).optional().from("event_dates") },
     });
     expectTypeOf<InferData<typeof Schedule>>().toEqualTypeOf<{
       readonly dates?: (Date | null)[];
@@ -93,7 +107,7 @@ describe("packaged artifact", () => {
     expect(Calendars.encode(Calendars.decode({}))).toStrictEqual({ event_dates: [] });
   });
 
-  test("decodes and encodes a full round-trip from dist", () => {
+  test("通过 dist 完成完整实例往返与 Standard Schema 校验", () => {
     const members = Members.decode(dtoList);
     expect(members).toHaveLength(1);
 
@@ -124,20 +138,28 @@ describe("packaged artifact", () => {
         department: { id: "d-1", name: "研发部" },
       },
     ]);
+
+    expect(Members["~standard"].validate(dtoList)).toMatchObject({
+      value: [expect.any(Member)],
+    });
   });
 
-  test("aggregates validation errors from the packaged build", () => {
-    const error = captureError(() =>
+  test("从打包产物聚合多字段校验错误", () => {
+    let caught: unknown;
+    try {
       MemberModel.decode({
         id: "m-2",
         name: " ",
         role: "owner",
         joined_at: "2026-02-30T00:00:00Z",
         department: [],
-      }),
-    );
-    if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
-    expect(error.issues.map((issue) => issue.code)).toEqual([
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    if (!isValidationError(caught)) throw new Error("Expected ValidationError");
+    expect(caught.issues.map((issue) => issue.code)).toEqual([
       "string.min_length",
       "string.one_of",
       "datetime.invalid",

@@ -1,13 +1,20 @@
 # modvia
 
-`modvia` 是独立的 TypeScript 模型层库，用一份声明完成运行时校验、DTO 映射、嵌套构造和双向序列化。模型默认返回普通对象，也可以通过工厂构造带方法的对象或 class 实例。
+`modvia` 是零运行时依赖的 TypeScript 双向编解码与领域模型层库。通过一份字段声明即可同时完成运行时校验、DTO 键名映射、嵌套结构转换与反向序列化。
 
-当前包处于开发阶段，尚未发布。
+当前包处于 `0.x` 开发阶段，尚未发布。
 
-## 定义与解码
+## 模块入口
+
+包提供两个子路径入口，共享同一套底层原语：
+
+- `modvia`：完整入口，包含领域模型（`defineModel`）与全部编解码能力。
+- `modvia/codec`：纯粹的值级双向编解码底座，不包含领域模型层，适合仅需值转换与容器校验的场景。
+
+## 定义模型与双向转换
 
 ```ts
-import { defineModel, type InferData, type InferDTO, isoDateTime, oneOf, string } from "modvia";
+import { defineModel, isoDateTime, oneOf, string, type InferData, type InferDTO } from "modvia";
 
 const Department = defineModel({
   fields: {
@@ -37,48 +44,61 @@ const user = User.decode({
   department: { id: "d-1", name: "研发部" },
   extra: "ignored",
 });
-```
 
-`user` 是带完整类型的普通对象：
-
-- `name` 去除了首尾空白，`createdAt` 转为有效 `Date`；
-- `department` 递归构造为嵌套模型数据；
-- 未声明的 `extra` 被剥离；
-- `UserData` 的字段为只读类型，但运行时不会自动深度冻结对象。
-
-## 编码回 DTO
-
-```ts
 const dto: UserDTO = User.encode(user);
+// {
+//   id: "u-1",
+//   name: "林舟",
+//   role: "manager",
+//   created_at: "2026-11-09T00:00:00.000Z",
+//   department: { id: "d-1", name: "研发部" }
+// }
 ```
 
-结果为新的普通对象：
+- 解码只接受普通对象，自动剥离未声明的外部属性。
+- `UserData` 的属性推导为只读类型，编解码每次均返回新对象容器。
+- 嵌套模型本身就是标准 `Codec`，可直接作为字段、放入数组或继续调用 `.from()` / `.optional()` / `.nullable()`。
+
+## 安全解析与错误处理
+
+除抛出 `ValidationError` 的 `decode` / `encode` 外，所有编解码器与模型均提供不抛异常的 `safeDecode` / `safeEncode`：
 
 ```ts
-{
-  id: "u-1",
-  name: "林舟",
-  role: "manager",
-  created_at: "2026-11-09T00:00:00.000Z",
-  department: { id: "d-1", name: "研发部" },
+import { isValidationError } from "modvia";
+
+const result = User.safeDecode(payload);
+if (!result.ok) {
+  for (const issue of result.issues) {
+    console.log(issue.path, issue.code, issue.message);
+  }
+}
+
+try {
+  User.decode(payload);
+} catch (error: unknown) {
+  if (!isValidationError(error)) throw error;
+  console.log(error.issues);
 }
 ```
 
-编码只读取声明字段，仍会执行字段 Codec。日期输出统一为 UTC ISO 字符串；其他规范化转换以对应字段 Codec 为准。
+- 解码失败时，`issue.path` 使用外部 DTO 键名与数组下标（如 `[1, "created_at"]`）。
+- 编码失败时，`issue.path` 使用模型业务键名与数组下标（如 `[1, "createdAt"]`）。
+- 所有 `Codec`、`Field` 与 `Model` 均内置 `StandardSchemaV1`（`~standard`），可直接传入支持 Standard Schema 的表单与服务端框架。
 
-## 字段组合
+## 字段映射、哨兵值与数组容器
 
-字段可以独立读写，也可以作为多个模型的字段复用。`.from(name)`、`.or(value)` 和 `.optional()` 都返回派生字段，保留同一字段上的其他约定。
+标量、容器与嵌套模型均支持不可变链式派生：
 
 ```ts
 import { arrayOf, defineModel, number, string } from "modvia";
 
 const SKU = string({ trim: true, minLength: 1 });
+
 const Product = defineModel({
   fields: {
     sku: SKU.from("product_code"),
-    stock: number().or("unlimited"),
-    tags: arrayOf(string().or(null)).from("labels").optional(),
+    stock: number().or("unlimited", "discontinued"),
+    tags: arrayOf(string().nullable()).from("labels").optional(),
   },
 });
 
@@ -89,31 +109,14 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 // { product_code: "A-01", stock: "unlimited", labels: [null, "夏季"] }
 ```
 
-- `from` 在模型读写外部对象时指定键名。`SKU` 本身仍可用作同名字段，或直接调用 `SKU.decode(" A-01 ")`。
-- `or` 接受一个显式字符串、数字、布尔值、`null` 或 `undefined`，两端类型都增加该字面量。编解码时按 `Object.is` 优先匹配，命中后直接保留它。若加入的字符串恰好也是 `isoDateTime()` 的规范输出，解码该字符串时会得到字符串。
-- `optional` 允许父对象省略键，解码与编码都保留缺省。示例中的业务类型有 `readonly tags?: (string | null)[]`，DTO 则有 `labels?: (string | null)[]`。
+- `.from(name)`：指定父对象读写该字段时使用的外部键名；同一模型内的外部键名不能重复。
+- `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
+- `.optional()` 与 `.required()`：控制父对象是否允许省略该键；显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
+- `arrayOf(elementCodec)`：按位置编解码数组元素；元素参数仅接受值级 `Codec`，若对元素误传带 `.from()` 或 `.optional()` 的 `Field`，编译期与定义期均会直接拦截（可通过 `someField.codec` 提取纯值规则）。
 
-字段值为 `undefined` 时键已经存在。对 `SKU.optional()`，`{}` 可以通过，`{ sku: undefined }` 会触发 `type.string`。对 `SKU.or(undefined)`，后者会保留键和值，缺键则触发 `field.required`。两种输入都合法时写 `SKU.or(undefined).optional()`。TypeScript 的 `exactOptionalPropertyTypes` 设置影响显式 `undefined` 的静态检查，运行时始终按字段规则校验。
+## 领域工厂与 Class 实例
 
-封装或导出字段时，保留 TypeScript 推导出的字段类型，模型就能继续推导别名和可选键。显式标注成基础类型 `Codec<T, E>` 只保留值的编解码签名，运行时字段仍带有原来的别名和缺省规则。
-
-## 列表
-
-```ts
-import { arrayOf } from "modvia";
-
-const Users = arrayOf(User);
-const users = Users.decode(response);
-const dtoList = Users.encode(users);
-```
-
-- 列表输入必须是数组。元素错误保留下标，例如 `[2, "department", "name"]`。
-- `arrayOf(string().or(null))` 允许单个元素为 `null`，`arrayOf(string()).or(null)` 允许整个数组为 `null`。
-- `arrayOf(...).from(...).optional()` 声明数组字段的外部名和可缺省性。
-
-## 工厂输出
-
-`withFactory` 的回调接收已经完成校验和转换的字段数据。它可以返回带方法或计算属性的普通对象，也可以通过已有构造器创建 class 实例。
+`withFactory` 在整棵对象树完成校验与转换后调用工厂函数，可返回带方法的对象或真实 `class` 实例：
 
 ```ts
 class UserEntity {
@@ -142,34 +145,19 @@ class UserEntity {
 }
 
 const UserEntityModel = User.withFactory((data) => new UserEntity(data));
-const entity = UserEntityModel.decode(response);
-
-entity.displayName;
-entity.canManage();
-
+const entity = UserEntityModel.decode(payload);
 const entityDTO: UserDTO = UserEntityModel.encode(entity);
 ```
 
-- `User` 与 `UserEntityModel` 共享 Data 和 DTO，原模型不会被修改。
-- 编码时，声明字段 `name` 通过实例的公开 getter 读取，`displayName` 与 `canManage` 留在业务对象上。
-
-如果业务约定缺少页大小时取 20，可以在工厂中补上这个值。此后编码会写出补全后的字段。
-
-```ts
-import { defineModel, number } from "modvia";
-
-const Page = defineModel({ fields: { size: number().optional() } }).withFactory((data) => ({
-  size: data.size ?? 20,
-}));
-
-const page = Page.decode({}); // { size: 20 }
-Page.encode(page); // { size: 20 }
-```
+- `UserEntityModel` 与 `User` 共享相同的 `InferData` 与 `InferDTO`，原模型保持不变。
+- 编码时优先读取实例自有属性；缺少自有属性时沿原型链读取最近的同名 getter（止于 `Object.prototype` 之前），非声明字段（如 `displayName`、`canManage`）不会写出到 DTO。
 
 ## 自定义 Codec
 
+使用 `defineCodec` 创建标准双向编解码器，并通过 `context.fail(code, message)` 报告校验错误：
+
 ```ts
-import { defineCodec, defineModel, field } from "modvia";
+import { defineCodec, defineModel } from "modvia";
 
 const slug = defineCodec<string, string>({
   decode(input, context) {
@@ -188,70 +176,35 @@ const slug = defineCodec<string, string>({
 
 const Article = defineModel({
   fields: {
-    slug: field(slug).from("article_slug"),
+    slug: slug.from("article_slug"),
   },
 });
 ```
 
-`context.fail()` 产生统一的模型校验错误。自定义 Codec 抛出的其他异常原样传播，不会被误报为用户输入错误。
-
-## 错误处理
-
-```ts
-import { isModelValidationError } from "modvia";
-
-try {
-  User.decode(payload);
-} catch (error: unknown) {
-  if (!isModelValidationError(error)) throw error;
-
-  for (const issue of error.issues) {
-    console.log(issue.path, issue.code, issue.message);
-  }
-}
-```
-
-字段失败会聚合成一个 `ModelValidationError`。路径指向当前输入：解码使用 DTO 字段名，编码使用模型字段名。
-
-## 当前边界
-
-- 字段默认必填。缺键用 `.optional()` 表达，允许的特殊值用 `.or(value)` 表达。
-- 模型只收集字段表中自有、可枚举的字符串键。数字属性名按 JavaScript 规则转为字符串；符号键不参与编解码。
-- 字段外部名（别名或字段名）在定义时必须唯一，重复时 `defineModel` 抛出 `RangeError`。
-- `__proto__` 可以作为字段名或别名。对象字面量使用计算属性名 `["__proto__"]` 声明自有键，`JSON.parse` 也会保留同名自有键。默认解码对象和编码后的 DTO 都保留普通对象原型。
-- 解码输入只接受普通对象：`null`、数组、`Date`、`Map` 与 class 实例均报 `type.object`；原型为 `null` 的对象可以接受。
-- 对象与数组会构造新容器，但核心不执行通用深拷贝。
-- 未知 DTO 字段在解码时剥离；编码不会输出方法或未声明字段。
-- 编码优先读取声明字段的自有属性，再沿原型链查找最近的同名成员，止于 `Object.prototype` 之前。原型 getter 以实例为 `this` 读取一次。同名方法、原型数据属性或只有 setter 的成员会遮蔽上层 getter，按缺字段处理。getter 返回 `undefined` 时仍要校验该值。
-- 模型不能直接自引用；递归结构需要显式注解类型后再组合，见下方说明。
-- class 的字段契约由模型显式声明。跨字段校验、异步校验和局部更新的业务规则由应用处理。
-- 不依赖 HTTP、Service、UI、缓存或具体运行平台。
+若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用；需要在其上附加 `.from()` 或 `.optional()` 时，用 `field(customCodec)` 包装即可。
 
 ## 日期时间
 
-`isoDateTime()` 适合创建时间、事件发生时间等确定的时间点。解码得到毫秒精度的 `Date`，编码统一输出 UTC 字符串。原始偏移和毫秒之后的小数位会丢失。
+`isoDateTime()` 将带时区偏移的 ISO 日期时间字符串与毫秒精度 `Date` 互转：
 
 ```ts
-import { isoDateTime } from "modvia";
+import { isoDateTime } from "modvia/codec";
 
 const timestamp = isoDateTime();
 const instant = timestamp.decode("2026-11-19T00:15:00.123456+08:00");
 timestamp.encode(instant); // "2026-11-18T16:15:00.123Z"
 ```
 
-- 输入由日期、`T`、完整的时分秒和时区偏移组成。年份接受四位数字或带正负号的六位数字，`-000000` 为非法年份。
-- 偏移写作 `Z` 或 `±HH:mm`。数字偏移的小时范围是 `00`–`23`，分钟范围是 `00`–`59`，因此 `+23:59` 和 `-23:59` 都有效。
-- 小数秒可省略，也可提供一位或多位数字。解码截断超出毫秒的部分，编码固定输出三位小数秒。
-- 换算为 UTC 后，时间值必须在原生 `Date` 的范围内，即距 Unix 纪元不超过 `8_640_000_000_000_000` 毫秒，含两个端点。
-- 编码按 UTC 年份选择表示。`0000`–`9999` 使用四位数字，范围以外使用带正负号的六位数字。例如 `9999-12-31T23:30:00-01:00` 会写成 `+010000-01-01T00:30:00.000Z`。
-- 纯日期、无偏移的本地日期时间和数字时间戳不在该字段的输入范围内。这些协议可以通过自定义 Codec 指定业务表示和单位。
+- 输入必须包含日期、`T`、完整时分秒以及偏移量（`Z` 或 `-23:59` 至 `+23:59`）；年份支持四位数字或带符号六位数字（`-000000` 非法）。
+- 解码截断毫秒之后的小数位，校验公历日期合法性，并检查换算为 UTC 后的时间戳是否落在原生 `Date` 的 `±8_640_000_000_000_000` 毫秒范围内。
+- 编码统一输出三位小数秒的 UTC 字符串（`0000`–`9999` 年为四位年份，范围外为带符号六位年份）。
 
 ## 递归模型
 
-模型不能在自己的字段里直接引用自己，需要在第一次引用前给外层变量一个显式类型：
+自引用结构需先为外层变量声明显式类型以帮助 TypeScript 结束递归推导：
 
 ```ts
-import { defineModel, defineCodec, arrayOf, string, type Codec, type Model } from "modvia";
+import { arrayOf, defineCodec, defineModel, string, type Codec, type Model } from "modvia";
 
 interface NodeData {
   readonly id: string;
@@ -272,32 +225,28 @@ const nodeModel: Model<NodeData, NodeDTO> = defineModel({
 });
 ```
 
-## 错误码
+## 错误码速查
 
-`issue.code` 是稳定标识，可以用于分支判断：
+`issue.code` 为稳定标识，可用于程序化分支处理：
 
-| code                    | 来源                                                  |
-| ----------------------- | ----------------------------------------------------- |
-| `type.object`           | 解码输入非普通对象，或编码输入为 `null`、数组或非对象 |
-| `type.array`            | `arrayOf` 收到非数组                                  |
-| `type.string`           | `string()` 收到非字符串                               |
-| `type.number`           | `number()` 收到非有限数字                             |
-| `type.boolean`          | `boolean()` 收到非布尔值                              |
-| `type.datetime`         | 解码输入不是字符串，或编码输入不是有效的 `Date`       |
-| `string.min_length`     | `string({ minLength })` 长度不足                      |
-| `string.one_of`         | `oneOf()` 收到枚举外的值                              |
-| `datetime.invalid`      | 日期时间字符串的格式、日期、时间或偏移非法            |
-| `datetime.out_of_range` | 解码输入换算为 UTC 后超出原生 `Date` 的时间范围       |
-| `field.required`        | 缺少必填的外部键，或模型缺少可读取的必填字段          |
+| 错误码                  | 触发条件                                                    |
+| ----------------------- | ----------------------------------------------------------- |
+| `type.object`           | 解码输入不是普通对象，或编码输入为 `null`、数组或非对象     |
+| `type.array`            | `arrayOf` 收到非数组输入                                    |
+| `type.string`           | `string()` 收到非字符串输入                                 |
+| `type.number`           | `number()` 收到非有限数字（含 `NaN`、`±Infinity` 或非数字） |
+| `type.boolean`          | `boolean()` 收到非布尔值                                    |
+| `type.datetime`         | `isoDateTime()` 解码输入非字符串，或编码输入不是有效 `Date` |
+| `string.min_length`     | `string({ minLength })` 长度不足（按 UTF-16 码元计）        |
+| `string.one_of`         | `oneOf()` 收到枚举集合之外的值                              |
+| `datetime.invalid`      | 日期时间字符串的格式、日历日期、时分秒或时区偏移非法        |
+| `datetime.out_of_range` | 日期时间换算为 UTC 后超出原生 `Date` 可表示范围             |
+| `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段  |
 
-`string()` 的长度按 UTF-16 码元计算，因此一个基本多文种平面之外的字符（如 emoji）计为 2。
+## 开发与验证
 
-## 开发
-
-在工作区根目录运行完整验证。
+在工作区根目录执行完整构建、检查与测试：
 
 ```sh
 vp run ready
 ```
-
-`tests/artifact.test.ts` 通过包名消费 `dist` 产物。单独在包目录运行 `vp test` 时，先运行 `vp pack`。

@@ -2,14 +2,16 @@
   "name": "modvia",
   "version": "0.0.0",
   "private": true,
-  "description": "A TypeScript model layer for runtime validation, DTO mapping, and bidirectional serialization.",
+  "description": "A TypeScript bidirectional codec and domain model layer for runtime validation, DTO mapping, and serialization.",
   "license": "MIT",
   "files": [
     "dist"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./dist/index.mjs",
+    "./codec": "./dist/codec.mjs",
     "./package.json": "./package.json"
   },
   "scripts": {

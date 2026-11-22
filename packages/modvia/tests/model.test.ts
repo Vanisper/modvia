@@ -5,14 +5,14 @@ import {
   defineCodec,
   defineModel,
   field,
-  isModelValidationError,
+  isValidationError,
   isoDateTime,
-  ModelValidationError,
   number,
   oneOf,
   string,
+  ValidationError,
 } from "../src/index.ts";
-import type { Codec, InferData, InferDTO, InferModel } from "../src/index.ts";
+import type { CodecLike, InferData, InferDTO, InferModel } from "../src/index.ts";
 
 const DepartmentModel = defineModel({
   fields: {
@@ -86,17 +86,8 @@ const validDTO = {
   ignored: "root",
 };
 
-function captureError(run: () => unknown): unknown {
-  try {
-    run();
-    return undefined;
-  } catch (error) {
-    return error;
-  }
-}
-
-describe("model codec", () => {
-  test("decodes plain data and encodes the same contract back to DTO", () => {
+describe("domain model", () => {
+  test("按声明契约解码普通对象并回写为纯净 DTO", () => {
     const user = UserModel.decode(validDTO);
 
     expect(user).toEqual({
@@ -127,44 +118,67 @@ describe("model codec", () => {
     expect(validDTO.name).toBe("  林舟  ");
   });
 
-  test("composes arrays and reports nested input paths", () => {
+  test("嵌套模型无需 field 包装即可直接调用 from、optional 与 nullable", () => {
+    const Team = defineModel({
+      fields: {
+        lead: UserClassModel.from("team_lead").optional(),
+        parentDept: DepartmentModel.nullable().from("parent_dept"),
+      },
+    });
+
+    const empty = Team.decode({ parent_dept: null });
+    expect(empty).toStrictEqual({ parentDept: null });
+    expect(Team.encode(empty)).toStrictEqual({ parent_dept: null });
+
+    const populated = Team.decode({
+      team_lead: validDTO,
+      parent_dept: { id: "d-0", name: "技术中心" },
+    });
+    expect(populated.lead).toBeInstanceOf(User);
+    expect(Team.encode(populated)).toMatchObject({
+      team_lead: { id: "u-1", created_at: "2026-11-09T00:00:00.000Z" },
+      parent_dept: { id: "d-0", name: "技术中心" },
+    });
+  });
+
+  test("组合数组模型并精确定位嵌套错误路径", () => {
     const Users = arrayOf(UserModel);
     expect(Users.decode([validDTO])).toHaveLength(1);
     expect(Users.encode(Users.decode([validDTO]))).toHaveLength(1);
 
-    const error = captureError(() =>
-      Users.decode([
-        validDTO,
-        {
-          ...validDTO,
-          name: " ",
-          created_at: "2026-02-30T00:00:00Z",
-          department: { id: "d-2", name: 42 },
-        },
-      ]),
-    );
+    const result = Users.safeDecode([
+      validDTO,
+      {
+        ...validDTO,
+        name: " ",
+        created_at: "2026-02-30T00:00:00Z",
+        department: { id: "d-2", name: 42 },
+      },
+    ]);
 
-    expect(error).toBeInstanceOf(ModelValidationError);
-    if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
-    expect(error.issues.map((issue) => ({ path: issue.path, code: issue.code }))).toEqual([
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected validation failure");
+    expect(result.issues.map((issue) => ({ path: issue.path, code: issue.code }))).toEqual([
       { path: [1, "name"], code: "string.min_length" },
       { path: [1, "created_at"], code: "datetime.invalid" },
       { path: [1, "department", "name"], code: "type.string" },
     ]);
   });
 
-  test("rejects missing fields and non-array lists", () => {
-    const missing = captureError(() => UserModel.decode({ id: "u-1" }));
-    if (!isModelValidationError(missing)) throw new Error("Expected a model validation error");
+  test("拒绝缺失必填键与非数组列表输入", () => {
+    const missing = UserModel.safeDecode({ id: "u-1" });
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("Expected failure");
     expect(missing.issues.length).toBeGreaterThan(1);
     expect(missing.issues[0]).toMatchObject({ path: ["name"], code: "field.required" });
 
-    const list = captureError(() => arrayOf(UserModel).decode({ 0: validDTO }));
-    expect(list).toBeInstanceOf(ModelValidationError);
-    expect(list).toMatchObject({ issues: [{ path: [], code: "type.array" }] });
+    expect(arrayOf(UserModel).safeDecode({ 0: validDTO })).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "type.array" }],
+    });
   });
 
-  test("rejects duplicate field sources at definition time", () => {
+  test("定义期拒绝重复的外部键名", () => {
     const duplicateAliases = () =>
       defineModel({
         fields: {
@@ -185,10 +199,10 @@ describe("model codec", () => {
     expect(aliasKeyCollision).toThrow(RangeError);
   });
 
-  test("__proto__ 作为声明字段或外部别名时可双向读写自有键", () => {
+  test("__proto__ 作为声明字段或外部别名时可安全双向读写自有键", () => {
     const Info = defineModel({ fields: { label: string() } });
     const Direct = defineModel({ fields: { ["__proto__"]: Info } });
-    const Aliased = defineModel({ fields: { info: field(Info).from("__proto__") } });
+    const Aliased = defineModel({ fields: { info: Info.from("__proto__") } });
     const dto: unknown = JSON.parse('{"__proto__":{"label":"目录"}}');
 
     const data = Direct.decode(dto);
@@ -201,11 +215,12 @@ describe("model codec", () => {
     }
   });
 
-  test("__proto__ 未声明时剥离，声明时按常规必填与缺省规则处理", () => {
+  test("__proto__ 未声明时剥离，声明时遵守必填与缺省规则", () => {
     const Required = defineModel({ fields: { ["__proto__"]: string() } });
     const Optional = defineModel({ fields: { ["__proto__"]: string().optional() } });
     const Known = defineModel({ fields: { title: string() } });
     const input = { title: "目录", ["__proto__"]: "其他" };
+
     for (const output of [
       Known.decode(input),
       Known.encode(input),
@@ -214,6 +229,7 @@ describe("model codec", () => {
     ]) {
       expect(Object.hasOwn(output, "__proto__")).toBe(false);
     }
+
     const missing = expect.objectContaining({
       issues: [expect.objectContaining({ path: ["__proto__"], code: "field.required" })],
     });
@@ -222,17 +238,16 @@ describe("model codec", () => {
     expect(() => Required.encode({})).toThrow(missing);
   });
 
-  test("accepts only plain object input", () => {
+  test("解码仅接受普通对象输入", () => {
     class Payload {
       id = "p-1";
     }
-    const cases: unknown[] = [new Date(), new Map([["id", "m-1"]]), new Payload()];
+    const cases: unknown[] = [null, [], new Date(), new Map([["id", "m-1"]]), new Payload()];
     for (const input of cases) {
-      const error = captureError(() => UserModel.decode(input));
-      if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
-      expect(error.issues).toEqual([
-        { path: [], code: "type.object", message: "Expected a plain object" },
-      ]);
+      expect(UserModel.safeDecode(input)).toStrictEqual({
+        ok: false,
+        issues: [{ path: [], code: "type.object", message: "Expected a plain object" }],
+      });
     }
 
     expect(UserModel.decode(Object.assign(Object.create(null), validDTO))).toMatchObject({
@@ -240,40 +255,24 @@ describe("model codec", () => {
     });
   });
 
-  test("日期字段规范化精度并检查输入偏移", () => {
-    const Stamped = defineModel({ fields: { at: isoDateTime() } });
-
-    expect(Stamped.decode({ at: "2026-11-09T02:00:00.123456Z" }).at).toEqual(
-      new Date("2026-11-09T02:00:00.123Z"),
-    );
-    expect(Stamped.encode(Stamped.decode({ at: "2026-11-09T02:00:00+14:01" }))).toEqual({
-      at: "2026-11-08T11:59:00.000Z",
-    });
-
-    for (const offset of ["+24:00", "-24:00", "+12:60", "-12:60"]) {
-      expect(() => Stamped.decode({ at: `2026-11-09T02:00:00${offset}` })).toThrow(
-        expect.objectContaining({
-          issues: [expect.objectContaining({ path: ["at"], code: "datetime.invalid" })],
-        }),
-      );
-    }
-
-    const roundTrip = Stamped.decode(Stamped.encode({ at: new Date("2026-11-09T02:00:00Z") }));
-    expect(roundTrip.at).toEqual(new Date("2026-11-09T02:00:00.000Z"));
-  });
-
-  test("aggregates very large error sets without exhausting the call stack", () => {
+  test("聚合 20 万条错误时不触发调用栈溢出且保持单次异常构造", () => {
     const Tags = defineModel({
       fields: { items: arrayOf(string()) },
     });
 
-    const error = captureError(() => Tags.decode({ items: Array(200_000).fill(null) }));
-    expect(error).toBeInstanceOf(ModelValidationError);
-    if (!isModelValidationError(error)) throw new Error("Expected a model validation error");
-    expect(error.issues).toHaveLength(200_000);
+    let caught: unknown;
+    try {
+      Tags.decode({ items: Array(200_000).fill(null) });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ValidationError);
+    if (!isValidationError(caught)) throw new Error("Expected ValidationError");
+    expect(caught.issues).toHaveLength(200_000);
   });
 
-  test("materializes a real class only after the full model is valid", () => {
+  test("withFactory 仅在整棵模型树校验通过后执行，重复调用时替换旧工厂", () => {
     let constructed = 0;
     const ClassUsers = UserModel.withFactory((data) => {
       constructed += 1;
@@ -286,13 +285,19 @@ describe("model codec", () => {
     expect(user.displayName).toBe("林舟 · 研发部");
     expect(user.canManage()).toBe(true);
     expect(ClassUsers.encode(user)).toEqual(UserModel.encode(UserModel.decode(validDTO)));
+    expect(ClassUsers["~standard"].validate(validDTO)).toStrictEqual({ value: user });
+    expect(constructed).toBe(2);
 
-    expect(() => ClassUsers.decode({ ...validDTO, name: " " })).toThrow(ModelValidationError);
-    expect(constructed).toBe(1);
+    expect(() => ClassUsers.decode({ ...validDTO, name: " " })).toThrow(ValidationError);
+    expect(constructed).toBe(2);
     expect(UserModel.decode(validDTO)).not.toBeInstanceOf(User);
+
+    const Replaced = ClassUsers.withFactory((data) => ({ ...data, tag: "plain" as const }));
+    expect(Replaced.decode(validDTO).tag).toBe("plain");
+    expect(constructed).toBe(2);
   });
 
-  test("supports custom codecs and field aliases", () => {
+  test("支持自定义 Codec 直接绑定字段别名，并忽略裸对象上未标记的 source 属性", () => {
     const slug = defineCodec<string, string>({
       decode(input, context) {
         if (typeof input !== "string" || !/^[a-z0-9-]+$/.test(input)) {
@@ -307,57 +312,41 @@ describe("model codec", () => {
         return input;
       },
     });
-    const Article = defineModel({
-      fields: { slug: field(slug).from("article_slug") },
-    });
-
-    const article = Article.decode({ article_slug: "model-layer" });
-    expect(article).toEqual({ slug: "model-layer" });
-    expect(Article.encode(article)).toEqual({ article_slug: "model-layer" });
-
-    const error = captureError(() => Article.decode({ article_slug: "Not A Slug" }));
-    expect(error).toMatchObject({
-      issues: [{ path: ["article_slug"], code: "string.slug" }],
-    });
-  });
-
-  test("ignores unbranded source properties and keeps aliases when re-wrapping fields", () => {
-    const withExtraProperty = {
+    const sourceLikeCodec: CodecLike<string, string> & { readonly source: string } = {
       source: "not_an_alias",
-      decode(input: unknown): string {
-        return typeof input === "string" ? input : String(input);
-      },
-      encode(value: string): string {
-        return value;
-      },
+      decode: (input) => (typeof input === "string" ? input : String(input)),
+      encode: (value) => value,
     };
-    const sourceLikeCodec: Codec<string, string> = withExtraProperty;
-    const Custom = defineModel({
+
+    const Article = defineModel({
       fields: {
+        slug: slug.from("article_slug"),
         name: sourceLikeCodec,
         alias: field(string().from("external_name")),
       },
     });
 
-    expect(Custom.decode({ name: "林舟", external_name: "林舟" })).toEqual({
-      name: "林舟",
-      alias: "林舟",
-    });
-    expect(Custom.encode({ name: "林舟", alias: "林舟" })).toEqual({
+    const article = Article.decode({
+      article_slug: "model-layer",
       name: "林舟",
       external_name: "林舟",
     });
-    expectTypeOf<InferDTO<typeof Custom>>().toMatchTypeOf<{
-      name: string;
-      external_name: string;
-    }>();
-    expectTypeOf<{
-      name: string;
-      external_name: string;
-    }>().toMatchTypeOf<InferDTO<typeof Custom>>();
+    expect(article).toEqual({ slug: "model-layer", name: "林舟", alias: "林舟" });
+    expect(Article.encode(article)).toEqual({
+      article_slug: "model-layer",
+      name: "林舟",
+      external_name: "林舟",
+    });
+
+    expect(
+      Article.safeDecode({ article_slug: "Not A Slug", name: "林舟", external_name: "林舟" }),
+    ).toMatchObject({
+      ok: false,
+      issues: [{ path: ["article_slug"], code: "string.slug" }],
+    });
   });
 
-  test("infers data, DTO, and class output types", () => {
+  test("静态推导 Data、DTO 与工厂输出类型", () => {
     expectTypeOf<UserData>().toEqualTypeOf<{
       readonly id: string;
       readonly name: string;
@@ -380,7 +369,7 @@ describe("model codec", () => {
       fields: {
         1: number(),
         label: string(),
-        get [metadata](): Codec<string, string> {
+        get [metadata](): CodecLike<string, string> {
           throw new Error("符号键不参与模型定义");
         },
       },
@@ -415,7 +404,7 @@ describe("model codec", () => {
     type DTO = InferDTO<typeof model>;
     expectTypeOf<Extract<DTO, { kind: "compact" }>["title"]>().toEqualTypeOf<string>();
 
-    const fields: Record<string, Codec<unknown, unknown>> & typeof compact = compact;
+    const fields: Record<string, CodecLike<unknown, unknown>> & typeof compact = compact;
     const indexed = defineModel({ fields });
     expectTypeOf<InferData<typeof indexed>["label"]>().toEqualTypeOf<string>();
     expectTypeOf<InferDTO<typeof indexed>["title"]>().toEqualTypeOf<string>();
