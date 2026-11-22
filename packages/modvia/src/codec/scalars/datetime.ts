@@ -8,10 +8,12 @@ import type { Codec } from "../core/types.ts";
  * @description 解码接受 Z 或 -23:59 至 +23:59 的数字偏移，编码统一输出 UTC，支持原生 Date 全范围
  */
 export function isoDateTime(): Codec<Date, string> {
-  return createCodec<Date, string>((input, direction, collector) =>
-    direction === "decode"
-      ? decodeIsoDateTime(input, collector)
-      : encodeIsoDateTime(input, collector),
+  return createCodec<Date, string>(
+    (input, direction, collector) =>
+      direction === "decode"
+        ? decodeIsoDateTime(input, collector)
+        : encodeIsoDateTime(input, collector),
+    { descriptor: { kind: "datetime" } },
   );
 }
 

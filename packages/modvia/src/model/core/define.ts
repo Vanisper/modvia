@@ -68,7 +68,13 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
       direction === "decode"
         ? decodeModelObject(resolvedFields, factory, input, collector)
         : encodeModelObject(resolvedFields, input, collector),
-    { decodeSegmentMapper },
+    {
+      decodeSegmentMapper,
+      descriptor: {
+        kind: "model",
+        fields: ownFields,
+      },
+    },
   );
 
   function partial(): ModelOf<PartialFields<Fields>>;

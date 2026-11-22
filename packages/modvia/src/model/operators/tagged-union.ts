@@ -1,5 +1,10 @@
 import { INVALID } from "../../codec/core/collector.ts";
-import { createCodec, executeCodec, getStaticLiterals } from "../../codec/core/runtime.ts";
+import {
+  createCodec,
+  executeCodec,
+  getStaticLiterals,
+  promoteToCodec,
+} from "../../codec/core/runtime.ts";
 import type { Codec, FieldLiteral, InferEncoded, InferValue } from "../../codec/core/types.ts";
 import { isObject, isPlainObject } from "../../shared/object.ts";
 import { formatLiteral } from "../../shared/value.ts";
@@ -87,53 +92,65 @@ export function taggedUnion<
   type UnionModel = InferValue<Branches[number]>;
   type UnionDTO = InferEncoded<Branches[number]>;
 
-  return createCodec<UnionModel, UnionDTO>((input, direction, collector) => {
-    if (direction === "decode") {
-      if (!isPlainObject(input)) {
-        return collector.add("type.object", "Expected a plain object");
+  const promotedBranches = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
+
+  return createCodec<UnionModel, UnionDTO>(
+    (input, direction, collector) => {
+      if (direction === "decode") {
+        if (!isPlainObject(input)) {
+          return collector.add("type.object", "Expected a plain object");
+        }
+        if (!Object.hasOwn(input, externalKey)) {
+          collector.pushSegment(externalKey);
+          collector.add("field.required", `Missing required field: ${externalKey}`);
+          collector.popSegment();
+          return INVALID;
+        }
+
+        const rawTag = input[externalKey];
+        const branch = branchByTag.get(rawTag as FieldLiteral);
+        if (!branch) {
+          collector.pushSegment(externalKey);
+          collector.add(
+            "union.invalid_tag",
+            `Expected discriminator "${externalKey}" to be one of: ${expectedTagsText}`,
+          );
+          collector.popSegment();
+          return INVALID;
+        }
+        return executeCodec(branch, input, "decode", collector) as UnionModel;
       }
-      if (!Object.hasOwn(input, externalKey)) {
-        collector.pushSegment(externalKey);
-        collector.add("field.required", `Missing required field: ${externalKey}`);
+
+      if (!isObject(input)) {
+        return collector.add("type.object", "Expected a model object");
+      }
+      const modelTag = readModelField(input, discriminator);
+      if (modelTag === missingField) {
+        collector.pushSegment(discriminator);
+        collector.add("field.required", `Missing model field: ${discriminator}`);
         collector.popSegment();
         return INVALID;
       }
 
-      const rawTag = input[externalKey];
-      const branch = branchByTag.get(rawTag as FieldLiteral);
+      const branch = branchByTag.get(modelTag as FieldLiteral);
       if (!branch) {
-        collector.pushSegment(externalKey);
+        collector.pushSegment(discriminator);
         collector.add(
           "union.invalid_tag",
-          `Expected discriminator "${externalKey}" to be one of: ${expectedTagsText}`,
+          `Expected discriminator "${discriminator}" to be one of: ${expectedTagsText}`,
         );
         collector.popSegment();
         return INVALID;
       }
-      return executeCodec(branch, input, "decode", collector) as UnionModel;
-    }
-
-    if (!isObject(input)) {
-      return collector.add("type.object", "Expected a model object");
-    }
-    const modelTag = readModelField(input, discriminator);
-    if (modelTag === missingField) {
-      collector.pushSegment(discriminator);
-      collector.add("field.required", `Missing model field: ${discriminator}`);
-      collector.popSegment();
-      return INVALID;
-    }
-
-    const branch = branchByTag.get(modelTag as FieldLiteral);
-    if (!branch) {
-      collector.pushSegment(discriminator);
-      collector.add(
-        "union.invalid_tag",
-        `Expected discriminator "${discriminator}" to be one of: ${expectedTagsText}`,
-      );
-      collector.popSegment();
-      return INVALID;
-    }
-    return executeCodec(branch, input, "encode", collector) as UnionDTO;
-  });
+      return executeCodec(branch, input, "encode", collector) as UnionDTO;
+    },
+    {
+      descriptor: {
+        kind: "taggedUnion",
+        discriminator,
+        externalKey,
+        branches: promotedBranches,
+      },
+    },
+  );
 }
