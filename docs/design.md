@@ -47,12 +47,18 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 ## 组合代数与三阶单向跃迁
 
-每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。链式调用按职责边界遵循由内向外的**三阶单向跃迁（内禀自有态 → 通用代数态 → 字段槽位态）**，不提供通用黑盒交集算子（`.and()`）或逆向剥壳算子（`.unwrap()`）：
+每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。链式调用按职责边界遵循由内向外的**三阶单向跃迁**，不提供通用黑盒交集算子（`.and()`）或逆向剥壳算子（`.unwrap()`）：
 
-- **内禀状态归并（内置自有方法与状态化 `Codec.define`）**：内置有参原语（如 `string().trim().minLength(3)`、`int().positive().max(100)`、`arrayOf(item).nonEmpty()`）与状态化 `Codec.define({ state, validate?, decode, encode, meta?, methods })` 通过不可变状态归并重建单层实例。`decode(input, ctx)` 与 `encode(input, ctx)` 统一通过 `ctx.state` 读取冻结的当前状态；`methods` 参数签名直接对应公开链式方法，返回 `Partial<S>` 增量补丁或 `(prev) => Partial<S>` 演进函数（编译期拦截未知属性与 `Codec` 保留协议名）。规范化（如 `trim`）在内核中始终先于范围精化执行，区间冲突在定义期立即抛 `RangeError`，且结构元数据无损同步至 `CodecDescriptor`。
-- **特征封装与跨管道透传（`WithCodecTrait`）**：带自有链式方法的编解码器统一表达为 `WithCodecTrait<T, Encoded, Trait>`，完全隐藏内部状态表示并在基接口统一实现保留自有特征的多态 `.describe(text)`。当通过 `.pipe(next)`、`Codec.pipe(first, second)` 或 `jsonOf(codec)` 串联时，若下游为 `WithCodecTrait`，组合结果自动保留下游全部值域链式方法并将外部编码类型重绑为上游 `Encoded`。
-- **三阶收敛边界**：在内禀自有态上调用纯静态说明 `.describe(text)` 或串联保留特征的 `pipe` 仍维持自有方法；一旦调用通用黑盒闭包或值域变型算子（`.refine`、`.check`、`.normalize`、`.brand`、`.or`、`.nullable`），类型单向收敛为标准 `Codec<T, Encoded>`，防止后续状态重建静默丢弃已挂载谓词或抹除子类型/品牌；调用 `.alias` / `.optional` / `.default` 则跃迁至对象槽位 `Field`。
-- **管道包裹顺序（`.check` / `.pipe`）**：`.check(rule)` 在基础 `Codec` 通过后对业务值执行对称约束，解码与编码均按书写顺序由内向外执行；`Codec.pipe(first, second)` 在解码时按 `first → second` 正向传递，在编码时按 `second → first` 逆向传递。
+1. **第一阶：特征派生阶（`WithCodecTrait`）**：承载内置有参原语与状态化 `Codec.define` 的结构化配置，内部细分为两类操作：
+   - **值域特征方法**：仅约束或规范化业务值而不改变外部类型 `Encoded`（如 `.min()`、`.trim()`、`.nonEmpty()`、`.tokens()`、`.protocols()`）；通过 `.pipe()`、`Codec.pipe()` 或 `jsonOf()` 串联下游 `WithCodecTrait` 时自动保留，并将外部类型重绑为上游 `Encoded`。
+   - **介质切换方法**：原始标量的 `.fromString()` 将外部编码表示由原生类型切换为 `string`；在未绑定上游管道前与数值区间方法换序等价，切换完成或接入上游管道后自动收敛消费，不再重复暴露。
+   - **状态化定义契约**：`Codec.define({ state, validate?, decode, encode, meta?, methods })` 要求 `state` 为普通对象，正反两端统一通过 `ctx.state` 读取冻结状态，`methods` 返回 `Partial<S>` 增量补丁或 `(prev) => Partial<S>` 演进函数；规范化（如 `trim`）在内核中始终先于范围守卫执行，空区间与保留字冲突在定义期立即拦截。
+2. **第二阶：通用值级阶（`Codec`）**：一旦调用黑盒闭包或值域扩张算子（`.refine`、`.check`、`.normalize`、`.brand`、`.or`、`.nullable`），静态类型单向收敛为标准 `Codec<T, Encoded>`，防止后续重建底层状态覆盖已挂载谓词或抹除品牌类型；纯静态文档 `.describe(text)` 在各阶均保持原阶类型不变。
+3. **第三阶：对象槽位阶（`Field`）**：调用 `.alias`、`.optional` 或 `.default` 后跃迁为属性描述符，绑定父对象的外部键映射与缺键策略，编译期与运行期禁止逆向混入值级容器。
+
+通用组合算子遵循以下执行不变量：
+
+- **管道包裹与路径复合（`.check` / `.pipe`）**：`.check(rule)` 在基础 `Codec` 通过后对业务值执行对称约束，双端均由内向外执行；`Codec.pipe(first, second)` 解码按 `first → second` 正向传递，编码按 `second → first` 逆向传递，并按函子复合规则透传字段路径映射器（例如对 `jsonOf(Model)` 追加 `.check` 时，解码错误路径仍自动映射为外部 DTO 键名）。
 - **字面量哨兵优先（`.or` / `.nullable`）**：接受一个或多个原始字面量（`string | number | boolean | null | undefined`），编解码两端均先按 `Object.is` 短路匹配字面量，未命中时再交由当前内部 `Codec` 处理。连续相邻调用 `.or(a).or(b)` 与单次调用 `.or(a, b)` 等价，内部自动扁平化合并；与 `.check` 交错时严格遵循外层包裹内层的洋葱顺序。
 - **多分支从左到右联合（`Codec.union`）**：按参数顺序依次尝试分支，首个无错误返回的分支胜出并回滚前序分支的试探记录；全部分支均不匹配时报 `union.no_match`。
 - **方向反转与惰性引用（`Codec.invert` / `Codec.lazy`）**：`Codec.invert` 对调 `decode` 与 `encode` 方向；`Codec.lazy` 将目标 `Codec` 的求值推迟到首次运行并缓存解析结果，支持自引用递归结构。
@@ -105,8 +111,9 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 ### 结构内省、派生与多态联合
 
-- **只读字段表内省（`model.fields`）**：模型暴露冻结的自有可枚举字符串键字段表，保留各字段的原始 `Codec` 或 `Field` 描述符（含模型级 `alias` 策略绑定后的外部键别名）。
-- **结构与边界派生（`pick` / `omit` / `partial` / `extend` / `strict` / `describe`）**：`pick` 与 `omit` 基于原字段表裁剪子模型；`partial(...keys?)` 将全部或指定字段转为单层可选键（同时清除创建期的缺键默认值以防局部更新误覆盖）；`extend` 追加或按同名键覆写字段并在定义期重新校验外部键名唯一性；结构变更后的派生模型统一恢复为纯数据输出。`strict()` 与 `describe(text)` 则在保持原字段契约与工厂函数的前提下派生严格未知键拦截模型或挂载静态文档说明。
+- **只读字段表内省（`model.fields`）**：模型暴露冻结的自有可枚举字符串键字段表，保留各字段的原始 `Codec` 或 `Field` 描述符（含模型级 `alias` 策略在定义期快照绑定后的外部键别名）。
+- **字段表结构派生（`pick` / `omit` / `partial` / `extend`）**：基于已绑定别名的字段表生成新基础数据模型（恢复默认非严格模式并重置 `withFactory` 与外层 `description`）；`partial(...keys?)` 将指定或全部字段转为单层可选键并清除创建期缺键默认值；`extend` 新增或覆写的字段按其自身 `.alias()` 声明解析外部键，并在定义期重新校验外部键唯一性。
+- **对象边界与文档派生（`strict` / `describe`）**：在完整保留原字段契约与 `withFactory` 实例构造工厂的前提下，分别派生拒绝未知外部属性的严格模型或附加静态文档说明。
 - **跨字段校验路径自动翻译（`Model.check`）**：对模型调用 `.check(...)` 并通过 `context.issue({ path: ["fieldName"], ... })` 指定声明字段路径时，解码阶段自动将首段翻译为该字段的外部 DTO 键名，编码阶段保持模型业务键名。
 - **按标签分发的多态联合（`Model.union`）**：要求各分支模型均声明同一必填字面量判别键（由 `oneOf` 或 `literal` 定义，且映射至一致的外部键名）。解码按外部判别键 $O(1)$ 查表分发；编码通过自有属性或原型链 getter 读取业务判别键并分发到对应分支。
 
@@ -115,7 +122,14 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - `Model.withFactory(fn)` 基于原字段契约派生新模型，仅替换最终构造步骤；连续调用 `withFactory(f).withFactory(g)` 时以 `g` 替换 `f`，回调始终接收基础字段数据 `Data`。
 - 对象模型与数组在编解码时均生成新容器；`InferData` 的字段标记为静态 `readonly` 类型，运行时不对值执行隐式深度冻结。
 
-## 日期时间契约
+## 原始标量介质切换与日期时间契约
+
+### 原始标量 `.fromString()` 收敛规则
+
+- **数值与大整数（`number` / `int` / `bigint`）**：解码拒绝空串、首尾空白、非数字后缀及越界文本（`int` 仅接受十进制安全整数文本，`number` 接受十进制与科学计数法有限浮点数文本，`bigint` 仅接受十进制整数文本）；`-0` 与 `"-0"` 统一归一为规范零值 `0` 与 `"0"`，确保 `decode(encode(v)) ≡ v`。
+- **布尔文本（`boolean().fromString()`）**：默认大小写不敏感匹配 `"true"` / `"false"` 并编码写出小写首词；通过 `.tokens(truthy, falsy)` 自定义非空不交叠词表时，输入词表在定义期防御性拷贝冻结，编码始终收敛至各自首词。
+
+### 日期时间契约
 
 `isoDateTime()` 以原生 `Date` 表达毫秒精度的确定时间点：
 

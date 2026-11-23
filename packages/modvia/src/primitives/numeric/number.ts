@@ -1,4 +1,4 @@
-import type { StatefulCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
+import type { TraitCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
 import { validateContinuousBounds } from "../../scalars/bounds/ordered.ts";
 import {
   assertFiniteNumber,
@@ -13,7 +13,7 @@ import {
 } from "./shared.ts";
 
 /** 原生有限浮点数双向编解码器，支持区间派生与 .fromString() 字符串介质切换 */
-export interface NativeNumberCodec extends StatefulCodecBase<
+export interface NativeNumberCodec extends TraitCodecBase<
   number,
   number,
   OrderedNumericTrait<number>

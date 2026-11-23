@@ -34,13 +34,16 @@ function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): s
   return normalized;
 }
 
+const emailSchema = Object.freeze({ type: "string", format: "email", maxLength: 254 });
+
 const defaultEmailCodec: EmailCodec = defineCodec({
   state: { trim: false, lowercase: false } as EmailState,
   decode: validateEmail,
   encode: validateEmail,
   meta: {
     format: "email",
-    encodedSchema: { type: "string", format: "email", maxLength: 254 },
+    encodedSchema: emailSchema,
+    decodedSchema: emailSchema,
   },
   methods: {
     trim: () => ({ trim: true }),

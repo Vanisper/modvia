@@ -1,4 +1,4 @@
-import type { StatefulCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
+import type { TraitCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
 import { validateDiscreteIntBounds } from "../../scalars/bounds/ordered.ts";
 import {
   assertSafeInteger,
@@ -13,7 +13,7 @@ import {
 } from "./shared.ts";
 
 /** 原生安全整数双向编解码器（Number.isSafeInteger），支持区间派生与 .fromString() 字符串介质切换 */
-export interface NativeIntCodec extends StatefulCodecBase<
+export interface NativeIntCodec extends TraitCodecBase<
   number,
   number,
   OrderedNumericTrait<number>

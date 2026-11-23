@@ -429,5 +429,8 @@ describe("domain model", () => {
     const indexed = Model.define({ fields });
     expectTypeOf<InferData<typeof indexed>["label"]>().toEqualTypeOf<string>();
     expectTypeOf<InferDTO<typeof indexed>["title"]>().toEqualTypeOf<string>();
+
+    // @ts-expect-error withFactory 必须传入工厂函数
+    expect(() => UserModel.withFactory(null)).toThrow(TypeError);
   });
 });

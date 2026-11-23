@@ -344,7 +344,7 @@ export type CodecDescriptor =
     }>;
 
 /** Codec 核心保留成员键集合，自定义链式方法禁止覆盖 */
-export type ReservedCodecKey = keyof Codec<unknown, unknown>;
+export type ReservedCodecKey = keyof Codec<unknown, unknown> | "__proto__" | "constructor";
 
 /** 状态增量更新表达：可直接返回局部属性补丁，或返回基于冻结旧状态计算局部补丁的函数 */
 export type StatePatch<S extends object> =
@@ -373,19 +373,16 @@ export type BoundCodecTrait<T, Encoded, Trait extends CodecTrait> = {
 
 export declare const codecTraitSymbol: unique symbol;
 
-export interface StatefulCodecBase<T, Encoded, Trait extends CodecTrait> extends Codec<T, Encoded> {
+export interface TraitCodecBase<T, Encoded, Trait extends CodecTrait> extends Codec<T, Encoded> {
   readonly [codecTraitSymbol]?: Trait;
   /** 为当前实例附加静态文档说明文本，同时完整保留全部自有链式方法 */
   describe(this: void, description: string): WithCodecTrait<T, Encoded, Trait>;
 }
 
-/** 附着自有链式方法特征的标准双向编解码器（内部状态完全封装） */
-export type WithCodecTrait<T, Encoded, Trait extends CodecTrait> = StatefulCodecBase<
+/** 附着自有链式方法特征的标准双向编解码器（内部状态与管道实现细节完全封装） */
+export type WithCodecTrait<T, Encoded, Trait extends CodecTrait> = TraitCodecBase<
   T,
   Encoded,
   Trait
 > &
   BoundCodecTrait<T, Encoded, NoInfer<Trait>>;
-
-/** StatefulCodec 作为 WithCodecTrait 的语义别名导出 */
-export type StatefulCodec<T, Encoded, Trait extends CodecTrait> = WithCodecTrait<T, Encoded, Trait>;

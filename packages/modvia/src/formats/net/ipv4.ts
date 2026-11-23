@@ -21,12 +21,15 @@ function validateIpv4(input: unknown, context: CodecContext): string {
   return input;
 }
 
+const ipv4Schema = Object.freeze({ type: "string", format: "ipv4" });
+
 const defaultIpv4Codec: Codec<string, string> = defineCodec<string, string>({
   decode: validateIpv4,
   encode: validateIpv4,
   meta: {
     format: "ipv4",
-    encodedSchema: { type: "string", format: "ipv4" },
+    encodedSchema: ipv4Schema,
+    decodedSchema: ipv4Schema,
   },
 });
 

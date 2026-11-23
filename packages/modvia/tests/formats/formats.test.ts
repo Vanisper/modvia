@@ -180,5 +180,29 @@ describe("modvia/formats", () => {
     expect(PortJson.encode(8080)).toBe("8080");
     expect("fromString" in PortJson).toBe(false);
     expect("fromString" in int().fromString()).toBe(false);
+
+    // jsonOf 包装带 alias 的模型并挂载 .check 时，解码错误路径仍自动映射为外部键名
+    const CheckedEventJson = jsonOf(EventPayload).check((data, ctx) => {
+      if (!data.note) {
+        ctx.issue({ code: "event.missing_note", message: "Note required", path: ["targetUrl"] });
+      }
+    });
+    expect(
+      CheckedEventJson.safeDecode(
+        '{"event_id":"550e8400-e29b-41d4-a716-446655440000","target_url":"https://modvia.dev"}',
+      ),
+    ).toMatchObject({
+      ok: false,
+      issues: [{ path: ["target_url"], code: "event.missing_note" }],
+    });
+    expect(
+      CheckedEventJson.safeEncode({
+        eventId: "550e8400-e29b-41d4-a716-446655440000",
+        targetUrl: "https://modvia.dev",
+      }),
+    ).toMatchObject({
+      ok: false,
+      issues: [{ path: ["targetUrl"], code: "event.missing_note" }],
+    });
   });
 });

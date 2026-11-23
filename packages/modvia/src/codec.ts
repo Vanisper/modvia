@@ -1,7 +1,6 @@
 export type { CodecHandlers, StatefulCodecHandlers } from "./codec/core/define.ts";
 export * from "./codec/core/errors.ts";
 export type {
-  BoundCodecTrait,
   Brand,
   Branded,
   CodecContext,
@@ -12,24 +11,18 @@ export type {
   CodecTrait,
   CustomCodecMeta,
   DefaultProvider,
-  DisallowReservedCodecKeys,
   FieldLiteral,
   FieldPresence,
   InferEncoded,
   InferValue,
   PathSegment,
-  ReservedCodecKey,
   SafeResult,
   StandardSchemaV1,
-  StatefulCodec,
-  StatefulCodecBase,
   StatefulCodecContext,
   StatePatch,
   ValidationIssue,
   ValueCodecInput,
   WithCodecTrait,
-  brandSymbol,
-  codecTraitSymbol,
 } from "./codec/core/types.ts";
 export * from "./codec/namespace.ts";
 export * from "./codec/operators/containers.ts";

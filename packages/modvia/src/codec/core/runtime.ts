@@ -61,13 +61,18 @@ export interface CodecMetadata {
 }
 
 export function createCodec<T, Encoded>(
-  runner: (
-    input: unknown,
-    direction: CodecDirection,
-    collector: IssueCollector,
-  ) => (T | Encoded) | Invalid,
+  runner: InternalRunner<T, Encoded>,
   metadata?: CodecMetadata,
 ): Codec<T, Encoded> {
+  return instantiateCodec(runner, metadata);
+}
+
+function instantiateCodec<T, Encoded, Extra extends object = Record<never, never>>(
+  runner: InternalRunner<T, Encoded>,
+  metadata?: CodecMetadata,
+  extra?: Extra,
+  extraSymbols?: ReadonlyArray<readonly [symbol, unknown]>,
+): Codec<T, Encoded> & Extra {
   const literalState = metadata?.literalState;
   const decodeSegmentMapper = metadata?.decodeSegmentMapper;
   const safeParse = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
@@ -128,7 +133,7 @@ export function createCodec<T, Encoded>(
     );
   }
 
-  const codec: Codec<T, Encoded> = {
+  const codec: Codec<T, Encoded> & Extra = {
     [Symbol.toStringTag]: "modvia.Codec",
     "~standard": standardProps,
     decode: parse,
@@ -173,7 +178,7 @@ export function createCodec<T, Encoded>(
       return createLiteralExtendedCodec<T, Encoded, Literals>(codec, values, literalState);
     },
     nullable() {
-      return codec.or(null);
+      return createLiteralExtendedCodec<T, Encoded, readonly [null]>(codec, [null], literalState);
     },
     alias<NextSource extends string>(source: NextSource) {
       assertValidSource(source);
@@ -185,6 +190,7 @@ export function createCodec<T, Encoded>(
     default(provider: DefaultProvider<T>) {
       return createField(codec, undefined, "defaulted", toDefaultResolver(provider));
     },
+    ...(extra as Extra),
   };
 
   Object.defineProperty(codec, runnerSymbol, { value: runner });
@@ -202,6 +208,11 @@ export function createCodec<T, Encoded>(
   if (metadata?.descriptor) {
     Object.defineProperty(codec, descriptorSymbol, { value: Object.freeze(metadata.descriptor) });
   }
+  if (extraSymbols) {
+    for (const [sym, value] of extraSymbols) {
+      Object.defineProperty(codec, sym, { value });
+    }
+  }
   return Object.freeze(codec);
 }
 
@@ -210,39 +221,19 @@ export function extendCodec<T, Encoded, Extra extends object>(
   extra: Extra,
   extraSymbols?: ReadonlyArray<readonly [symbol, unknown]>,
 ): Codec<T, Encoded> & Extra {
-  const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
-  const segmentMapper = Reflect.get(base, segmentMapperSymbol) as SegmentMapper | undefined;
+  const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded>;
+  const literalState = Reflect.get(base, literalStateSymbol) as LiteralState | undefined;
+  const allowedLiterals = Reflect.get(base, allowedLiteralsSymbol) as
+    | readonly FieldLiteral[]
+    | undefined;
+  const decodeSegmentMapper = Reflect.get(base, segmentMapperSymbol) as SegmentMapper | undefined;
   const descriptor = Reflect.get(base, descriptorSymbol) as CodecDescriptor | undefined;
-  const symbolMap = new Map<symbol, unknown>();
-  if (runner !== undefined) symbolMap.set(runnerSymbol, runner);
-  if (segmentMapper !== undefined) symbolMap.set(segmentMapperSymbol, segmentMapper);
-  if (descriptor !== undefined) symbolMap.set(descriptorSymbol, descriptor);
-  if (extraSymbols) {
-    for (const [sym, value] of extraSymbols) {
-      symbolMap.set(sym, value);
-    }
-  }
-  const extended: Codec<T, Encoded> & Extra = {
-    ...base,
-    brand<const Name extends string | symbol>() {
-      return extended as unknown as Codec<Branded<T, Name>, Encoded>;
-    },
-    alias<NextSource extends string>(source: NextSource) {
-      assertValidSource(source);
-      return createField(extended, source, "required");
-    },
-    optional() {
-      return createField(extended, undefined, "optional");
-    },
-    default(provider: DefaultProvider<T>) {
-      return createField(extended, undefined, "defaulted", toDefaultResolver(provider));
-    },
-    ...extra,
-  };
-  for (const [sym, value] of symbolMap) {
-    Object.defineProperty(extended, sym, { value });
-  }
-  return Object.freeze(extended);
+  return instantiateCodec(
+    runner,
+    { literalState, allowedLiterals, decodeSegmentMapper, descriptor },
+    extra,
+    extraSymbols,
+  );
 }
 
 const reservedCodecKeys = new Set<string>([
@@ -314,17 +305,14 @@ function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecM
   methodEntries: ReadonlyArray<readonly [string, (...args: never[]) => StatePatch<S>]>,
   traitKeys: readonly string[],
 ): WithCodecTrait<T, Encoded, M> {
-  if (typeof spec.state !== "object" || spec.state === null) {
-    throw new TypeError("Codec state must be an object");
+  if (!isPlainObject(spec.state)) {
+    throw new TypeError("Codec state must be a plain object");
   }
-  const frozenState = Object.freeze(
-    isPlainObject(spec.state) ? { ...spec.state } : spec.state,
-  ) as Readonly<S>;
+  const frozenState = Object.freeze({ ...spec.state }) as Readonly<S>;
   spec.validate?.(frozenState);
 
   const runner = spec.createRunner(frozenState);
   const descriptor = spec.createDescriptor(frozenState, spec.description);
-  const baseCodec = createCodec<T, Encoded>(runner, { descriptor });
 
   const extra: Record<string, unknown> = {
     describe(description: string): WithCodecTrait<T, Encoded, M> {
@@ -356,11 +344,9 @@ function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecM
     }
   }
 
-  return extendCodec(baseCodec, extra, [[traitKeysSymbol, traitKeys]]) as unknown as WithCodecTrait<
-    T,
-    Encoded,
-    M
-  >;
+  return instantiateCodec(runner, { descriptor }, extra, [
+    [traitKeysSymbol, traitKeys],
+  ]) as unknown as WithCodecTrait<T, Encoded, M>;
 }
 
 export function getCodecDescriptor(value: CodecLike<unknown, unknown>): CodecDescriptor {
@@ -574,30 +560,37 @@ function buildPipedInstance<Mid, Encoded, Out>(
   secondCodec: Codec<Out, Mid>,
   description: string | undefined,
 ): Codec<Out, Encoded> {
-  const basePiped = createCodec<Out, Encoded>(
-    (input, direction, collector) => {
-      if (direction === "decode") {
-        const mid = executeCodec(firstCodec, input, "decode", collector);
-        if (mid === INVALID) return INVALID;
-        return executeCodec(secondCodec, mid, "decode", collector);
-      }
-      const mid = executeCodec(secondCodec, input, "encode", collector);
+  const firstMapper = Reflect.get(firstCodec, segmentMapperSymbol) as SegmentMapper | undefined;
+  const secondMapper = Reflect.get(secondCodec, segmentMapperSymbol) as SegmentMapper | undefined;
+  const decodeSegmentMapper: SegmentMapper | undefined =
+    firstMapper && secondMapper
+      ? (segment) => firstMapper(secondMapper(segment))
+      : (secondMapper ?? firstMapper);
+
+  const runner: InternalRunner<Out, Encoded> = (input, direction, collector) => {
+    if (direction === "decode") {
+      const mid = executeCodec(firstCodec, input, "decode", collector);
       if (mid === INVALID) return INVALID;
-      return executeCodec(firstCodec, mid, "encode", collector);
+      return executeCodec(secondCodec, mid, "decode", collector);
+    }
+    const mid = executeCodec(secondCodec, input, "encode", collector);
+    if (mid === INVALID) return INVALID;
+    return executeCodec(firstCodec, mid, "encode", collector);
+  };
+
+  const metadata: CodecMetadata = {
+    decodeSegmentMapper,
+    descriptor: {
+      kind: "pipe",
+      first: firstCodec as Codec<unknown, unknown>,
+      second: secondCodec as Codec<unknown, unknown>,
+      ...(description !== undefined ? { description } : {}),
     },
-    {
-      descriptor: {
-        kind: "pipe",
-        first: firstCodec as Codec<unknown, unknown>,
-        second: secondCodec as Codec<unknown, unknown>,
-        ...(description !== undefined ? { description } : {}),
-      },
-    },
-  );
+  };
 
   const traitKeys = Reflect.get(secondCodec, traitKeysSymbol) as readonly string[] | undefined;
   if (!traitKeys || traitKeys.length === 0) {
-    return basePiped;
+    return instantiateCodec(runner, metadata);
   }
 
   const extra: Record<string, unknown> = {
@@ -619,7 +612,7 @@ function buildPipedInstance<Mid, Encoded, Out>(
     }
   }
 
-  return extendCodec(basePiped, extra, [[traitKeysSymbol, traitKeys]]);
+  return instantiateCodec(runner, metadata, extra, [[traitKeysSymbol, traitKeys]]);
 }
 
 export function getStaticLiterals(

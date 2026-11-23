@@ -308,6 +308,18 @@ describe("codec kernel", () => {
       externalKey: "item_type",
     });
 
+    // 验证扩展实例在 nullable / pipe 下保持自身引用一致，不退化为内部裸 base
+    expect(Codec.inspect(DerivedA.nullable())).toStrictEqual({
+      kind: "or",
+      base: DerivedA,
+      literals: [null],
+    });
+    const trimmed = string().trim();
+    expect(Codec.inspect(trimmed.pipe(int().fromString()))).toMatchObject({
+      kind: "pipe",
+      first: trimmed,
+    });
+
     const CustomDecimal = Codec.define<number, string>({
       decode: (v) => Number(v),
       encode: (v) => String(v),
@@ -418,7 +430,7 @@ describe("codec kernel", () => {
       },
     });
 
-    // 保留字冲突在编译期与定义期双重拒绝
+    // 保留字冲突在编译期与定义期双重拒绝，且定义期校验非法参数与非纯对象状态
     const badMethods = { decode: () => ({ n: 2 }) };
     expect(() =>
       Codec.define({
@@ -429,5 +441,18 @@ describe("codec kernel", () => {
         methods: badMethods,
       }),
     ).toThrow(RangeError);
+
+    expect(() => Reflect.apply(Codec.define, undefined, [null])).toThrow(TypeError);
+    expect(() => Reflect.apply(Codec.define, undefined, [{}])).toThrow(TypeError);
+    const nonPlainState = new Date(0);
+    expect(() =>
+      Codec.define({
+        state: nonPlainState,
+        decode: (v) => v,
+        encode: (v) => v,
+        methods: {},
+      }),
+    ).toThrow(TypeError);
+    expect(Object.isFrozen(nonPlainState)).toBe(false);
   });
 });

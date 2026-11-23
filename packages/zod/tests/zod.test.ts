@@ -1,12 +1,17 @@
-import { Alias, Model, string, type InferData, type InferDTO } from "modvia";
+import { Alias, Codec, Model, string, type InferData, type InferDTO } from "modvia";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { z } from "zod";
 import * as zMini from "zod/mini";
 import { zodCodec } from "../src/index.ts";
 
 describe("@modvia/zod — zodCodec", () => {
-  test("将对称 Zod 标量与对象规则桥接为双向 Codec，保留嵌套路径与 zod.* 错误码", () => {
-    const Email = zodCodec(z.email());
+  test("将对称 Zod 标量与对象规则桥接为双向 Codec，保留嵌套路径、description 与 zod.* 错误码", () => {
+    const Email = zodCodec(z.email().describe("Primary contact email"));
+    expect(Codec.inspect(Email)).toStrictEqual({
+      kind: "custom",
+      format: "zod",
+      description: "Primary contact email",
+    });
     expect(Email.decode("user@example.com")).toBe("user@example.com");
     expect(Email.encode("user@example.com")).toBe("user@example.com");
     expect(Email.parse("user@example.com")).toBe("user@example.com");

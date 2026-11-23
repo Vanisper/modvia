@@ -16,12 +16,15 @@ function validateIsoTime(input: unknown, context: CodecContext): string {
   return input;
 }
 
+const isoTimeSchema = Object.freeze({ type: "string", format: "time" });
+
 const defaultIsoTimeCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateIsoTime,
   encode: validateIsoTime,
   meta: {
     format: "time",
-    encodedSchema: { type: "string", format: "time" },
+    encodedSchema: isoTimeSchema,
+    decodedSchema: isoTimeSchema,
   },
 });
 

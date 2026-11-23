@@ -1,14 +1,11 @@
 export * from "./codec.ts";
-export * from "./model/core/alias.ts";
+export { Alias, type AliasKind } from "./model/core/alias.ts";
 export type {
   FieldRecord,
   InferDTO,
   InferData,
   InferModel,
-  MergeFields,
   ModelOf,
-  OptionalizeField,
-  PartialFields,
   TaggedModelLike,
 } from "./model/core/types.ts";
 export * from "./model/namespace.ts";

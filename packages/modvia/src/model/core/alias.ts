@@ -7,8 +7,6 @@ export interface Alias<Kind extends AliasKind = "custom"> {
   mapKey(this: void, key: string): string;
 }
 
-export type AliasStrategy<Kind extends AliasKind = "custom"> = Alias<Kind>;
-
 type UpperAlpha =
   | "A"
   | "B"

@@ -222,7 +222,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       maximum: 65535,
     });
 
-    // 原生 bigint 在 strict 模式下报 TypeError，切换 .fromString() 后在 DTO 侧可无损输出字符串 Schema
+    // 原生 bigint 在 strict 模式下报 TypeError，切换 .fromString() 后在 DTO 侧可无损输出字符串 Schema，Data 侧诚实反映 bigint 非 JSON 原语
     expect(() => toJsonSchema(bigint(), { strict: true })).toThrow(TypeError);
     expect(
       toJsonSchema(bigint().positive().fromString(), { strict: true, includeSchemaUri: false }),
@@ -230,6 +230,12 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       type: "string",
       pattern: "^[+-]?\\d+$",
     });
+    expect(
+      toJsonSchema(bigint().positive().fromString(), { side: "data", includeSchemaUri: false }),
+    ).toStrictEqual({});
+    expect(() =>
+      toJsonSchema(bigint().positive().fromString(), { side: "data", strict: true }),
+    ).toThrow(TypeError);
   });
 
   test("自动检测 Codec.lazy 自引用递归环并提升为 $defs / definitions 引用", () => {
@@ -278,6 +284,38 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
         },
       },
     });
+
+    // 自引用模型通过 .nullable() 递归引用时仍精确命中同一根模型定义，不发生二次展开
+    interface LinkedNodeData {
+      readonly id: string;
+      readonly next: LinkedNodeData | null;
+    }
+    interface LinkedNodeDTO {
+      id: string;
+      next: LinkedNodeDTO | null;
+    }
+    const LinkedNode: Model<LinkedNodeData, LinkedNodeDTO> = Model.define({
+      fields: {
+        id: string(),
+        next: Codec.lazy(() => LinkedNode.nullable()),
+      },
+    });
+    expect(toJsonSchema(LinkedNode, { includeSchemaUri: false })).toStrictEqual({
+      $ref: "#/$defs/def_0",
+      $defs: {
+        def_0: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            next: {
+              anyOf: [{ $ref: "#/$defs/def_0" }, { type: "null" }],
+            },
+          },
+          required: ["id", "next"],
+          additionalProperties: false,
+        },
+      },
+    });
   });
 
   test("withJsonSchema 挂载 StandardJSONSchemaV1 协议并完整保留模型能力与 strict 校验", () => {
@@ -296,6 +334,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     }
 
     const converter = acceptStandardJson(Task);
+    expect(Task.brand<"VerifiedTask">()).toBe(Task);
     expectTypeOf(Task.parse({ task_id: "550e8400-e29b-41d4-a716-446655440000" })).toEqualTypeOf<{
       readonly taskId: string;
       readonly done: boolean;

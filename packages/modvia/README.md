@@ -115,7 +115,7 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 // { product_code: "A-01", stock: "unlimited", labels: [null, "夏季"] }
 ```
 
-- `string()`：通过 `.trim()`、`.minLength(n)`、`.maxLength(n)`、`.length(n)`、`.nonEmpty()`、`.pattern(re)` 不可变链式派生（归并状态后始终先 `trim` 再守卫长度与无状态正则）。
+- `string()`：通过 `.trim()`、`.minLength(n)`、`.maxLength(n)`、`.length(n)`、`.nonEmpty()`、`.pattern(re)` 不可变链式派生（归并状态后始终先 `trim` 再守卫长度与正则；`.pattern()` 自动剥离全局 `g` 标志并拒绝改变锚点语义的粘滞 `y` 标志）。
 - `number()`、`int()` 与 `bigint()`：分别校验有限浮点数、安全整数与原生大整数，统一支持 `.min(n)`、`.max(n)`、`.gt(n)`、`.lt(n)`、`.positive()`、`.nonNegative()`、`.negative()`、`.nonPositive()` 链式派生，定义期立即拦截空区间，并可通过 `.fromString()` 切换为严格收敛的字符串外部表示（与区间方法调用顺序无关）。
 - `boolean()`：校验原生布尔值；调用 `.fromString()` 切换为布尔文本编解码器（`Codec<boolean, string>`），并支持 `.tokens(truthy, falsy)` 与 `.caseSensitive()` 链式派生。
 - `.alias(name)`：指定父对象双向读写该字段时使用的外部键别名；同一模型内的外部键名不能重复。
@@ -324,7 +324,7 @@ const Order = Model.define({
 });
 ```
 
-无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`；`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
+无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`；状态化形式要求初始 `state` 为普通对象，`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
 
 ## 日期时间
 

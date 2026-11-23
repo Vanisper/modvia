@@ -23,14 +23,16 @@ export function compileBooleanTokens(
     }
     return caseSensitive ? token : token.toLowerCase();
   };
-  const truthySet = new Set(rawTruthy.map(normalizeToken));
-  const falsySet = new Set(rawFalsy.map(normalizeToken));
+  const frozenTruthy = Object.freeze([...rawTruthy]) as readonly [string, ...string[]];
+  const frozenFalsy = Object.freeze([...rawFalsy]) as readonly [string, ...string[]];
+  const truthySet = new Set(frozenTruthy.map(normalizeToken));
+  const falsySet = new Set(frozenFalsy.map(normalizeToken));
   for (const token of truthySet) {
     if (falsySet.has(token)) {
       throw new RangeError(`Overlapping boolean token "${token}" in truthy and falsy sets`);
     }
   }
-  return { rawTruthy, rawFalsy, caseSensitive, truthySet, falsySet };
+  return { rawTruthy: frozenTruthy, rawFalsy: frozenFalsy, caseSensitive, truthySet, falsySet };
 }
 
 export function parseBooleanToken(

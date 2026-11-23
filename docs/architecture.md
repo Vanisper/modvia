@@ -98,7 +98,7 @@ packages/modvia/src/
 │   └── json/
 │       ├── json-string.ts        # [公开] jsonString
 │       └── json-of.ts            # [公开] jsonOf（保留下游 WithCodecTrait 链式方法）
-└── model/                        # 领域模型模块（单向依赖 codec + shared，严禁导入 primitives / formats）
+└── model/                        # 领域模型模块（单向依赖 codec + shared，严禁导入 scalars / primitives / formats）
     ├── namespace.ts              # [公开] Model 类型-值合并命名空间（Model.define、Model.union）
     ├── core/                     # 模型内核（严禁导入 model/operators）
     │   ├── types.ts              # [公开] Model 接口、字段表静态布局与类型提取工具

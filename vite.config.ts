@@ -2,8 +2,9 @@ import { defineConfig } from "vite-plus";
 
 function forbidLayers(names: readonly string[]): string[] {
   const patterns: string[] = [];
-  for (const name of names) {
-    for (const prefix of ["..", "../..", "../../.."]) {
+  for (const prefix of ["..", "../..", "../../.."]) {
+    patterns.push(`${prefix}/index`, `${prefix}/index.ts`, `${prefix}/codec.ts`);
+    for (const name of names) {
       patterns.push(`${prefix}/${name}`, `${prefix}/${name}/**`);
     }
   }
@@ -81,7 +82,7 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
-              patterns: forbidLayers(["model"]),
+              patterns: forbidLayers(["primitives", "model"]),
             },
           ],
         },
@@ -92,7 +93,7 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
-              patterns: forbidLayers(["primitives", "formats"]),
+              patterns: forbidLayers(["scalars", "primitives", "formats"]),
             },
           ],
         },

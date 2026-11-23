@@ -16,12 +16,15 @@ function validateIsoDate(input: unknown, context: CodecContext): string {
   return input;
 }
 
+const isoDateSchema = Object.freeze({ type: "string", format: "date" });
+
 const defaultIsoDateCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateIsoDate,
   encode: validateIsoDate,
   meta: {
     format: "date",
-    encodedSchema: { type: "string", format: "date" },
+    encodedSchema: isoDateSchema,
+    decodedSchema: isoDateSchema,
   },
 });
 

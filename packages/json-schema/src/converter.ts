@@ -346,10 +346,7 @@ function buildDescriptorSchema(
       return convertNode(descriptor.resolve(), side, context);
     }
     case "custom": {
-      const schemaFragment =
-        side === "dto"
-          ? descriptor.encodedSchema
-          : (descriptor.decodedSchema ?? descriptor.encodedSchema);
+      const schemaFragment = side === "dto" ? descriptor.encodedSchema : descriptor.decodedSchema;
       if (schemaFragment !== undefined) {
         const cloned: JsonSchemaObject = { ...schemaFragment };
         if (context.target === "openapi-3.0") {

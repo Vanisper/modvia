@@ -180,6 +180,9 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
       withFactory<Next extends Data>(
         nextFactory: (data: Data) => Next,
       ): Model<Data, DTO, Next, Fields> {
+        if (typeof nextFactory !== "function") {
+          throw new TypeError("withFactory requires a factory function");
+        }
         return createModel<Fields, Data, DTO, Next>(ownFields, resolvedFields, nextFactory, state);
       },
     },

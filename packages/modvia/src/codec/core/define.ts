@@ -65,6 +65,13 @@ export function defineCodec<T, Encoded = T>(
     | CodecHandlers<T, Encoded>
     | StatefulCodecHandlers<T, Encoded, object, CodecMethodBuilders<object>>,
 ): Codec<T, Encoded> {
+  if (typeof handlers !== "object" || handlers === null) {
+    throw new TypeError("Codec.define requires a handlers object");
+  }
+  if (typeof handlers.decode !== "function" || typeof handlers.encode !== "function") {
+    throw new TypeError("Codec.define requires decode and encode functions");
+  }
+
   if ("state" in handlers || "methods" in handlers) {
     const stateful = handlers as StatefulCodecHandlers<
       T,
@@ -72,8 +79,8 @@ export function defineCodec<T, Encoded = T>(
       object,
       CodecMethodBuilders<object>
     >;
-    if (typeof stateful.decode !== "function" || typeof stateful.encode !== "function") {
-      throw new TypeError("Codec.define requires decode and encode functions");
+    if (stateful.validate !== undefined && typeof stateful.validate !== "function") {
+      throw new TypeError("Codec.define validate must be a function");
     }
     return createStatefulCodec({
       state: stateful.state,

@@ -58,13 +58,16 @@ function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): strin
   return input;
 }
 
+const uriSchema = Object.freeze({ type: "string", format: "uri" });
+
 const defaultUrlCodec: UrlCodec = defineCodec({
   state: {} as UrlState,
   decode: validateUrl,
   encode: validateUrl,
   meta: {
     format: "uri",
-    encodedSchema: { type: "string", format: "uri" },
+    encodedSchema: uriSchema,
+    decodedSchema: uriSchema,
   },
   methods: {
     protocols: (...allowed: readonly [string, ...string[]]) => ({

@@ -1,4 +1,4 @@
-import type { StatefulCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
+import type { TraitCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
 import { validateDiscreteBigIntBounds } from "../../scalars/bounds/ordered.ts";
 import {
   assertBigIntValue,
@@ -9,7 +9,7 @@ import {
 import { createOrderedScalarCodec, type OrderedNumericTrait } from "./shared.ts";
 
 /** 原生大整数双向编解码器（bigint），支持大整数区间派生与 .fromString() 十进制字符串介质切换 */
-export interface NativeBigIntCodec extends StatefulCodecBase<
+export interface NativeBigIntCodec extends TraitCodecBase<
   bigint,
   bigint,
   OrderedNumericTrait<bigint>
