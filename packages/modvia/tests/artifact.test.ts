@@ -1,31 +1,41 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
+import * as modviaEntry from "modvia";
 import {
+  Alias,
   arrayOf,
-  defineModel,
-  isValidationError,
+  Codec,
+  Field,
   isoDateTime,
   literal,
+  Model,
   oneOf,
-  snakeCase,
   string,
-  taggedUnion,
+  ValidationError,
   type InferData,
   type InferDTO,
 } from "modvia";
 import * as codecEntry from "modvia/codec";
-import { email, jsonOf, uuid } from "modvia/formats";
+import {
+  bigintFromString,
+  booleanFromString,
+  email,
+  intFromString,
+  jsonOf,
+  numberFromString,
+  uuid,
+} from "modvia/formats";
 
 // 通过包出口消费打包产物（modvia → dist/index.mjs，modvia/codec → dist/codec.mjs），
 // 必须在工作区构建之后运行（vp run ready 已按 构建 → 检查 → 测试 排序）。
 
-const Department = defineModel({
+const Department = Model.define({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
   },
 });
 
-const MemberModel = defineModel({
+const MemberModel = Model.define({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
@@ -69,12 +79,37 @@ const dtoList = [
 ];
 
 describe("packaged artifacts (modvia & modvia/codec)", () => {
-  test("主入口与 ./codec 子路径共享同一套编解码原语引用", () => {
+  test("主入口与 ./codec 子路径共享同一套分层主体命名空间与编解码原语引用", () => {
     expect(string).toBe(codecEntry.string);
     expect(arrayOf).toBe(codecEntry.arrayOf);
     expect(isoDateTime).toBe(codecEntry.isoDateTime);
-    expect(isValidationError).toBe(codecEntry.isValidationError);
-    expect("defineModel" in codecEntry).toBe(false);
+    expect(Codec).toBe(codecEntry.Codec);
+    expect(Field).toBe(codecEntry.Field);
+    expect(ValidationError).toBe(codecEntry.ValidationError);
+    expect("Model" in codecEntry).toBe(false);
+    expect("Alias" in codecEntry).toBe(false);
+
+    // 验证已移除旧扁平顶层导出，确保主体命名空间边界干净唯一
+    for (const legacyKey of [
+      "defineModel",
+      "taggedUnion",
+      "defineCodec",
+      "inspectCodec",
+      "isValidationError",
+      "field",
+      "isField",
+      "pipe",
+      "invert",
+      "lazy",
+      "unionOf",
+      "fromStandard",
+      "snakeCase",
+      "kebabCase",
+      "defineAlias",
+    ]) {
+      expect(legacyKey in modviaEntry).toBe(false);
+      expect(legacyKey in codecEntry).toBe(false);
+    }
 
     const positiveMap = codecEntry.recordOf(
       codecEntry
@@ -99,29 +134,43 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     });
 
     const AccountJson = jsonOf(
-      defineModel({
-        alias: snakeCase,
+      Model.define({
+        alias: Alias.snakeCase,
         fields: {
           accountId: uuid(),
           contactEmail: email({ trim: true, lowercase: true }),
+          port: intFromString({ min: 1, max: 65535 }),
+          ratio: numberFromString({ min: 0, max: 1 }),
+          enabled: booleanFromString(),
+          quotaBytes: bigintFromString(),
         },
-      }),
+      })
+        .describe("Account wire payload")
+        .strict(),
     );
     const account = AccountJson.decode(
-      '{"account_id":"550E8400-E29B-41D4-A716-446655440000","contact_email":" Ops@Example.com "}',
+      '{"account_id":"550E8400-E29B-41D4-A716-446655440000","contact_email":" Ops@Example.com ","port":"8080","ratio":"0.5","enabled":"TRUE","quota_bytes":"9007199254740993"}',
     );
     expect(account).toStrictEqual({
       accountId: "550e8400-e29b-41d4-a716-446655440000",
       contactEmail: "ops@example.com",
+      port: 8080,
+      ratio: 0.5,
+      enabled: true,
+      quotaBytes: 9007199254740993n,
     });
     expect(JSON.parse(AccountJson.encode(account))).toStrictEqual({
       account_id: "550e8400-e29b-41d4-a716-446655440000",
       contact_email: "ops@example.com",
+      port: "8080",
+      ratio: "0.5",
+      enabled: "true",
+      quota_bytes: "9007199254740993",
     });
   });
 
   test("从包入口组合可选日期数组并编码工厂实例的公开字段", () => {
-    const Schedule = defineModel({
+    const Schedule = Model.define({
       fields: { dates: arrayOf(isoDateTime().nullable()).optional().alias("event_dates") },
     });
     expectTypeOf<InferData<typeof Schedule>>().toEqualTypeOf<{
@@ -157,18 +206,18 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
       joined_at: "2026-11-09T00:00:00.000Z",
     });
 
-    const TextEvent = defineModel({ fields: { type: literal("text"), message: string() } });
-    const SystemEvent = defineModel({
+    const TextEvent = Model.define({ fields: { type: literal("text"), message: string() } });
+    const SystemEvent = Model.define({
       fields: { type: literal("system"), code: codecEntry.number() },
     });
-    const EventCodec = taggedUnion("type", [TextEvent, SystemEvent]);
+    const EventCodec = Model.union("type", [TextEvent, SystemEvent]);
     expect(EventCodec.encode(EventCodec.decode({ type: "system", code: 200 }))).toStrictEqual({
       type: "system",
       code: 200,
     });
 
-    const Config = defineModel({
-      alias: snakeCase,
+    const Config = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         maxRetries: codecEntry.int().default(3),
         serviceUrl: string(),
@@ -234,7 +283,7 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
       caught = error;
     }
 
-    if (!isValidationError(caught)) throw new Error("Expected ValidationError");
+    if (!ValidationError.is(caught)) throw new Error("Expected ValidationError");
     expect(caught.issues.map((issue) => issue.code)).toEqual([
       "string.min_length",
       "string.one_of",

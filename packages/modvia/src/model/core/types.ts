@@ -53,6 +53,10 @@ export interface Model<
     this: void,
     fields: Extra,
   ): ModelOf<MergeFields<Fields, Extra>>;
+  /** 派生严格对象模型：解码遇到未声明的自有属性时报告 object.unknown_key 错误 */
+  strict(this: void): Model<Data, DTO, Out, Fields>;
+  /** 为模型附加静态文档说明文本，保留全部模型方法与实例构造工厂 */
+  describe(this: void, description: string): Model<Data, DTO, Out, Fields>;
   /** 用新工厂替换实例构造步骤，工厂接收完整校验后的基础字段数据 */
   withFactory<Next extends Data>(
     this: void,

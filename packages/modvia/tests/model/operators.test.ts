@@ -1,16 +1,14 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
+  Alias,
   arrayOf,
-  defineAlias,
-  defineModel,
+  Codec,
   isoDateTime,
-  kebabCase,
   literal,
+  Model,
   number,
   oneOf,
-  snakeCase,
   string,
-  taggedUnion,
   type InferData,
   type InferDTO,
   type InferEncoded,
@@ -18,7 +16,7 @@ import {
   type InferValue,
 } from "../../src/index.ts";
 
-const BaseUser = defineModel({
+const BaseUser = Model.define({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
@@ -160,9 +158,9 @@ describe("model introspection & derivation", () => {
     expect(() => BaseUser.partial("missing")).toThrow(RangeError);
   });
 
-  test("alias 策略自动同步编译期与运行时外部键映射，字段显式 .alias() 优先", () => {
-    const Profile = defineModel({
-      alias: snakeCase,
+  test("Alias 策略自动同步编译期与运行时外部键映射，字段显式 .alias() 优先", () => {
+    const Profile = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         userId: string(),
         isEmailVerified: literal(true, false).default(false),
@@ -203,8 +201,8 @@ describe("model introspection & derivation", () => {
       USR_CODE: "L-9",
     });
 
-    const HeaderModel = defineModel({
-      alias: kebabCase,
+    const HeaderModel = Model.define({
+      alias: Alias.kebabCase,
       fields: { traceId: string(), clientVersion: string() },
     });
     expect(HeaderModel.encode({ traceId: "t-1", clientVersion: "1.0" })).toStrictEqual({
@@ -216,8 +214,8 @@ describe("model introspection & derivation", () => {
       "client-version": string;
     }>();
 
-    const UpperAlias = defineAlias((key) => key.toUpperCase());
-    const EnvModel = defineModel({
+    const UpperAlias = Alias.define((key) => key.toUpperCase());
+    const EnvModel = Model.define({
       alias: UpperAlias,
       fields: { appPort: number() },
     });
@@ -225,16 +223,55 @@ describe("model introspection & derivation", () => {
 
     // 别名策略转换后若与已有字段名碰撞则在定义期抛 RangeError
     expect(() =>
-      defineModel({
-        alias: snakeCase,
+      Model.define({
+        alias: Alias.snakeCase,
         fields: { userId: string(), user_id: string() },
       }),
     ).toThrow(RangeError);
   });
 
+  test("strict 派生严格对象模型：解码遇到未声明外部键时报告 object.unknown_key，保留工厂与文档说明", () => {
+    const StrictAccount = UserAccountModel.describe("Account entity").strict();
+    expect(StrictAccount.strict()).toBe(StrictAccount);
+    expect(Codec.inspect(StrictAccount)).toMatchObject({
+      kind: "model",
+      strict: true,
+      description: "Account entity",
+    });
+
+    const valid = StrictAccount.parse({
+      id: "u-1",
+      name: "林舟",
+      role: "admin",
+      created_at: "2026-11-09T00:00:00.000Z",
+    });
+    expect(valid).toBeInstanceOf(UserAccount);
+
+    // 传入内部名 createdAt（而非外部名 created_at）与多余键 typo_flag 时同时报告缺键与未知键
+    const rejected = StrictAccount.safeParse({
+      id: "u-1",
+      name: "林舟",
+      role: "admin",
+      createdAt: "2026-11-09T00:00:00.000Z",
+      typo_flag: true,
+    });
+    expect(rejected).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: ["created_at"],
+          code: "field.required",
+          message: "Missing required field: created_at",
+        },
+        { path: ["createdAt"], code: "object.unknown_key", message: "Unknown field: createdAt" },
+        { path: ["typo_flag"], code: "object.unknown_key", message: "Unknown field: typo_flag" },
+      ],
+    });
+  });
+
   test("对模型调用 check 时自动将声明字段路径双向翻译为 DTO 外部键与模型内部键", () => {
-    const PasswordReset = defineModel({
-      alias: snakeCase,
+    const PasswordReset = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         newPassword: string({ minLength: 6 }),
         confirmPassword: string({ minLength: 6 }),
@@ -283,8 +320,8 @@ describe("model introspection & derivation", () => {
   });
 });
 
-describe("taggedUnion", () => {
-  const TextBlock = defineModel({
+describe("Model.union", () => {
+  const TextBlock = Model.define({
     fields: {
       kind: oneOf("text").alias("block_type"),
       body: string({ trim: true, minLength: 1 }),
@@ -304,14 +341,14 @@ describe("taggedUnion", () => {
     }
   }
 
-  const ImageBlock = defineModel({
+  const ImageBlock = Model.define({
     fields: {
       kind: literal("image").alias("block_type"),
       url: string({ minLength: 1 }).alias("image_url"),
     },
   }).withFactory((data) => new ImageBlockEntity(data));
 
-  const ContentBlock = taggedUnion("kind", [TextBlock, ImageBlock]);
+  const ContentBlock = Model.union("kind", [TextBlock, ImageBlock]);
 
   test("按标签 O(1) 双向分发普通模型与工厂实例，并支持判别键外部别名", () => {
     const Blocks = arrayOf(ContentBlock);
@@ -364,31 +401,31 @@ describe("taggedUnion", () => {
   });
 
   test("定义期拒绝重复标签、可选判别键、不一致外部名或非常量判别规则", () => {
-    const DuplicateText = defineModel({
+    const DuplicateText = Model.define({
       fields: { kind: literal("text").alias("block_type"), note: number() },
     });
-    expect(() => taggedUnion("kind", [TextBlock, DuplicateText])).toThrow(RangeError);
+    expect(() => Model.union("kind", [TextBlock, DuplicateText])).toThrow(RangeError);
 
-    const InconsistentSource = defineModel({
+    const InconsistentSource = Model.define({
       fields: { kind: literal("quote"), quote: string() },
     });
-    expect(() => taggedUnion("kind", [TextBlock, InconsistentSource])).toThrow(RangeError);
+    expect(() => Model.union("kind", [TextBlock, InconsistentSource])).toThrow(RangeError);
 
-    const OptionalTag = defineModel({
+    const OptionalTag = Model.define({
       fields: { kind: literal("quote").alias("block_type").optional() },
     });
     // @ts-expect-error 可选判别键在编译期与定义期均被拒绝
-    expect(() => taggedUnion("kind", [TextBlock, OptionalTag])).toThrow(RangeError);
+    expect(() => Model.union("kind", [TextBlock, OptionalTag])).toThrow(RangeError);
 
-    const MissingTag = defineModel({
+    const MissingTag = Model.define({
       fields: { title: string() },
     });
     // @ts-expect-error 缺少判别键的模型在编译期与定义期均被拒绝
-    expect(() => taggedUnion("kind", [TextBlock, MissingTag])).toThrow(RangeError);
+    expect(() => Model.union("kind", [TextBlock, MissingTag])).toThrow(RangeError);
 
-    const DynamicTag = defineModel({
+    const DynamicTag = Model.define({
       fields: { kind: string().alias("block_type") },
     });
-    expect(() => taggedUnion("kind", [TextBlock, DynamicTag])).toThrow(TypeError);
+    expect(() => Model.union("kind", [TextBlock, DynamicTag])).toThrow(TypeError);
   });
 });

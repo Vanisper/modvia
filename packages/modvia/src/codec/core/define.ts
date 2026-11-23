@@ -1,5 +1,5 @@
 import { createScopedContext, INVALID, isAbortSignal } from "./collector.ts";
-import { isValidationError } from "./errors.ts";
+import { ValidationError } from "./errors.ts";
 import {
   createCodec,
   createField,
@@ -33,6 +33,7 @@ export function defineCodec<T, Encoded = T>(
   const descriptor: CodecDescriptor = {
     kind: "custom",
     ...(meta?.format !== undefined ? { format: meta.format } : {}),
+    ...(meta?.description !== undefined ? { description: meta.description } : {}),
     ...(meta?.encodedSchema !== undefined ? { encodedSchema: meta.encodedSchema } : {}),
     ...(meta?.decodedSchema !== undefined ? { decodedSchema: meta.decodedSchema } : {}),
   };
@@ -51,7 +52,7 @@ export function defineCodec<T, Encoded = T>(
         if (isAbortSignal(error)) {
           return collector.add(error.code, error.message);
         }
-        if (isValidationError(error)) {
+        if (ValidationError.is(error)) {
           return collector.addRelativeIssues(error.issues);
         }
         throw error;

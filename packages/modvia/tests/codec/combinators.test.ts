@@ -1,22 +1,17 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
-  defineCodec,
-  invert,
+  Codec,
   isoDateTime,
-  lazy,
   literal,
   number,
-  pipe,
   string,
-  unionOf,
-  type Codec,
   type InferEncoded,
   type InferValue,
 } from "../../src/codec/index.ts";
-import { defineModel, type Model } from "../../src/index.ts";
+import { Model } from "../../src/index.ts";
 
-const intFromString = defineCodec<number, string>({
+const intFromString = Codec.define<number, string>({
   decode(input, context) {
     if (typeof input !== "string" || !/^-?\d+$/.test(input)) {
       return context.fail("number.integer_string", "Expected an integer string");
@@ -71,7 +66,7 @@ describe("codec combinators", () => {
   });
 
   test("check 支持通过 context.issue 非中断收集多条错误及相对子路径", () => {
-    const Span = defineModel({
+    const Span = Model.define({
       fields: {
         min: number(),
         max: number(),
@@ -180,7 +175,7 @@ describe("codec combinators", () => {
       issues: [{ code: "number.positive" }],
     });
 
-    const topLevelPiped = pipe(string({ trim: true }), intFromString);
+    const topLevelPiped = Codec.pipe(string({ trim: true }), intFromString);
     expect(topLevelPiped.decode(" 7 ")).toBe(7);
     expect(topLevelPiped.encode(7)).toBe("7");
 
@@ -189,8 +184,8 @@ describe("codec combinators", () => {
     expect(() => string().pipe(intFromString.optional())).toThrow(TypeError);
   });
 
-  test("invert 反转编解码方向并保持可逆性", () => {
-    const utcStringFromDate = invert(isoDateTime());
+  test("Codec.invert 反转编解码方向并保持可逆性", () => {
+    const utcStringFromDate = Codec.invert(isoDateTime());
     const date = new Date("2026-11-09T00:00:00.000Z");
 
     expect(utcStringFromDate.decode(date)).toBe("2026-11-09T00:00:00.000Z");
@@ -204,7 +199,7 @@ describe("codec combinators", () => {
     expectTypeOf<InferEncoded<typeof utcStringFromDate>>().toEqualTypeOf<Date>();
   });
 
-  test("lazy 支持自引用递归模型而无需手写转发 Codec", () => {
+  test("Codec.lazy 支持自引用递归模型而无需手写转发 Codec", () => {
     interface CategoryData {
       readonly id: string;
       readonly children: readonly CategoryData[];
@@ -214,10 +209,10 @@ describe("codec combinators", () => {
       children: CategoryDTO[];
     }
 
-    const Category: Model<CategoryData, CategoryDTO> = defineModel({
+    const Category: Model<CategoryData, CategoryDTO> = Model.define({
       fields: {
         id: string({ trim: true, minLength: 1 }),
-        children: arrayOf(lazy(() => Category)),
+        children: arrayOf(Codec.lazy(() => Category)),
       },
     });
 
@@ -260,8 +255,8 @@ describe("codec combinators", () => {
     expectTypeOf<InferValue<typeof status>>().toEqualTypeOf<200 | 204 | "pending" | false | null>();
   });
 
-  test("unionOf 按从左到右顺序匹配分支并清理前序尝试的错误", () => {
-    const timestampOrIso = unionOf(isoDateTime(), number());
+  test("Codec.union 按从左到右顺序匹配分支并清理前序尝试的错误", () => {
+    const timestampOrIso = Codec.union(isoDateTime(), number());
 
     const date = new Date("2026-01-01T00:00:00.000Z");
     expect(timestampOrIso.decode("2026-01-01T00:00:00Z")).toEqual(date);
@@ -278,11 +273,11 @@ describe("codec combinators", () => {
     });
 
     // 重叠分支遵循从左到右首个命中优先
-    const isoPreferred = unionOf(isoDateTime(), string());
+    const isoPreferred = Codec.union(isoDateTime(), string());
     expect(isoPreferred.decode("2026-01-01T00:00:00Z")).toBeInstanceOf(Date);
     expect(isoPreferred.decode("plain-text")).toBe("plain-text");
 
-    expect(() => Reflect.apply(unionOf, undefined, [string()])).toThrow(RangeError);
+    expect(() => Reflect.apply(Codec.union, undefined, [string()])).toThrow(RangeError);
     expectTypeOf<InferValue<typeof timestampOrIso>>().toEqualTypeOf<Date | number>();
     expectTypeOf<InferEncoded<typeof timestampOrIso>>().toEqualTypeOf<string | number>();
   });

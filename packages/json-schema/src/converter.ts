@@ -1,10 +1,4 @@
-import {
-  inspectCodec,
-  isField,
-  type CodecDescriptor,
-  type CodecLike,
-  type FieldLiteral,
-} from "modvia";
+import { Codec, Field, type CodecDescriptor, type CodecLike, type FieldLiteral } from "modvia";
 import type {
   JsonSchemaObject,
   JsonSchemaSide,
@@ -91,7 +85,7 @@ function getNodeKey(
   side: JsonSchemaSide,
   context: ConversionContext,
 ): string {
-  const targetObj = isField(codec) ? codec.codec : codec;
+  const targetObj = Field.is(codec) ? codec.codec : codec;
   let id = context.codecIds.get(targetObj);
   if (id === undefined) {
     id = context.nextCodecId++;
@@ -110,11 +104,14 @@ function convertNode(
   side: JsonSchemaSide,
   context: ConversionContext,
 ): JsonSchemaObject {
-  const descriptor = inspectCodec(codec);
+  const descriptor = Codec.inspect(codec);
 
   // lazy 节点先穿透到实际目标 Codec，再统一按目标身份检测递归环
   if (descriptor.kind === "lazy") {
-    return convertNode(descriptor.resolve(), side, context);
+    const resolvedSchema = convertNode(descriptor.resolve(), side, context);
+    return descriptor.description !== undefined
+      ? { ...resolvedSchema, description: descriptor.description }
+      : resolvedSchema;
   }
 
   const nodeKey = getNodeKey(codec, side, context);
@@ -150,6 +147,18 @@ function convertNode(
 }
 
 function convertDescriptor(
+  descriptor: CodecDescriptor,
+  side: JsonSchemaSide,
+  context: ConversionContext,
+): JsonSchemaObject {
+  const schema = buildDescriptorSchema(descriptor, side, context);
+  if (descriptor.description !== undefined) {
+    return { ...schema, description: descriptor.description };
+  }
+  return schema;
+}
+
+function buildDescriptorSchema(
   descriptor: CodecDescriptor,
   side: JsonSchemaSide,
   context: ConversionContext,
@@ -223,7 +232,7 @@ function convertDescriptor(
           additionalProperties: valueSchema,
         };
       }
-      const keyDescriptor = inspectCodec(descriptor.key);
+      const keyDescriptor = Codec.inspect(descriptor.key);
       if (context.target === "openapi-3.0") {
         if (keyDescriptor.kind === "enum") {
           const properties: Record<string, JsonSchemaObject> = {};
@@ -281,7 +290,7 @@ function convertDescriptor(
       const required: string[] = [];
 
       for (const [internalKey, entry] of Object.entries(descriptor.fields)) {
-        const fieldMeta = isField(entry) ? entry : undefined;
+        const fieldMeta = Field.is(entry) ? entry : undefined;
         const propName =
           side === "dto" && typeof fieldMeta?.source === "string" ? fieldMeta.source : internalKey;
         const presence = fieldMeta?.presence ?? "required";
@@ -297,7 +306,7 @@ function convertDescriptor(
         type: "object",
         properties,
         ...(required.length > 0 ? { required } : {}),
-        additionalProperties: context.additionalProperties,
+        additionalProperties: descriptor.strict ? false : context.additionalProperties,
       };
     }
     case "pipe": {

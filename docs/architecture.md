@@ -16,21 +16,21 @@ Modvia 以双向编解码契约为底座，围绕应用数据边界组织校验�
    - **原子层（Scalars）**：构建字符串、有限数字、布尔值、枚举/字面量及 ISO 日期时间等基础规则。
    - **算子层（Operators）**：构建数组、动态字典等值容器，以及管道串联、方向反转、惰性递归与顺序联合等高阶组合子；原子层与算子层平级互不依赖，均单向依赖内核层。
 4. **领域模型内核（Model Core）**
-   - 组合字段表形成对象级双向契约，负责外部键唯一性检查、字段内省、结构派生（`pick` / `omit` / `extend`）、工厂实例化（`withFactory`）以及原型链公开 getter 投影。
+   - 组合字段表形成对象级双向契约，负责外部键唯一性检查、字段内省、结构派生（`pick` / `omit` / `partial` / `extend` / `strict`）、文档说明（`describe`）、工厂实例化（`withFactory`）以及原型链公开 getter 投影。
 5. **领域模型算子（Model Operators）**
-   - 基于模型内核构建多模型高阶组合能力（如按共有字面量标签 $O(1)$ 分发的多态联合 `taggedUnion`）。
+   - 基于模型内核构建多模型高阶组合能力（如按共有字面量标签 $O(1)$ 分发的多态联合 `Model.union`）。
 
 ## 包拓扑与跨包复用策略
 
-工作区采用「单核心包多子路径 + 独立生态适配包」的拓扑结构：
+工作区采用「单核心包多子路径 + 独立生态适配包」的拓扑结构，公共符号按职责层次分离为「主体命名空间（类型与值合并）」与「直接数据形态构造器」：
 
 - **`modvia`（位于 `packages/modvia`）**：唯一零依赖核心包，对外提供三个职责分明的模块入口：
-  - `modvia/codec`：导出编解码内核、只读结构反射 `inspectCodec`、原子标量与值级算子，面向仅需纯粹双向编解码的场景。
-  - `modvia/formats`：导出按需 Tree-shaking 的无依赖标准格式与协议编解码器（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`jsonString`、`jsonOf`），单向依赖 `codec` 层且不进入主入口包体积。
-  - `modvia`：汇总导出 `modvia/codec` 全部公共能力，并导出领域模型层的 `defineModel`、`alias` 策略、类型提取工具与多态模型算子。
+  - `modvia/codec`：导出 `Codec` 与 `Field` 主体命名空间、`ValidationError`、0 阶标量（`string`、`number`、`int`、`boolean`、`unknown`、`literal`、`oneOf`、`isoDateTime`）与 1 阶值容器（`arrayOf`、`tupleOf`、`recordOf`），面向仅需纯粹双向编解码的场景。
+  - `modvia/formats`：导出按需 Tree-shaking 的无依赖标准格式、字符串数值转换与 JSON 桥接原语（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`intFromString`、`numberFromString`、`booleanFromString`、`bigintFromString`、`jsonString`、`jsonOf`），单向依赖 `codec` 层且不进入主入口包体积。
+  - `modvia`：汇总导出 `modvia/codec` 全部公共能力，并导出领域模型层的 `Model` 与 `Alias` 主体命名空间及类型提取工具。
 - **生态适配与元 Schema 导出包**：
   - 凡涉及第三方校验库、元 Schema 导出或框架特定集成的能力，均在独立包中通过 `peerDependencies` 承接，不进入 `packages/modvia`。
-  - `@modvia/json-schema`（位于 `packages/json-schema`）：零外部依赖读取 `inspectCodec` 只读描述符，按 DTO / Data 双视角导出 Draft-2020-12、Draft-07、OpenAPI 3.0 Schema，并提供 `StandardJSONSchemaV1` 协议包装 `withJsonSchema`。
+  - `@modvia/json-schema`（位于 `packages/json-schema`）：零外部依赖读取 `Codec.inspect` 只读描述符（含 `description` 与 `strict` 元数据），按 DTO / Data 双视角导出 Draft-2020-12、Draft-07、OpenAPI 3.0 Schema，并提供 `StandardJSONSchemaV1` 协议包装 `withJsonSchema`。
   - `@modvia/zod`（位于 `packages/zod`）：基于 `zod/v4/core` 将对称 Zod Schema 与双向 `z.codec` 桥接为标准 `Codec`，并在编译期与定义期拦截单向 `.transform()`、隐式 `z.coerce.*` 与吞错 `.catch()`。
 - **多包共享工具演进策略**：
   - 单产品包阶段，无领域工具置于 `packages/modvia/src/shared/` 并由静态规则锁定边界。
@@ -38,7 +38,7 @@ Modvia 以双向编解码契约为底座，围绕应用数据边界组织校验�
 
 ## 源码与测试目录结构
 
-`packages/modvia/src` 在两大领域模块内部按 `core / scalars / operators` 对称归类，子目录内部不设中间 `index.ts` 转出文件，仅由最外层包入口汇总公开模块：
+`packages/modvia/src` 在两大领域模块内部按 `core / scalars / operators` 对称归类，并通过领域顶层 `namespace.ts` 聚合主体元操作命名空间；子目录内部不设中间 `index.ts` 转出文件，仅由最外层包入口汇总公开模块：
 
 ```text
 packages/modvia/src/
@@ -48,10 +48,11 @@ packages/modvia/src/
 │   └── value.ts                  # [内部] 原始字面量判定、Object.is 去重与文本格式化
 ├── codec/                        # 编解码领域模块（严禁导入 model）
 │   ├── index.ts                  # 子入口（"modvia/codec"）：汇总 codec 公开模块
+│   ├── namespace.ts              # [公开] Codec 与 Field 类型-值合并命名空间
 │   ├── core/                     # 编解码内核（严禁导入 scalars / operators / formats）
-│   │   ├── types.ts              # [公开] Codec / Field / CodecDescriptor / SafeResult / StandardSchemaV1
-│   │   ├── errors.ts             # [公开] ValidationError 与 isValidationError
-│   │   ├── define.ts             # [公开] defineCodec、inspectCodec、field 与 isField
+│   │   ├── types.ts              # [公开] Codec / Field 接口、CodecDescriptor、SafeResult、StandardSchemaV1
+│   │   ├── errors.ts             # [公开] ValidationError（含静态 ValidationError.is）
+│   │   ├── define.ts             # [内部定义] defineCodec、inspectCodec、field 与 isField
 │   │   ├── collector.ts          # [内部] 零异常栈开销 IssueCollector 与中断信号
 │   │   └── runtime.ts            # [内部] Codec/Field 实例构造、描述符挂载与执行调度器
 │   ├── scalars/                  # 原子值编解码器（严禁导入 operators）
@@ -59,22 +60,24 @@ packages/modvia/src/
 │   │   └── datetime.ts           # [公开] isoDateTime（独立维护日历与时区换算逻辑）
 │   └── operators/                # 高阶容器与组合算子（严禁导入 scalars）
 │       ├── containers.ts         # [公开] arrayOf、recordOf、tupleOf
-│       ├── combinators.ts        # [公开] pipe、invert、lazy、unionOf
-│       └── standard.ts           # [公开] StandardSchemaV1 同步输入桥接 fromStandard
+│       ├── combinators.ts        # [内部定义] pipe、invert、lazy、unionOf（由 Codec.* 暴露）
+│       └── standard.ts           # [内部定义] StandardSchemaV1 同步输入桥接 fromStandard（由 Codec.* 暴露）
 ├── formats/                      # 按需格式规则子模块（"modvia/formats"，单向依赖 codec）
-│   ├── index.ts                  # 子入口（"modvia/formats"）：汇总标准格式与 JSON 桥接原语
+│   ├── index.ts                  # 子入口（"modvia/formats"）：汇总标准格式、字符串数值与 JSON 原语
 │   ├── identifiers.ts            # [公开] uuid、email
 │   ├── network.ts                # [公开] url、ipv4、ipv6
 │   ├── temporal.ts               # [公开] isoDate、isoTime
+│   ├── string-values.ts          # [公开] intFromString、numberFromString、booleanFromString、bigintFromString
 │   └── json.ts                   # [公开] jsonString、jsonOf
 └── model/                        # 领域模型模块（单向依赖 codec + shared，严禁导入 formats）
+    ├── namespace.ts              # [公开] Model 类型-值合并命名空间（Model.define、Model.union）
     ├── core/                     # 模型内核（严禁导入 model/operators）
     │   ├── types.ts              # [公开] Model 接口、字段表静态布局与类型提取工具
-    │   ├── alias.ts              # [公开] 编译期与运行期同步的字段批量别名策略（snakeCase、kebabCase、defineAlias）
-    │   ├── define.ts             # [公开] defineModel、字段内省、结构派生与工厂派生
+    │   ├── alias.ts              # [公开] Alias 类型-值合并命名空间（Alias.snakeCase、Alias.kebabCase、Alias.define）
+    │   ├── define.ts             # [内部定义] defineModel、字段内省、结构/严格模式派生与工厂派生
     │   └── fields.ts             # [内部] 字段解析、外部键去重与原型链 getter 读取
     └── operators/                # 多模型高阶组合算子
-        └── tagged-union.ts       # [公开] 按共有判别字段分发的 taggedUnion
+        └── tagged-union.ts       # [内部定义] 按共有判别字段分发的 taggedUnion（由 Model.union 暴露）
 ```
 
 测试目录 `packages/modvia/tests/` 采用同构镜像划分（`shared/`、`codec/`、`model/` 及顶层包出口冒烟测试 `artifact.test.ts`）。根级 `vite.config.ts` 通过 `no-restricted-imports` 静态守卫自动看守上述全部层级与平级子域的导入边界。
@@ -96,8 +99,8 @@ packages/modvia/src/
 1. **阶段一：分层底座与校验引擎收敛**（已完成）
    - 建立 `modvia/codec` 与 `modvia` 双入口、零异常栈收集引擎、强契约 `decode`/`encode` 与宽边界 `parse`/`dump` 2×2 执行矩阵、`StandardSchemaV1` 以及 `Codec` / `Field` 作用域隔离。
 2. **阶段二：值组合原语、范围约束与精化规范体系补齐**（已完成）
-   - 确立跨表示变形、同类型规范化（`normalize`）与对称精化/品牌（`refine` / 多错 `check` / `brand`）三分体系，补齐标量与数组范围/正则约束及 `modvia/formats` 按需格式库，落地 `pipe`、`invert`、`lazy`、`literal`、`int`、`unknown`、`tupleOf`、`unionOf`、`recordOf` 与零依赖 `fromStandard`。
-3. **阶段三：模型结构内省、派生与多态联合**（已完成）
-   - 公开只读字段表元数据与 `inspectCodec` 结构描述符，支持 `Field.default`、`pick` / `omit` / `partial` / `extend` 模型派生、批量键别名策略（`snakeCase` / `kebabCase` / `defineAlias`）、跨字段路径翻译与按标签分发的 `taggedUnion`。
+   - 确立跨表示变形、同类型规范化（`normalize`）与对称精化/品牌（`refine` / 多错 `check` / `brand`）三分体系，补齐标量与数组范围/正则约束及 `modvia/formats` 按需格式与字符串数值库，落地 `Codec.pipe`、`Codec.invert`、`Codec.lazy`、`Codec.union`、`Codec.fromStandard`、`literal`、`int`、`unknown`、`tupleOf` 与 `recordOf`。
+3. **阶段三：分层主体命名空间、模型派生与多态联合**（已完成）
+   - 建立 `Model`、`Codec`、`Field`、`Alias` 与 `ValidationError` 类型-值合并命名空间层次，公开只读字段表元数据与 `Codec.inspect` 结构描述符（含 `.describe` 文档说明），支持 `Field.default`、`pick` / `omit` / `partial` / `extend` / `strict` 模型派生、批量键别名策略（`Alias.snakeCase` / `Alias.kebabCase` / `Alias.define`）、跨字段路径翻译与按标签分发的 `Model.union`。
 4. **阶段四：生态桥接与静态 Schema 导出**（已完成）
    - 在独立包 `@modvia/json-schema` 中提供 DTO / Data 双视角 JSON Schema / OpenAPI 3.0 导出与 `StandardJSONSchemaV1` 适配；在 `@modvia/zod` 中提供 Zod v4 到 Modvia `Codec` 的双向互操作适配；后续视多领域包需要上提 `@modvia/shared` 私有源码包。

@@ -14,15 +14,15 @@ pnpm add modvia @modvia/zod zod
 
 ### 桥接对称校验规则与模型字段修饰
 
-`zodCodec(schema)` 返回标准 `Codec<Output, Input>`（完整具备 `parse` / `dump` 与强契约 `decode` / `encode`），可直接接入 `defineModel`、`.alias()`、`.optional()`、`.default()`、`.brand()` 等全部 Modvia 原语：
+`zodCodec(schema)` 返回标准 `Codec<Output, Input>`（完整具备 `parse` / `dump` 与强契约 `decode` / `encode`），可直接接入 `Model.define`、`.alias()`、`.optional()`、`.default()`、`.brand()` 等全部 Modvia 原语：
 
 ```ts
 import { zodCodec } from "@modvia/zod";
-import { defineModel, snakeCase } from "modvia";
+import { Alias, Model } from "modvia";
 import { z } from "zod";
 
-const Contact = defineModel({
-  alias: snakeCase,
+const Contact = Model.define({
+  alias: Alias.snakeCase,
   fields: {
     primaryEmail: zodCodec(z.email()),
     backupEmails: zodCodec(z.array(z.email()).min(1)).optional(),
@@ -45,7 +45,7 @@ const dto = Contact.encode(contact);
 
 ```ts
 import { zodCodec } from "@modvia/zod";
-import { defineModel, snakeCase, string } from "modvia";
+import { Alias, Model, string } from "modvia";
 import { z } from "zod";
 
 const BigIntFromString = zodCodec(
@@ -55,8 +55,8 @@ const BigIntFromString = zodCodec(
   }),
 );
 
-const LedgerEntry = defineModel({
-  alias: snakeCase,
+const LedgerEntry = Model.define({
+  alias: Alias.snakeCase,
   fields: {
     entryId: string(),
     amountFen: BigIntFromString.default(() => 0n),
@@ -79,7 +79,7 @@ const UuidCodec = zodCodec(zMini.uuid());
 
 遵循 Modvia 的「双向收敛与操作三分」原则，`zodCodec` 在编译期与定义期双重拒绝破坏可逆性或吞没错误的规则：
 
-- **单向转换（`.transform()` / `z.preprocess()` / `z.success()`）**：无法反向编码，在编译期置为 `never` 并在定义期抛出 `TypeError`；请改用双向 `z.codec(...)` 或 Modvia `defineCodec` + `pipe`。
+- **单向转换（`.transform()` / `z.preprocess()` / `z.success()`）**：无法反向编码，在编译期置为 `never` 并在定义期抛出 `TypeError`；请改用双向 `z.codec(...)` 或 Modvia `Codec.define` + `Codec.pipe`。
 - **隐式有损强转（`z.coerce.*`）**：接收 `unknown` 强转会破坏静态边界与往返收敛，在编译期与定义期同步拦截；布尔字符串等场景请使用显式收敛的 `z.stringbool()`。
 - **吞错回退（`.catch()`）**：静默掩盖校验失败，违反显式错误收集契约，在编译期与定义期抛出 `TypeError`。
 - **异步规则（`z.promise()` / 异步 `refine`）**：Modvia 编解码器保持纯同步执行，定义期或执行期遇到异步节点立即抛出 `TypeError`。

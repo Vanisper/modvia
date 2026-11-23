@@ -8,9 +8,9 @@ import {
   string,
   tupleOf,
 } from "../../src/codec/index.ts";
-import { defineModel, type InferEncoded, type InferValue } from "../../src/index.ts";
+import { Model, type InferEncoded, type InferValue } from "../../src/index.ts";
 
-const Metric = defineModel({
+const Metric = Model.define({
   fields: {
     count: number(),
     updatedAt: isoDateTime().alias("updated_at"),

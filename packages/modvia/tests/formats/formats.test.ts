@@ -1,19 +1,23 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
+  bigintFromString,
+  booleanFromString,
   email,
+  intFromString,
   ipv4,
   ipv6,
   isoDate,
   isoTime,
   jsonOf,
   jsonString,
+  numberFromString,
   url,
   uuid,
 } from "../../src/formats/index.ts";
 import {
-  defineModel,
-  inspectCodec,
-  snakeCase,
+  Alias,
+  Codec,
+  Model,
   string,
   type InferEncoded,
   type InferValue,
@@ -36,7 +40,7 @@ describe("modvia/formats", () => {
       ok: false,
       issues: [{ code: "type.string" }],
     });
-    expect(inspectCodec(Uuid)).toMatchObject({ kind: "custom", format: "uuid" });
+    expect(Codec.inspect(Uuid)).toMatchObject({ kind: "custom", format: "uuid" });
 
     const Email = email({ trim: true, lowercase: true });
     expect(Email.decode("  User.Name+tag@Example.COM ")).toBe("user.name+tag@example.com");
@@ -136,8 +140,8 @@ describe("modvia/formats", () => {
       issues: [{ code: "format.json" }],
     });
 
-    const EventPayload = defineModel({
-      alias: snakeCase,
+    const EventPayload = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         eventId: uuid(),
         targetUrl: url({ protocols: ["https"] }),
@@ -163,5 +167,72 @@ describe("modvia/formats", () => {
     expect(EventJson.encode(parsed)).toBe(
       '{"event_id":"550e8400-e29b-41d4-a716-446655440000","target_url":"https://modvia.dev"}',
     );
+  });
+
+  test("intFromString、numberFromString、booleanFromString 与 bigintFromString 满足严格文本双向收敛", () => {
+    const Port = intFromString({ min: 1, max: 65535 });
+    expect(Port.decode("8080")).toBe(8080);
+    expect(Port.encode(8080)).toBe("8080");
+    expect(intFromString().decode("-0")).toBe(0);
+    expect(intFromString().encode(-0)).toBe("0");
+    for (const invalid of ["", "  ", "8080px", "1.5", "0x10", "9007199254740993"]) {
+      expect(Port.safeDecode(invalid)).toMatchObject({
+        ok: false,
+        issues: [{ code: "format.int_string" }],
+      });
+    }
+    expect(Port.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.min" }] });
+    expect(Port.safeEncode(70000)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
+    expect(Port.safeParse(8080)).toMatchObject({ ok: false, issues: [{ code: "type.string" }] });
+    expect(Port.safeDump("8080")).toMatchObject({ ok: false, issues: [{ code: "type.integer" }] });
+    expect(() => intFromString({ min: 1.5 })).toThrow(RangeError);
+    expect(() => intFromString({ min: 5, max: 1 })).toThrow(RangeError);
+
+    const Ratio = numberFromString({ min: 0, max: 1 });
+    expect(Ratio.decode("0.25")).toBe(0.25);
+    expect(Ratio.decode("1e-2")).toBe(0.01);
+    expect(Ratio.encode(0.25)).toBe("0.25");
+    expect(numberFromString().decode("-0.0")).toBe(0);
+    expect(numberFromString().encode(-0)).toBe("0");
+    for (const invalid of ["", " 0.5 ", "NaN", "Infinity", "1e999", "abc"]) {
+      expect(Ratio.safeDecode(invalid)).toMatchObject({
+        ok: false,
+        issues: [{ code: "format.number_string" }],
+      });
+    }
+    expect(Ratio.safeDecode("-0.1")).toMatchObject({ ok: false, issues: [{ code: "number.min" }] });
+    expect(Ratio.safeEncode(1.1)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
+
+    const BoolFlag = booleanFromString();
+    expect(BoolFlag.decode("TRUE")).toBe(true);
+    expect(BoolFlag.decode("False")).toBe(false);
+    expect(BoolFlag.encode(true)).toBe("true");
+    expect(BoolFlag.encode(false)).toBe("false");
+    expect(BoolFlag.safeDecode("1")).toMatchObject({
+      ok: false,
+      issues: [{ code: "format.boolean_string" }],
+    });
+
+    const CustomBool = booleanFromString({
+      truthy: ["YES", "1"],
+      falsy: ["NO", "0"],
+    });
+    expect(CustomBool.decode("yes")).toBe(true);
+    expect(CustomBool.decode("0")).toBe(false);
+    expect(CustomBool.encode(true)).toBe("YES");
+    expect(CustomBool.decode(CustomBool.encode(true))).toBe(true);
+    expect(() => booleanFromString({ truthy: ["on"], falsy: ["ON"] })).toThrow(RangeError);
+
+    const BigId = bigintFromString();
+    expect(BigId.decode("900719925474099312345")).toBe(900719925474099312345n);
+    expect(BigId.encode(-42n)).toBe("-42");
+    expect(BigId.safeDecode("12n")).toMatchObject({
+      ok: false,
+      issues: [{ code: "format.bigint_string" }],
+    });
+    expect(BigId.safeDump(12)).toMatchObject({
+      ok: false,
+      issues: [{ code: "type.bigint" }],
+    });
   });
 });

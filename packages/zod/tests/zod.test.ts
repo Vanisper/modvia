@@ -1,4 +1,4 @@
-import { defineModel, snakeCase, string, type InferData, type InferDTO } from "modvia";
+import { Alias, Model, string, type InferData, type InferDTO } from "modvia";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { z } from "zod";
 import * as zMini from "zod/mini";
@@ -24,8 +24,8 @@ describe("@modvia/zod — zodCodec", () => {
       issues: [{ path: [], code: "zod.invalid_type" }],
     });
 
-    const Contact = defineModel({
-      alias: snakeCase,
+    const Contact = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         primaryEmail: Email,
         backupEmails: zodCodec(z.array(z.email()).min(1)).optional(),
@@ -78,8 +78,8 @@ describe("@modvia/zod — zodCodec", () => {
       }),
     );
 
-    const LedgerEntry = defineModel({
-      alias: snakeCase,
+    const LedgerEntry = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         entryId: string(),
         amountFen: BigIntFromString.default(() => 0n),

@@ -1,4 +1,4 @@
-import { defineCodec, type Codec, type CodecContext, type PathSegment } from "modvia/codec";
+import { Codec, type CodecContext, type PathSegment } from "modvia/codec";
 import {
   $ZodAsyncError,
   $ZodEncodeError,
@@ -65,7 +65,7 @@ export function zodCodec<S extends $ZodType>(
   }
   assertReversibleZodSchema(schema, new Set());
 
-  return defineCodec<output<S>, input<S>>({
+  return Codec.define<output<S>, input<S>>({
     decode(rawInput, context) {
       const result = runZodStep(() => safeParse(schema, rawInput));
       if (!result.success) {
@@ -155,7 +155,7 @@ function assertReversibleZodSchema(node: ZodNodeLike, visited: Set<object>): voi
   switch (kind) {
     case "transform":
       throw new TypeError(
-        "zodCodec rejects unidirectional .transform() / z.preprocess(); use bidirectional z.codec(...) or Modvia defineCodec instead",
+        "zodCodec rejects unidirectional .transform() / z.preprocess(); use bidirectional z.codec(...) or Modvia Codec.define instead",
       );
     case "catch":
       throw new TypeError(

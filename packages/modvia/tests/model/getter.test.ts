@@ -1,8 +1,8 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vite-plus/test";
-import { defineModel, number } from "../../src/index.ts";
+import { Model, number } from "../../src/index.ts";
 
-const Quantity = defineModel({ fields: { count: number().alias("quantity") } });
+const Quantity = Model.define({ fields: { count: number().alias("quantity") } });
 const missingCount = expect.objectContaining({
   issues: [expect.objectContaining({ path: ["count"], code: "field.required" })],
 });
@@ -59,7 +59,7 @@ describe("声明字段的 getter", () => {
 
   test("编码与解码都忽略 Object.prototype 上的 getter", () => {
     const key = "modviaTestInheritedCount";
-    const Counter = defineModel({ fields: { [key]: number() } });
+    const Counter = Model.define({ fields: { [key]: number() } });
     const input = {} as { [key]: number };
     const missing = expect.objectContaining({
       issues: [expect.objectContaining({ path: [key], code: "field.required" })],
@@ -95,7 +95,7 @@ describe("声明字段的 getter", () => {
 
   test("解码与编码在结果上定义自有字段，避免触发原型上的同名访问器", () => {
     const key = "modviaTestOwnCount";
-    const Counter = defineModel({ fields: { [key]: number() } });
+    const Counter = Model.define({ fields: { [key]: number() } });
     const own = { [key]: 7 };
 
     Object.defineProperty(Object.prototype, key, {
@@ -145,8 +145,8 @@ describe("声明字段的 getter", () => {
     }
     const draft = new Draft();
     const quantity = number().alias("quantity").optional();
-    const Numeric = defineModel({ fields: { count: quantity } });
-    const Clearable = defineModel({ fields: { count: quantity.or(undefined) } });
+    const Numeric = Model.define({ fields: { count: quantity } });
+    const Clearable = Model.define({ fields: { count: quantity.or(undefined) } });
 
     expect(() => Numeric.dump(draft)).toThrow(
       expect.objectContaining({
@@ -157,7 +157,7 @@ describe("声明字段的 getter", () => {
   });
 
   test("基础和派生模型均能编码 Map.size，解码仍要求普通对象", () => {
-    const Collection = defineModel({ fields: { size: number() } });
+    const Collection = Model.define({ fields: { size: number() } });
     const MapCollection = Collection.withFactory(() => new Map<string, number>());
     const map = new Map([["a", 1]]);
     expect(Collection.encode(map)).toEqual({ size: 1 });

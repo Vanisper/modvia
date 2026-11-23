@@ -2,10 +2,12 @@ import type { CodecLike, Field } from "../../codec/core/types.ts";
 
 export type AliasKind = "snake_case" | "kebab-case" | "custom";
 
-export interface AliasStrategy<Kind extends AliasKind = "custom"> {
+export interface Alias<Kind extends AliasKind = "custom"> {
   readonly kind: Kind;
   mapKey(this: void, key: string): string;
 }
+
+export type AliasStrategy<Kind extends AliasKind = "custom"> = Alias<Kind>;
 
 type UpperAlpha =
   | "A"
@@ -84,38 +86,45 @@ export type ApplyAlias<
     : Fields[Key];
 };
 
-/** 将模型属性名按编译期与运行期同步规则映射为 snake_case 外部键别名 */
-export const snakeCase: AliasStrategy<"snake_case"> = Object.freeze({
+const snakeCaseStrategy: Alias<"snake_case"> = Object.freeze({
   kind: "snake_case",
   mapKey(key: string): string {
     return splitIdentifierWords(key, "_");
   },
 });
 
-/** 将模型属性名按编译期与运行期同步规则映射为 kebab-case 外部键别名 */
-export const kebabCase: AliasStrategy<"kebab-case"> = Object.freeze({
+const kebabCaseStrategy: Alias<"kebab-case"> = Object.freeze({
   kind: "kebab-case",
   mapKey(key: string): string {
     return splitIdentifierWords(key, "-");
   },
 });
 
-/** 创建自定义模型级外部键别名策略（字段显式 .alias() 声明始终优先于模型级 alias 策略） */
-export function defineAlias(mapKey: (key: string) => string): AliasStrategy<"custom"> {
+function defineAlias(mapKey: (key: string) => string): Alias<"custom"> {
   if (typeof mapKey !== "function") {
-    throw new TypeError("defineAlias requires a key mapping function");
+    throw new TypeError("Alias.define requires a key mapping function");
   }
   return Object.freeze({
     kind: "custom",
     mapKey(key: string): string {
       const mapped = mapKey(key);
       if (typeof mapped !== "string") {
-        throw new TypeError("AliasStrategy.mapKey must return a string");
+        throw new TypeError("Alias.mapKey must return a string");
       }
       return mapped;
     },
   });
 }
+
+/** 模型级字段外部键别名策略集合（含内置 snakeCase / kebabCase 与自定义 Alias.define） */
+export const Alias = Object.freeze({
+  /** 将模型属性名按编译期与运行期同步规则映射为 snake_case 外部键别名 */
+  snakeCase: snakeCaseStrategy,
+  /** 将模型属性名按编译期与运行期同步规则映射为 kebab-case 外部键别名 */
+  kebabCase: kebabCaseStrategy,
+  /** 创建自定义模型级外部键别名策略（字段显式 .alias() 声明始终优先于模型级 alias 策略） */
+  define: defineAlias,
+});
 
 function splitIdentifierWords(input: string, delimiter: string): string {
   return input

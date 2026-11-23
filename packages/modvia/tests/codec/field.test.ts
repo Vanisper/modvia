@@ -1,13 +1,12 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
-  defineModel,
-  field,
+  Codec,
+  Field,
   isoDateTime,
+  Model,
   number,
   string,
-  type Codec,
-  type Field,
   type InferData,
   type InferDTO,
 } from "../../src/index.ts";
@@ -15,7 +14,7 @@ import {
 describe("field binding", () => {
   test("复用纯 Codec 或带别名 Field 时保留全部候选外部键名", () => {
     function product(sku: Codec<string, string> | Field<string, string, "product_code">) {
-      return defineModel({ fields: { sku } });
+      return Model.define({ fields: { sku } });
     }
 
     type DTO = InferDTO<ReturnType<typeof product>>;
@@ -43,11 +42,11 @@ describe("field binding", () => {
     expect(rebound.safeParse("bad").ok).toBe(false);
     expect(rebound.safeDump("bad").ok).toBe(false);
 
-    const Model = defineModel({ fields: { count: rebound } });
-    expect(Model.decode({ new_key: 5 })).toStrictEqual({ count: 5 });
+    const CountModel = Model.define({ fields: { count: rebound } });
+    expect(CountModel.decode({ new_key: 5 })).toStrictEqual({ count: 5 });
     // @ts-expect-error decode 编译期要求传入必填键 new_key
-    expect(Model.safeDecode({}).ok).toBe(false);
-    expect(Model.safeParse({})).toMatchObject({
+    expect(CountModel.safeDecode({}).ok).toBe(false);
+    expect(CountModel.safeParse({})).toMatchObject({
       ok: false,
       issues: [{ path: ["new_key"], code: "field.required" }],
     });
@@ -55,9 +54,9 @@ describe("field binding", () => {
 
   test("optional 控制父对象缺键，显式 undefined 仍由值规则决定", () => {
     const SKU = string({ minLength: 1 });
-    const required = defineModel({ fields: { sku: SKU.or(undefined) } });
-    const optional = defineModel({ fields: { sku: SKU.optional() } });
-    const both = defineModel({ fields: { sku: SKU.optional().or(undefined) } });
+    const required = Model.define({ fields: { sku: SKU.or(undefined) } });
+    const optional = Model.define({ fields: { sku: SKU.optional() } });
+    const both = Model.define({ fields: { sku: SKU.optional().or(undefined) } });
 
     expect(required.safeParse({})).toMatchObject({
       ok: false,
@@ -97,6 +96,7 @@ describe("field binding", () => {
       optional,
       required,
       default: withDefault,
+      describe: describeField,
       decode,
       encode,
       safeDecode,
@@ -117,6 +117,7 @@ describe("field binding", () => {
       optional,
       required,
       default: withDefault,
+      describe: describeField,
       decode,
       encode,
       safeDecode,
@@ -128,12 +129,15 @@ describe("field binding", () => {
       "~standard": standard,
     };
     const tagged = { ...plain, [Symbol.toStringTag]: "modvia.Field" } as const;
+    expect(Field.is(copy)).toBe(true);
+    expect(Field.is(tagged)).toBe(true);
+    expect(Field.is(plain)).toBe(false);
 
-    const named = defineModel({ fields: { title: tagged } });
+    const named = Model.define({ fields: { title: tagged } });
     expectTypeOf<InferDTO<typeof named>>().toEqualTypeOf<{ readonly ignored?: string }>();
     expect(named.encode({ title: "B" })).toStrictEqual({ ignored: "B" });
 
-    const model = defineModel({ fields: { code: copy, title: plain } });
+    const model = Model.define({ fields: { code: copy, title: plain } });
     expectTypeOf<InferDTO<typeof model>>().toEqualTypeOf<{
       readonly external?: string;
       readonly title: string;
@@ -147,15 +151,31 @@ describe("field binding", () => {
     });
   });
 
-  test("数组元素值域与数组字段属性修饰换序等价", () => {
+  test("数组元素值域与数组字段属性修饰换序等价，且 describe 在任意顺序下保留文档元数据", () => {
     const list = arrayOf(isoDateTime().nullable());
-    const required = defineModel({ fields: { dates: list } });
-    const wrapped = defineModel({
-      fields: { dates: field(list.or(false).alias("event_dates").optional()) },
+    const required = Model.define({ fields: { dates: list } });
+    const wrapped = Model.define({
+      fields: {
+        dates: Field.of(list.or(false).alias("event_dates").optional().describe("Event schedule")),
+      },
     });
-    const reordered = defineModel({
-      fields: { dates: list.optional().or(false).alias("event_dates") },
+    const reordered = Model.define({
+      fields: {
+        dates: list.describe("Event schedule").optional().or(false).alias("event_dates"),
+      },
     });
+    expect(Codec.inspect(wrapped.fields.dates).description).toBe("Event schedule");
+    const reorderedDesc = Codec.inspect(reordered.fields.dates);
+    expect(reorderedDesc.kind).toBe("or");
+    if (reorderedDesc.kind === "or") {
+      expect(Codec.inspect(reorderedDesc.base).description).toBe("Event schedule");
+    }
+    expect(Codec.inspect(string().describe("Code").alias("item_code").optional()).description).toBe(
+      "Code",
+    );
+    expect(Codec.inspect(string().alias("item_code").optional().describe("Code")).description).toBe(
+      "Code",
+    );
 
     const stamp = "2026-01-01T00:00:00.000Z";
     expect(required.decode({ dates: [null, stamp] })).toStrictEqual({
@@ -192,7 +212,7 @@ describe("field binding", () => {
   });
 
   test("default 仅在父对象缺键时填入业务默认值，防可变共享引用且满足往返收敛", () => {
-    const Pagination = defineModel({
+    const Pagination = Model.define({
       fields: {
         page: number().default(1).alias("page_no"),
         tags: arrayOf(string()).default(() => []),

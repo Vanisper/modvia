@@ -8,7 +8,7 @@ import {
   type IssueCollector,
   type SegmentMapper,
 } from "./collector.ts";
-import { isValidationError, ValidationError } from "./errors.ts";
+import { ValidationError } from "./errors.ts";
 import type {
   Branded,
   Codec,
@@ -37,7 +37,7 @@ const literalStateSymbol = Symbol.for("modvia.literalState");
 const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
 const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
 const defaultResolverSymbol = Symbol.for("modvia.defaultResolver");
-const descriptorSymbol = Symbol.for("modvia.codecDescriptor");
+export const descriptorSymbol = Symbol.for("modvia.codecDescriptor");
 export const fieldBrand = Symbol.for("modvia.Field");
 
 const defaultCustomDescriptor: CodecDescriptor = Object.freeze({ kind: "custom" });
@@ -149,6 +149,16 @@ export function createCodec<T, Encoded>(
     brand<const Name extends string | symbol>() {
       return codec as unknown as Codec<Branded<T, Name>, Encoded>;
     },
+    describe(description: string) {
+      assertValidDescription(description);
+      const baseDescriptor = getCodecDescriptor(codec);
+      return createCodec(runner, {
+        literalState,
+        allowedLiterals: metadata?.allowedLiterals,
+        decodeSegmentMapper,
+        descriptor: { ...baseDescriptor, description },
+      });
+    },
     pipe<Next>(next: ValueCodecInput<Next, T>) {
       return createPipedCodec(codec, next);
     },
@@ -197,23 +207,21 @@ export function extendCodec<T, Encoded, Extra extends object>(
   const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
   const segmentMapper = Reflect.get(base, segmentMapperSymbol) as SegmentMapper | undefined;
   const descriptor = Reflect.get(base, descriptorSymbol) as CodecDescriptor | undefined;
+  const symbolMap = new Map<symbol, unknown>();
+  if (runner !== undefined) symbolMap.set(runnerSymbol, runner);
+  if (segmentMapper !== undefined) symbolMap.set(segmentMapperSymbol, segmentMapper);
+  if (descriptor !== undefined) symbolMap.set(descriptorSymbol, descriptor);
+  if (extraSymbols) {
+    for (const [sym, value] of extraSymbols) {
+      symbolMap.set(sym, value);
+    }
+  }
   const extended = {
     ...base,
     ...extra,
   };
-  if (runner) {
-    Object.defineProperty(extended, runnerSymbol, { value: runner });
-  }
-  if (segmentMapper) {
-    Object.defineProperty(extended, segmentMapperSymbol, { value: segmentMapper });
-  }
-  if (descriptor) {
-    Object.defineProperty(extended, descriptorSymbol, { value: descriptor });
-  }
-  if (extraSymbols) {
-    for (const [sym, value] of extraSymbols) {
-      Object.defineProperty(extended, sym, { value });
-    }
+  for (const [sym, value] of symbolMap) {
+    Object.defineProperty(extended, sym, { value });
   }
   return Object.freeze(extended);
 }
@@ -263,7 +271,7 @@ export function executeCodec<T, Encoded>(
     if (isAbortSignal(error)) {
       return collector.add(error.code, error.message);
     }
-    if (isValidationError(error)) {
+    if (ValidationError.is(error)) {
       return collector.addRelativeIssues(error.issues);
     }
     throw error;
@@ -393,6 +401,9 @@ export function createField<
     nullable() {
       return createField(codec.nullable(), source, presence, defaultResolver);
     },
+    describe(description: string) {
+      return createField(codec.describe(description), source, presence, defaultResolver);
+    },
   };
 
   if (runner) {
@@ -467,7 +478,7 @@ function createCheckedCodec<T, Encoded>(
         if (isAbortSignal(error)) {
           return collector.add(error.code, error.message);
         }
-        if (isValidationError(error)) {
+        if (ValidationError.is(error)) {
           return collector.addRelativeIssues(error.issues);
         }
         throw error;
@@ -557,6 +568,12 @@ function toDefaultResolver<T>(provider: unknown): () => T {
   throw new TypeError(
     "Non-primitive default values must be provided via a factory function () => value",
   );
+}
+
+function assertValidDescription(description: unknown): asserts description is string {
+  if (typeof description !== "string") {
+    throw new TypeError("Description must be a string");
+  }
 }
 
 function assertValidSource(source: unknown): asserts source is string {

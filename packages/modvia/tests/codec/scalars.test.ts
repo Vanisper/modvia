@@ -9,7 +9,7 @@ import {
   string,
   unknown,
 } from "../../src/codec/index.ts";
-import { defineModel } from "../../src/index.ts";
+import { Model } from "../../src/index.ts";
 
 const instant = isoDateTime();
 
@@ -140,7 +140,7 @@ describe("built-in scalars", () => {
       expect(instant.decode(utc).getTime()).toBe(time);
     }
 
-    const Event = defineModel({ fields: { at: instant.alias("starts_at") } });
+    const Event = Model.define({ fields: { at: instant.alias("starts_at") } });
     for (const input of ["-271821-04-19T00:00:59.999-23:59", "+275760-09-13T23:59:00.001+23:59"]) {
       expect(Event.safeDecode({ starts_at: input })).toMatchObject({
         ok: false,

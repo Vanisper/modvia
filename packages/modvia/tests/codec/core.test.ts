@@ -2,26 +2,22 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
-  defineCodec,
-  field,
-  fromStandard,
-  inspectCodec,
+  Codec,
+  Field,
   int,
-  isValidationError,
   isoDateTime,
   number,
   string,
   ValidationError,
   type Branded,
-  type Codec,
   type CodecLike,
   type InferEncoded,
   type InferValue,
   type StandardSchemaV1,
 } from "../../src/codec/index.ts";
-import { defineModel, literal, taggedUnion } from "../../src/index.ts";
+import { literal, Model } from "../../src/index.ts";
 
-const intFromString = defineCodec<number, string>({
+const intFromString = Codec.define<number, string>({
   decode(input, context) {
     if (typeof input !== "string" || !/^-?\d+$/.test(input)) {
       return context.fail("number.integer_string", "Expected an integer string");
@@ -97,21 +93,21 @@ describe("codec kernel", () => {
     }
 
     expect(caught).toBeInstanceOf(ValidationError);
-    expect(isValidationError(caught)).toBe(true);
-    if (!isValidationError(caught)) throw new Error("Expected ValidationError");
+    expect(ValidationError.is(caught)).toBe(true);
+    if (!ValidationError.is(caught)) throw new Error("Expected ValidationError");
     expect(caught.message).toBe("[1][0]: Expected an integer string");
 
     const foreignLike = runInNewContext(
       `({ [Symbol.for("modvia.ValidationError")]: true, issues: [] })`,
     );
-    expect(isValidationError(foreignLike)).toBe(true);
-    expect(isValidationError(new Error("plain"))).toBe(false);
-    expect(isValidationError(null)).toBe(false);
+    expect(ValidationError.is(foreignLike)).toBe(true);
+    expect(ValidationError.is(new Error("plain"))).toBe(false);
+    expect(ValidationError.is(null)).toBe(false);
   });
 
   test("自定义 Codec 中的非校验异常原样向外传播", () => {
     const boom = new Error("storage unavailable");
-    const broken = defineCodec<string, string>({
+    const broken = Codec.define<string, string>({
       decode() {
         throw boom;
       },
@@ -192,13 +188,13 @@ describe("codec kernel", () => {
     expect(() => arrayOf(string().optional())).toThrow(TypeError);
     // @ts-expect-error Field 携带外部键别名，不能直接作为数组元素 Codec
     expect(() => arrayOf(string().alias("code"))).toThrow(TypeError);
-    // @ts-expect-error field() 显式包装后的属性描述符同样不可直接放入数组
-    expect(() => arrayOf(field(string()))).toThrow(TypeError);
+    // @ts-expect-error Field.of() 显式包装后的属性描述符同样不可直接放入数组
+    expect(() => arrayOf(Field.of(string()))).toThrow(TypeError);
 
     expectTypeOf(arrayOf(string())).toEqualTypeOf<Codec<string[], string[]>>();
   });
 
-  test("fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
+  test("Codec.fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
     const emailStandard: StandardSchemaV1<string, string> = {
       "~standard": {
         version: 1,
@@ -214,7 +210,7 @@ describe("codec kernel", () => {
       },
     };
 
-    const Email = fromStandard(emailStandard);
+    const Email = Codec.fromStandard(emailStandard);
     expect(Email.decode(" a@b.com ")).toBe("a@b.com");
     expect(Email.encode(" a@b.com ")).toBe("a@b.com");
     expect(Email.safeDecode("invalid")).toStrictEqual({
@@ -229,7 +225,7 @@ describe("codec kernel", () => {
         validate: async (value) => ({ value: String(value) }),
       },
     };
-    const AsyncWrapped = fromStandard(asyncSchema);
+    const AsyncWrapped = Codec.fromStandard(asyncSchema);
     expect(() => AsyncWrapped.safeDecode("x")).toThrow(TypeError);
   });
 
@@ -259,56 +255,71 @@ describe("codec kernel", () => {
     acceptUserId("u-1");
   });
 
-  test("inspectCodec 公开只读结构描述符，并在精化/规范化/品牌/字段与工厂派生下保持结构透明", () => {
+  test("Codec.inspect 与 .describe 公开只读结构描述符，并在精化/规范化/品牌/字段与工厂派生下保持结构透明", () => {
     const Username = string({ trim: true, minLength: 3, maxLength: 16, pattern: /^[a-z0-9_]+$/ })
+      .describe("Unique handle")
       .normalize((s) => s.toLowerCase())
       .refine((s) => !s.startsWith("_"), "user.leading_underscore", "No leading underscore")
       .brand<"Username">();
 
-    expect(inspectCodec(Username)).toStrictEqual({
+    expect(Codec.inspect(Username)).toStrictEqual({
       kind: "string",
       trim: true,
       minLength: 3,
       maxLength: 16,
       pattern: "^[a-z0-9_]+$",
+      description: "Unique handle",
     });
-    expect(inspectCodec(Username.alias("user_name").optional())).toBe(inspectCodec(Username));
-    expect(inspectCodec(int({ min: 0, max: 10 }))).toStrictEqual({
+    expect(Codec.inspect(Username.alias("user_name").optional())).toBe(Codec.inspect(Username));
+    expect(Codec.inspect(int({ min: 0, max: 10 }))).toStrictEqual({
       kind: "integer",
       min: 0,
       max: 10,
     });
 
-    const NullableDate = isoDateTime().nullable();
-    expect(inspectCodec(NullableDate)).toMatchObject({
+    const NullableDate = isoDateTime().nullable().describe("Optional timestamp");
+    expect(Codec.inspect(NullableDate)).toMatchObject({
       kind: "or",
       literals: [null],
+      description: "Optional timestamp",
     });
 
-    const ItemA = defineModel({ fields: { type: literal("a").alias("item_type"), val: Username } });
-    const ItemB = defineModel({ fields: { type: literal("b").alias("item_type") } });
-    const DerivedA = ItemA.withFactory((d) => ({ ...d, extra: true }));
-    expect(inspectCodec(DerivedA)).toStrictEqual({
+    const ItemA = Model.define({
+      fields: { type: literal("a").alias("item_type"), val: Username },
+    });
+    const ItemB = Model.define({ fields: { type: literal("b").alias("item_type") } });
+    const DerivedA = ItemA.describe("Variant A").withFactory((d) => ({ ...d, extra: true }));
+    expect(Codec.inspect(DerivedA)).toStrictEqual({
       kind: "model",
       fields: ItemA.fields,
+      strict: false,
+      description: "Variant A",
     });
 
-    const Poly = taggedUnion("type", [DerivedA, ItemB]);
-    expect(inspectCodec(Poly)).toMatchObject({
+    const Poly = Model.union("type", [DerivedA, ItemB]);
+    expect(Codec.inspect(Poly)).toMatchObject({
       kind: "taggedUnion",
       discriminator: "type",
       externalKey: "item_type",
     });
 
-    const CustomDecimal = defineCodec<number, string>({
+    const CustomDecimal = Codec.define<number, string>({
       decode: (v) => Number(v),
       encode: (v) => String(v),
-      meta: { format: "decimal", encodedSchema: { type: "string", format: "decimal" } },
+      meta: {
+        format: "decimal",
+        description: "Base-10 decimal string",
+        encodedSchema: { type: "string", format: "decimal" },
+      },
     });
-    expect(inspectCodec(CustomDecimal)).toStrictEqual({
+    expect(Codec.inspect(CustomDecimal)).toStrictEqual({
       kind: "custom",
       format: "decimal",
+      description: "Base-10 decimal string",
       encodedSchema: { type: "string", format: "decimal" },
     });
+
+    // @ts-expect-error describe 必须传入字符串
+    expect(() => string().describe(123)).toThrow(TypeError);
   });
 });

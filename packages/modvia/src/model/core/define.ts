@@ -10,6 +10,7 @@ import {
 } from "../../codec/core/runtime.ts";
 import type { CodecLike, PathSegment } from "../../codec/core/types.ts";
 import { isObject, isPlainObject, writeOwnField } from "../../shared/object.ts";
+import type { Alias, AliasKind, ApplyAlias } from "./alias.ts";
 import {
   missingField,
   readModelField,
@@ -17,13 +18,17 @@ import {
   resolveFields,
   type ResolvedField,
 } from "./fields.ts";
-import type { AliasKind, AliasStrategy, ApplyAlias } from "./alias.ts";
 import type { FieldRecord, MergeFields, Model, ModelOf, PartialFields } from "./types.ts";
+
+interface ModelState {
+  readonly strict: boolean;
+  readonly description?: string;
+}
 
 /** 声明对象字段契约并应用统一字段外部键别名策略（显式 .alias() 优先于模型级 alias） */
 export function defineModel<const Fields extends FieldRecord, Kind extends AliasKind>(options: {
   readonly fields: Fields;
-  readonly alias: AliasStrategy<Kind>;
+  readonly alias: Alias<Kind>;
 }): ModelOf<ApplyAlias<Fields, Kind>>;
 /** 声明对象字段契约，统一完成双向编解码、结构派生与静态类型推导 */
 export function defineModel<const Fields extends FieldRecord>(options: {
@@ -31,10 +36,10 @@ export function defineModel<const Fields extends FieldRecord>(options: {
 }): ModelOf<Fields>;
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
-  readonly alias?: AliasStrategy<AliasKind>;
+  readonly alias?: Alias<AliasKind>;
 }): ModelOf<Fields> {
   if (!isPlainObject(options) || !isPlainObject(options.fields)) {
-    throw new TypeError("defineModel requires an options object with a plain fields table");
+    throw new TypeError("Model.define requires an options object with a plain fields table");
   }
   if (options.alias !== undefined) {
     if (
@@ -42,22 +47,25 @@ export function defineModel<const Fields extends FieldRecord>(options: {
       options.alias === null ||
       typeof options.alias.mapKey !== "function"
     ) {
-      throw new TypeError("defineModel alias must be a valid AliasStrategy");
+      throw new TypeError("Model.define alias must be a valid Alias strategy");
     }
   }
   const ownFields = snapshotOwnFields(options.fields, options.alias);
   const resolvedFields = resolveFields(ownFields);
-  return createModel(ownFields, resolvedFields, (data) => data);
+  return createModel(ownFields, resolvedFields, (data) => data, { strict: false });
 }
 
 function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
   ownFields: Readonly<Fields>,
   resolvedFields: readonly ResolvedField[],
   factory: (data: Data) => Out,
+  state: ModelState,
 ): Model<Data, DTO, Out, Fields> {
   const sourceByKey = new Map<string, string>();
+  const knownSources = state.strict ? new Set<string>() : undefined;
   for (const { key, source } of resolvedFields) {
     sourceByKey.set(key, source);
+    knownSources?.add(source);
   }
 
   const decodeSegmentMapper = (segment: PathSegment): PathSegment =>
@@ -66,13 +74,15 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
   const baseCodec = createCodec<Out, DTO>(
     (input, direction, collector) =>
       direction === "decode"
-        ? decodeModelObject(resolvedFields, factory, input, collector)
+        ? decodeModelObject(resolvedFields, knownSources, factory, input, collector)
         : encodeModelObject(resolvedFields, input, collector),
     {
       decodeSegmentMapper,
       descriptor: {
         kind: "model",
         fields: ownFields,
+        strict: state.strict,
+        ...(state.description !== undefined ? { description: state.description } : {}),
       },
     },
   );
@@ -105,7 +115,7 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
     return defineModel({ fields: nextFields }) as unknown as ModelOf<PartialFields<Fields>>;
   }
 
-  return extendCodec(
+  const model: Model<Data, DTO, Out, Fields> = extendCodec(
     baseCodec,
     {
       fields: ownFields,
@@ -157,19 +167,31 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
         }
         return defineModel({ fields: merged }) as unknown as ModelOf<MergeFields<Fields, Extra>>;
       },
+      strict(): Model<Data, DTO, Out, Fields> {
+        if (state.strict) return model;
+        return createModel(ownFields, resolvedFields, factory, { ...state, strict: true });
+      },
+      describe(description: string): Model<Data, DTO, Out, Fields> {
+        if (typeof description !== "string") {
+          throw new TypeError("Description must be a string");
+        }
+        return createModel(ownFields, resolvedFields, factory, { ...state, description });
+      },
       withFactory<Next extends Data>(
         nextFactory: (data: Data) => Next,
       ): Model<Data, DTO, Next, Fields> {
-        return createModel<Fields, Data, DTO, Next>(ownFields, resolvedFields, nextFactory);
+        return createModel<Fields, Data, DTO, Next>(ownFields, resolvedFields, nextFactory, state);
       },
     },
     [[resolvedFieldsSymbol, resolvedFields]],
   );
+
+  return model;
 }
 
 function snapshotOwnFields<Fields extends FieldRecord>(
   fields: Fields,
-  aliasStrategy?: AliasStrategy<AliasKind>,
+  aliasStrategy?: Alias<AliasKind>,
 ): Readonly<Fields> {
   const copy: Record<string, CodecLike<unknown, unknown>> = {};
   for (const [key, entry] of Object.entries(fields)) {
@@ -183,7 +205,7 @@ function snapshotOwnFields<Fields extends FieldRecord>(
 function applyAliasToEntry(
   key: string,
   entry: CodecLike<unknown, unknown>,
-  aliasStrategy: AliasStrategy<AliasKind>,
+  aliasStrategy: Alias<AliasKind>,
 ): CodecLike<unknown, unknown> {
   if (isFieldDescriptor(entry)) {
     if (typeof entry.source === "string") return entry;
@@ -206,6 +228,7 @@ function toOptionalField(entry: CodecLike<unknown, unknown>): CodecLike<unknown,
 
 function decodeModelObject<Data, Out extends Data>(
   resolvedFields: readonly ResolvedField[],
+  knownSources: ReadonlySet<string> | undefined,
   factory: (data: Data) => Out,
   input: unknown,
   collector: IssueCollector,
@@ -243,6 +266,17 @@ function decodeModelObject<Data, Out extends Data>(
       }
     } finally {
       collector.popSegment();
+    }
+  }
+
+  if (knownSources !== undefined) {
+    for (const rawKey of Object.keys(input)) {
+      if (!knownSources.has(rawKey)) {
+        collector.pushSegment(rawKey);
+        collector.add("object.unknown_key", `Unknown field: ${rawKey}`);
+        collector.popSegment();
+        failed = true;
+      }
     }
   }
 

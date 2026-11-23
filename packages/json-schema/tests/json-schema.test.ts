@@ -1,37 +1,32 @@
 import {
+  Alias,
   arrayOf,
   boolean,
-  defineCodec,
-  defineModel,
+  Codec,
   int,
-  invert,
   isoDateTime,
-  lazy,
   literal,
+  Model,
   number,
   oneOf,
   recordOf,
-  snakeCase,
   string,
-  taggedUnion,
   tupleOf,
-  unionOf,
   unknown,
-  type Model,
 } from "modvia";
-import { email, jsonOf, url, uuid } from "modvia/formats";
+import { email, intFromString, jsonOf, url, uuid } from "modvia/formats";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { toJsonSchema, withJsonSchema, type StandardJSONSchemaV1 } from "../src/index.ts";
 
 describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
-  test("按 DTO 与 Data 双视角导出模型 Schema，自动同步 alias 键名、默认值必填性与格式元数据", () => {
-    const User = defineModel({
-      alias: snakeCase,
+  test("按 DTO 与 Data 双视角导出模型 Schema，自动同步 alias 键名、默认值必填性、description 与格式元数据", () => {
+    const User = Model.define({
+      alias: Alias.snakeCase,
       fields: {
-        userId: uuid(),
+        userId: uuid().describe("Primary user UUID"),
         emailAddress: email({ trim: true, lowercase: true }),
         username: string({ trim: true, minLength: 3, maxLength: 20, pattern: /^[a-z0-9_]+$/ }),
-        age: int({ min: 0, max: 150 }).optional(),
+        age: int({ min: 0, max: 150 }).optional().describe("Age in years"),
         score: number({ min: 0, max: 100 }).default(60),
         role: oneOf("admin", "member").alias("account_role"),
         active: boolean(),
@@ -39,14 +34,15 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
         createdAt: isoDateTime(),
         extraMeta: unknown().optional(),
       },
-    });
+    }).describe("User profile contract");
 
     const dtoSchema = toJsonSchema(User);
     expect(dtoSchema).toStrictEqual({
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
+      description: "User profile contract",
       properties: {
-        user_id: { type: "string", format: "uuid" },
+        user_id: { type: "string", format: "uuid", description: "Primary user UUID" },
         email_address: { type: "string", format: "email", maxLength: 254 },
         username: {
           type: "string",
@@ -54,7 +50,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
           maxLength: 20,
           pattern: "^[a-z0-9_]+$",
         },
-        age: { type: "integer", minimum: 0, maximum: 150 },
+        age: { type: "integer", minimum: 0, maximum: 150, description: "Age in years" },
         score: { type: "number", minimum: 0, maximum: 100 },
         account_role: { type: "string", enum: ["admin", "member"] },
         active: { type: "boolean" },
@@ -80,6 +76,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     const dataSchema = toJsonSchema(User, { side: "data", includeSchemaUri: false });
     expect(dataSchema).toMatchObject({
       type: "object",
+      description: "User profile contract",
       // Data 侧使用内部属性名，且带 default 的 score 在业务对象上始终存在（列入 required）
       required: [
         "userId",
@@ -95,19 +92,19 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
   });
 
   test("支持容器（arrayOf/tupleOf/recordOf）、多态联合、双向管道及 OpenAPI 3.0 / Draft-07 规范差异", () => {
-    const TextBlock = defineModel({
+    const TextBlock = Model.define({
       fields: {
         kind: literal("text").alias("block_type"),
         body: string({ minLength: 1 }),
       },
     });
-    const LinkBlock = defineModel({
+    const LinkBlock = Model.define({
       fields: {
         kind: literal("link").alias("block_type"),
         href: url({ protocols: ["https"] }).nullable(),
       },
     });
-    const Block = taggedUnion("kind", [TextBlock, LinkBlock]);
+    const Block = Model.union("kind", [TextBlock, LinkBlock]);
 
     // OpenAPI 3.0：无 $schema，nullable 折叠为 nullable: true，taggedUnion 带 discriminator
     const openApiSchema = toJsonSchema(Block, { target: "openapi-3.0" });
@@ -177,19 +174,31 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       required: ["kind", "body"],
     });
 
-    const InvertedIso = invert(isoDateTime());
+    const InvertedIso = Codec.invert(isoDateTime());
     expect(toJsonSchema(InvertedIso, { side: "data", includeSchemaUri: false })).toStrictEqual({
       type: "string",
       format: "date-time",
     });
 
-    const Flex = unionOf(int(), literal("auto", false));
+    const Flex = Codec.union(int(), literal("auto", false));
     expect(toJsonSchema(Flex, { includeSchemaUri: false })).toStrictEqual({
       anyOf: [{ type: "integer" }, { enum: ["auto", false] }],
     });
+
+    // 字符串传输格式 Codec 在 DTO 侧输出字符串 Schema，在 Data 侧输出数值 Schema
+    const PortText = intFromString({ min: 1, max: 65535 });
+    expect(toJsonSchema(PortText, { side: "dto", includeSchemaUri: false })).toStrictEqual({
+      type: "string",
+      pattern: "^[+-]?\\d+$",
+    });
+    expect(toJsonSchema(PortText, { side: "data", includeSchemaUri: false })).toStrictEqual({
+      type: "integer",
+      minimum: 1,
+      maximum: 65535,
+    });
   });
 
-  test("自动检测 lazy 自引用递归环并提升为 $defs / definitions 引用", () => {
+  test("自动检测 Codec.lazy 自引用递归环并提升为 $defs / definitions 引用", () => {
     interface CategoryData {
       readonly id: string;
       readonly children: readonly CategoryData[];
@@ -199,10 +208,10 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       sub_items: CategoryDTO[];
     }
 
-    const Category: Model<CategoryData, CategoryDTO> = defineModel({
+    const Category: Model<CategoryData, CategoryDTO> = Model.define({
       fields: {
         id: string(),
-        children: arrayOf(lazy(() => Category)).alias("sub_items"),
+        children: arrayOf(Codec.lazy(() => Category)).alias("sub_items"),
       },
     });
 
@@ -239,8 +248,8 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
 
   test("withJsonSchema 挂载 StandardJSONSchemaV1 协议并完整保留模型能力与 strict 校验", () => {
     const Task = withJsonSchema(
-      defineModel({
-        alias: snakeCase,
+      Model.define({
+        alias: Alias.snakeCase,
         fields: {
           taskId: uuid(),
           done: boolean().default(false),
@@ -274,8 +283,18 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       arrayOf(Task).parse([{ task_id: "550e8400-e29b-41d4-a716-446655440000" }]),
     ).toStrictEqual([{ taskId: "550e8400-e29b-41d4-a716-446655440000", done: false }]);
 
+    // Model.strict() 在显式传入 additionalProperties: true 时仍强制输出 additionalProperties: false
+    const LooseModel = Model.define({ fields: { a: string() } });
+    const StrictModel = LooseModel.strict();
+    expect(
+      toJsonSchema(LooseModel, { additionalProperties: true, includeSchemaUri: false }),
+    ).toMatchObject({ additionalProperties: true });
+    expect(
+      toJsonSchema(StrictModel, { additionalProperties: true, includeSchemaUri: false }),
+    ).toMatchObject({ additionalProperties: false });
+
     // strict 模式下拒绝无元数据的不透明自定义 Codec
-    const Opaque = defineCodec<number, string>({
+    const Opaque = Codec.define<number, string>({
       decode: (s) => Number(s),
       encode: (n) => String(n),
     });

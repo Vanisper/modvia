@@ -146,6 +146,8 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   normalize(this: void, fn: (value: T) => T): Codec<T, Encoded>;
   /** 为解码出的业务值附加编译期名义品牌标签，编码端保持原外部类型且运行时零额外包装 */
   brand<const Name extends string | symbol>(this: void): Codec<Branded<T, Name>, Encoded>;
+  /** 为当前 Codec 附加静态文档说明文本（供结构反射与 JSON Schema 导出读取，零运行时开销） */
+  describe(this: void, description: string): Codec<T, Encoded>;
   /**
    * 将当前 Codec 与下游 Codec 串联为双向管道
    *
@@ -223,6 +225,8 @@ export interface Field<
   ): Field<T | Literals[number], Encoded | Literals[number], Source, Presence>;
   /** 允许字段值为 null，同时保留外部名与缺省性 */
   nullable(this: void): Field<T | null, Encoded | null, Source, Presence>;
+  /** 为字段底层规则附加静态文档说明文本，同时保留外部键别名与缺省性 */
+  describe(this: void, description: string): Field<T, Encoded, Source, Presence>;
 }
 
 export type InferValue<C> = C extends CodecLike<infer Value, infer _Encoded> ? Value : never;
@@ -232,81 +236,85 @@ export type InferEncoded<C> = C extends CodecLike<infer _Value, infer Encoded> ?
 /** 自定义 Codec 可选附带的外部/内部静态结构元数据，供独立 Schema 导出工具读取 */
 export interface CustomCodecMeta {
   readonly format?: string;
+  readonly description?: string;
   /** 外部编码端（DTO / Encoded）对应的 JSON Schema 描述片段 */
   readonly encodedSchema?: Readonly<Record<string, unknown>>;
   /** 内部业务端（Data / T）对应的 JSON Schema 描述片段；省略时默认沿用 encodedSchema */
   readonly decodedSchema?: Readonly<Record<string, unknown>>;
 }
 
+type WithDescription<T> = T & { readonly description?: string };
+
 /** 只读编解码结构描述符，与执行闭包完全解耦，零运行时校验开销 */
 export type CodecDescriptor =
-  | {
+  | WithDescription<{
       readonly kind: "string";
       readonly trim: boolean;
       readonly minLength?: number;
       readonly maxLength?: number;
       readonly pattern?: string;
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "number" | "integer";
       readonly min?: number;
       readonly max?: number;
-    }
-  | { readonly kind: "boolean" }
-  | { readonly kind: "unknown" }
-  | { readonly kind: "literal"; readonly values: readonly FieldLiteral[] }
-  | { readonly kind: "enum"; readonly values: readonly string[] }
-  | { readonly kind: "datetime" }
-  | {
+    }>
+  | WithDescription<{ readonly kind: "boolean" }>
+  | WithDescription<{ readonly kind: "unknown" }>
+  | WithDescription<{ readonly kind: "literal"; readonly values: readonly FieldLiteral[] }>
+  | WithDescription<{ readonly kind: "enum"; readonly values: readonly string[] }>
+  | WithDescription<{ readonly kind: "datetime" }>
+  | WithDescription<{
       readonly kind: "array";
       readonly item: Codec<unknown, unknown>;
       readonly minLength?: number;
       readonly maxLength?: number;
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "tuple";
       readonly items: readonly Codec<unknown, unknown>[];
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "record";
       readonly key?: Codec<string, string>;
       readonly value: Codec<unknown, unknown>;
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "or";
       readonly base: Codec<unknown, unknown>;
       readonly literals: readonly FieldLiteral[];
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "union";
       readonly branches: readonly Codec<unknown, unknown>[];
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "taggedUnion";
       readonly discriminator: string;
       readonly externalKey: string;
       readonly branches: readonly Codec<unknown, unknown>[];
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "model";
       readonly fields: Readonly<Record<string, CodecLike<unknown, unknown>>>;
-    }
-  | {
+      readonly strict: boolean;
+    }>
+  | WithDescription<{
       readonly kind: "pipe";
       readonly first: Codec<unknown, unknown>;
       readonly second: Codec<unknown, unknown>;
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "invert";
       readonly inner: Codec<unknown, unknown>;
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "lazy";
       readonly resolve: () => Codec<unknown, unknown>;
-    }
-  | {
+    }>
+  | WithDescription<{
       readonly kind: "custom";
       readonly format?: string;
       readonly encodedSchema?: Readonly<Record<string, unknown>>;
       readonly decodedSchema?: Readonly<Record<string, unknown>>;
-    };
+    }>;

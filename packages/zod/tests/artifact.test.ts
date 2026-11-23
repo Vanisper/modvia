@@ -1,5 +1,5 @@
 import { zodCodec } from "@modvia/zod";
-import { defineModel, snakeCase, string } from "modvia";
+import { Alias, Model, string } from "modvia";
 import { describe, expect, test } from "vite-plus/test";
 import { z } from "zod";
 
@@ -12,8 +12,8 @@ describe("@modvia/zod packaged artifact", () => {
       }),
     );
 
-    const AuditLog = defineModel({
-      alias: snakeCase,
+    const AuditLog = Model.define({
+      alias: Alias.snakeCase,
       fields: {
         actorEmail: zodCodec(z.email()),
         occurredAtMs: IsoToTimestamp.alias("occurred_at"),

@@ -5,6 +5,16 @@ export class ValidationError extends Error {
   override readonly name = "ValidationError";
   readonly issues: readonly ValidationIssue[];
 
+  /** 跨上下文判断目标值是否为 Modvia 校验异常实例 */
+  static is(this: void, value: unknown): value is ValidationError {
+    if (typeof value !== "object" || value === null) return false;
+    try {
+      return Reflect.get(value, errorBrand) === true;
+    } catch {
+      return false;
+    }
+  }
+
   constructor(issues: readonly ValidationIssue[]) {
     super(issues.map(formatIssue).join("\n"));
     this.issues = Object.freeze(
@@ -17,15 +27,6 @@ export class ValidationError extends Error {
       ),
     );
     Object.defineProperty(this, errorBrand, { value: true });
-  }
-}
-
-export function isValidationError(value: unknown): value is ValidationError {
-  if (typeof value !== "object" || value === null) return false;
-  try {
-    return Reflect.get(value, errorBrand) === true;
-  } catch {
-    return false;
   }
 }
 

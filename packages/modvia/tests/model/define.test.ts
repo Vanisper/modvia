@@ -2,11 +2,10 @@ import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
   boolean,
-  defineCodec,
-  defineModel,
-  field,
-  isValidationError,
+  Codec,
+  Field,
   isoDateTime,
+  Model,
   number,
   oneOf,
   string,
@@ -14,7 +13,7 @@ import {
 } from "../../src/index.ts";
 import type { CodecLike, InferData, InferDTO, InferModel } from "../../src/index.ts";
 
-const DepartmentModel = defineModel({
+const DepartmentModel = Model.define({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
@@ -23,7 +22,7 @@ const DepartmentModel = defineModel({
 
 type DepartmentData = InferData<typeof DepartmentModel>;
 
-const UserModel = defineModel({
+const UserModel = Model.define({
   fields: {
     id: string(),
     name: string({ trim: true, minLength: 1 }),
@@ -120,8 +119,8 @@ describe("domain model", () => {
     expect(validDTO.name).toBe("  林舟  ");
   });
 
-  test("嵌套模型无需 field 包装即可直接调用 alias、optional 与 nullable", () => {
-    const Team = defineModel({
+  test("嵌套模型无需 Field.of 包装即可直接调用 alias、optional 与 nullable", () => {
+    const Team = Model.define({
       fields: {
         lead: UserClassModel.alias("team_lead").optional(),
         parentDept: DepartmentModel.nullable().alias("parent_dept"),
@@ -196,7 +195,7 @@ describe("domain model", () => {
 
   test("定义期拒绝重复的外部键名", () => {
     const duplicateAliases = () =>
-      defineModel({
+      Model.define({
         fields: {
           firstName: string().alias("name"),
           lastName: string().alias("name"),
@@ -206,7 +205,7 @@ describe("domain model", () => {
     expect(duplicateAliases).toThrow(/Duplicate field source "name"/);
 
     const aliasKeyCollision = () =>
-      defineModel({
+      Model.define({
         fields: {
           nickname: string().alias("name"),
           name: string(),
@@ -216,9 +215,9 @@ describe("domain model", () => {
   });
 
   test("__proto__ 作为声明字段或外部别名时可安全双向读写自有键", () => {
-    const Info = defineModel({ fields: { label: string() } });
-    const Direct = defineModel({ fields: { ["__proto__"]: Info } });
-    const Aliased = defineModel({ fields: { info: Info.alias("__proto__") } });
+    const Info = Model.define({ fields: { label: string() } });
+    const Direct = Model.define({ fields: { ["__proto__"]: Info } });
+    const Aliased = Model.define({ fields: { info: Info.alias("__proto__") } });
     const dto: unknown = JSON.parse('{"__proto__":{"label":"目录"}}');
 
     const data = Direct.parse(dto);
@@ -232,9 +231,9 @@ describe("domain model", () => {
   });
 
   test("__proto__ 未声明时剥离，声明时遵守必填与缺省规则", () => {
-    const Required = defineModel({ fields: { ["__proto__"]: string() } });
-    const Optional = defineModel({ fields: { ["__proto__"]: string().optional() } });
-    const Known = defineModel({ fields: { title: string() } });
+    const Required = Model.define({ fields: { ["__proto__"]: string() } });
+    const Optional = Model.define({ fields: { ["__proto__"]: string().optional() } });
+    const Known = Model.define({ fields: { title: string() } });
     const input = { title: "目录", ["__proto__"]: "其他" };
 
     for (const output of [
@@ -273,7 +272,7 @@ describe("domain model", () => {
   });
 
   test("聚合 20 万条错误时不触发调用栈溢出且保持单次异常构造", () => {
-    const Tags = defineModel({
+    const Tags = Model.define({
       fields: { items: arrayOf(string()) },
     });
 
@@ -285,7 +284,7 @@ describe("domain model", () => {
     }
 
     expect(caught).toBeInstanceOf(ValidationError);
-    if (!isValidationError(caught)) throw new Error("Expected ValidationError");
+    if (!ValidationError.is(caught)) throw new Error("Expected ValidationError");
     expect(caught.issues).toHaveLength(200_000);
   });
 
@@ -315,7 +314,7 @@ describe("domain model", () => {
   });
 
   test("支持自定义 Codec 直接绑定字段别名，并忽略裸对象上未标记的 source 属性", () => {
-    const slug = defineCodec<string, string>({
+    const slug = Codec.define<string, string>({
       decode(input, context) {
         if (typeof input !== "string" || !/^[a-z0-9-]+$/.test(input)) {
           return context.fail("string.slug", "Expected a lowercase slug");
@@ -335,11 +334,11 @@ describe("domain model", () => {
       encode: (value) => (typeof value === "string" ? value : String(value)),
     };
 
-    const Article = defineModel({
+    const Article = Model.define({
       fields: {
         slug: slug.alias("article_slug"),
         name: sourceLikeCodec,
-        alias: field(string().alias("external_name")),
+        alias: Field.of(string().alias("external_name")),
       },
     });
 
@@ -387,7 +386,7 @@ describe("domain model", () => {
 
   test("模型只收集字段表的可枚举字符串键", () => {
     const metadata = Symbol("metadata");
-    const item = defineModel({
+    const item = Model.define({
       fields: {
         1: number(),
         label: string(),
@@ -404,7 +403,7 @@ describe("domain model", () => {
 
   test("动态字段别名只写出实际选择的键", () => {
     function user(key: `user_${string}`) {
-      return defineModel({ fields: { name: string().alias(key), id: number() } });
+      return Model.define({ fields: { name: string().alias(key), id: number() } });
     }
     const dto = user("user_amy").encode({ name: "Amy", id: 1 });
     expect(dto).toStrictEqual({ id: 1, user_amy: "Amy" });
@@ -416,7 +415,7 @@ describe("domain model", () => {
     const compact = { kind: oneOf("compact"), label: string().alias("title") };
     const counted = { kind: oneOf("counted"), count: number().optional() };
     function catalog(fields: typeof compact | typeof counted) {
-      return defineModel({ fields });
+      return Model.define({ fields });
     }
     const model = catalog(compact);
     const data = model.decode({ kind: "compact", title: "目录" });
@@ -427,7 +426,7 @@ describe("domain model", () => {
     expectTypeOf<Extract<DTO, { kind: "compact" }>["title"]>().toEqualTypeOf<string>();
 
     const fields: Record<string, CodecLike<unknown, unknown>> & typeof compact = compact;
-    const indexed = defineModel({ fields });
+    const indexed = Model.define({ fields });
     expectTypeOf<InferData<typeof indexed>["label"]>().toEqualTypeOf<string>();
     expectTypeOf<InferDTO<typeof indexed>["title"]>().toEqualTypeOf<string>();
   });
