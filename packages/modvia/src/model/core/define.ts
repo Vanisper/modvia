@@ -2,7 +2,6 @@ import { INVALID, type Invalid, type IssueCollector } from "../../codec/core/col
 import {
   createCodec,
   createField,
-  executeCodec,
   extendCodec,
   getDefaultResolver,
   isFieldDescriptor,
@@ -53,7 +52,7 @@ export function defineModel<const Fields extends FieldRecord>(options: {
   }
   const ownFields = snapshotOwnFields(options.fields, options.alias);
   const resolvedFields = resolveFields(ownFields);
-  return createModel(ownFields, resolvedFields, (data) => data, { strict: false });
+  return createModel(ownFields, resolvedFields, undefined, { strict: false });
 }
 
 function deriveModelFromFields<Fields extends FieldRecord>(
@@ -62,13 +61,13 @@ function deriveModelFromFields<Fields extends FieldRecord>(
 ): ModelOf<Fields> {
   const ownFields = snapshotOwnFields(rawFields);
   const resolvedFields = resolveFields(ownFields);
-  return createModel(ownFields, resolvedFields, (data) => data, { strict }) as ModelOf<Fields>;
+  return createModel(ownFields, resolvedFields, undefined, { strict }) as ModelOf<Fields>;
 }
 
 function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
   ownFields: Readonly<Fields>,
   resolvedFields: readonly ResolvedField[],
-  factory: (data: Data) => Out,
+  factory: ((data: Data) => Out) | undefined,
   state: ModelState,
 ): Model<Data, DTO, Out, Fields> {
   const sourceByKey = new Map<string, string>();
@@ -263,7 +262,7 @@ function toOptionalField(entry: CodecOrField): CodecOrField {
 function decodeModelObject<Data, Out extends Data>(
   resolvedFields: readonly ResolvedField[],
   knownSources: ReadonlySet<string> | undefined,
-  factory: (data: Data) => Out,
+  factory: ((data: Data) => Out) | undefined,
   input: unknown,
   collector: IssueCollector,
 ): Out | Invalid {
@@ -272,14 +271,25 @@ function decodeModelObject<Data, Out extends Data>(
   }
 
   const data: Record<string, unknown> = {};
+  const fieldCount = resolvedFields.length;
   let failed = false;
 
-  for (const { key, source, presence, resolveDefault, codec } of resolvedFields) {
+  for (let i = 0; i < fieldCount; i++) {
+    const field = resolvedFields[i]!;
+    const source = field.source;
+
     if (!Object.hasOwn(input, source)) {
+      const presence = field.presence;
       if (presence === "optional") continue;
-      if (presence === "defaulted" && resolveDefault !== undefined) {
+      if (presence === "defaulted" && field.resolveDefault !== undefined) {
         if (!failed) {
-          writeOwnField(data, key, resolveDefault());
+          const defaultVal = field.resolveDefault();
+          const key = field.key;
+          if (field.fastKeyWrite && !(key in data)) {
+            data[key] = defaultVal;
+          } else {
+            writeOwnField(data, key, defaultVal);
+          }
         }
         continue;
       }
@@ -291,20 +301,25 @@ function decodeModelObject<Data, Out extends Data>(
     }
 
     collector.pushSegment(source);
-    try {
-      const decoded = executeCodec(codec, input[source], "decode", collector);
-      if (decoded === INVALID) {
-        failed = true;
-      } else if (!failed) {
+    const decoded = field.runner(input[source], "decode", collector);
+    collector.popSegment();
+
+    if (decoded === INVALID) {
+      failed = true;
+    } else if (!failed) {
+      const key = field.key;
+      if (field.fastKeyWrite && !(key in data)) {
+        data[key] = decoded;
+      } else {
         writeOwnField(data, key, decoded);
       }
-    } finally {
-      collector.popSegment();
     }
   }
 
   if (knownSources !== undefined) {
-    for (const rawKey of Object.keys(input)) {
+    const rawKeys = Object.keys(input);
+    for (let i = 0; i < rawKeys.length; i++) {
+      const rawKey = rawKeys[i]!;
       if (!knownSources.has(rawKey)) {
         collector.pushSegment(rawKey);
         collector.add("object.unknown_key", `Unknown field: ${rawKey}`);
@@ -314,7 +329,8 @@ function decodeModelObject<Data, Out extends Data>(
     }
   }
 
-  return failed ? INVALID : factory(data as Data);
+  if (failed) return INVALID;
+  return factory !== undefined ? factory(data as Data) : (data as Out);
 }
 
 function encodeModelObject<DTO>(
@@ -327,27 +343,36 @@ function encodeModelObject<DTO>(
   }
 
   const output: Record<string, unknown> = {};
+  const fieldCount = resolvedFields.length;
   let failed = false;
 
-  for (const { key, source, presence, codec } of resolvedFields) {
-    collector.pushSegment(key);
-    try {
-      const fieldValue = readModelField(input, key);
-      if (fieldValue === missingField) {
-        if (presence === "optional") continue;
-        collector.add("field.required", `Missing model field: ${key}`);
-        failed = true;
-        continue;
-      }
+  for (let i = 0; i < fieldCount; i++) {
+    const field = resolvedFields[i]!;
+    const key = field.key;
 
-      const encoded = executeCodec(codec, fieldValue, "encode", collector);
-      if (encoded === INVALID) {
-        failed = true;
-      } else if (!failed) {
+    const fieldValue = readModelField(input, key);
+    if (fieldValue === missingField) {
+      if (field.presence === "optional") continue;
+      collector.pushSegment(key);
+      collector.add("field.required", `Missing model field: ${key}`);
+      collector.popSegment();
+      failed = true;
+      continue;
+    }
+
+    collector.pushSegment(key);
+    const encoded = field.runner(fieldValue, "encode", collector);
+    collector.popSegment();
+
+    if (encoded === INVALID) {
+      failed = true;
+    } else if (!failed) {
+      const source = field.source;
+      if (field.fastSourceWrite && !(source in output)) {
+        output[source] = encoded;
+      } else {
         writeOwnField(output, source, encoded);
       }
-    } finally {
-      collector.popSegment();
     }
   }
 

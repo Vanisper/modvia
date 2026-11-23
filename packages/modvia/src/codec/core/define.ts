@@ -1,4 +1,10 @@
-import { createScopedContext, INVALID, isAbortSignal } from "./collector.ts";
+import {
+  createScopedContext,
+  failWithAbortSignal,
+  INVALID,
+  isAbortSignal,
+  primaryCollector,
+} from "./collector.ts";
 import { ValidationError } from "./errors.ts";
 import {
   createCodec,
@@ -143,14 +149,25 @@ function buildStatefulHandlerRunner<T, Encoded, S extends object>(
   decodeFn: (input: unknown, context: StatefulCodecContext<S>) => T,
   encodeFn: (input: unknown, context: StatefulCodecContext<S>) => Encoded,
 ): InternalRunner<T, Encoded> {
+  const primaryStatefulContext: StatefulCodecContext<S> = Object.freeze({
+    fail: failWithAbortSignal,
+    issue: primaryCollector.defaultContext.issue,
+    state,
+  });
+
   return (input, direction, collector) => {
     const mark = collector.mark();
-    const baseContext = createScopedContext(collector);
-    const statefulContext: StatefulCodecContext<S> = Object.freeze({
-      fail: baseContext.fail,
-      issue: baseContext.issue,
-      state,
-    });
+    let statefulContext: StatefulCodecContext<S>;
+    if (collector === primaryCollector) {
+      statefulContext = primaryStatefulContext;
+    } else {
+      const baseContext = createScopedContext(collector);
+      statefulContext = Object.freeze({
+        fail: baseContext.fail,
+        issue: baseContext.issue,
+        state,
+      });
+    }
     try {
       const output =
         direction === "decode"

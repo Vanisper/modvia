@@ -2,7 +2,6 @@ import { createStatefulCodec } from "../codec/core/runtime.ts";
 import type { WithCodecTrait } from "../codec/core/types.ts";
 import {
   assertNonNegativeSafeInt,
-  checkLengthBounds,
   validateLengthBounds,
   type LengthBounds,
 } from "../scalars/bounds/length.ts";
@@ -37,16 +36,20 @@ const defaultStringCodec: StringCodec = createStatefulCodec({
   validate: validateLengthBounds,
   createRunner(state) {
     const { trim, minLength, maxLength, pattern } = state;
+    if (!trim && minLength === undefined && maxLength === undefined && pattern === undefined) {
+      return (input, _direction, collector) =>
+        typeof input === "string" ? input : collector.add("type.string", "Expected a string");
+    }
     return (input, _direction, collector) => {
       if (typeof input !== "string") {
         return collector.add("type.string", "Expected a string");
       }
       const value = trim ? input.trim() : input;
-      const violation = checkLengthBounds(value.length, state);
-      if (violation === "min_length") {
+      const len = value.length;
+      if (minLength !== undefined && len < minLength) {
         return collector.add("string.min_length", `Expected at least ${minLength} characters`);
       }
-      if (violation === "max_length") {
+      if (maxLength !== undefined && len > maxLength) {
         return collector.add("string.max_length", `Expected at most ${maxLength} characters`);
       }
       if (pattern !== undefined && !pattern.test(value)) {

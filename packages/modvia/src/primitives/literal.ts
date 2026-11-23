@@ -1,4 +1,4 @@
-import { createCodec } from "../codec/core/runtime.ts";
+import { createCodec, type InternalRunner } from "../codec/core/runtime.ts";
 import type { Codec, FieldLiteral } from "../codec/core/types.ts";
 import { deduplicateLiterals, formatLiteral, isPrimitiveLiteral } from "../shared/value.ts";
 
@@ -12,14 +12,13 @@ export function oneOf<const Values extends readonly string[]>(
   const values = Object.freeze([...new Set<string>(allowedValues)]);
   const expectedMessage = `Expected one of: ${values.join(", ")}`;
   const valueSet = new Set<string>(values);
-  const isAllowed = (value: string): value is Values[number] => valueSet.has(value);
 
   return createCodec<Values[number], Values[number]>(
     (input, _direction, collector) => {
-      if (typeof input !== "string" || !isAllowed(input)) {
+      if (typeof input !== "string" || !valueSet.has(input)) {
         return collector.add("string.one_of", expectedMessage);
       }
-      return input;
+      return input as Values[number];
     },
     {
       allowedLiterals: values,
@@ -42,16 +41,30 @@ export function literal<const Values extends readonly [FieldLiteral, ...FieldLit
   const uniqueValues = Object.freeze(deduplicateLiterals([], allowedValues));
   const expectedMessage = `Expected literal: ${uniqueValues.map(formatLiteral).join(", ")}`;
 
-  return createCodec<Values[number], Values[number]>(
-    (input, _direction, collector) => {
-      for (const candidate of uniqueValues) {
-        if (Object.is(input, candidate)) return candidate as Values[number];
+  let runner: InternalRunner<Values[number], Values[number]>;
+  if (uniqueValues.length === 1) {
+    const single = uniqueValues[0] as Values[number];
+    if (typeof single === "number") {
+      runner = (input, _direction, collector) =>
+        Object.is(input, single) ? single : collector.add("value.literal", expectedMessage);
+    } else {
+      runner = (input, _direction, collector) =>
+        input === single ? single : collector.add("value.literal", expectedMessage);
+    }
+  } else {
+    const count = uniqueValues.length;
+    runner = (input, _direction, collector) => {
+      for (let i = 0; i < count; i++) {
+        if (Object.is(input, uniqueValues[i])) {
+          return uniqueValues[i] as Values[number];
+        }
       }
       return collector.add("value.literal", expectedMessage);
-    },
-    {
-      allowedLiterals: uniqueValues,
-      descriptor: { kind: "literal", values: uniqueValues },
-    },
-  );
+    };
+  }
+
+  return createCodec<Values[number], Values[number]>(runner, {
+    allowedLiterals: uniqueValues,
+    descriptor: { kind: "literal", values: uniqueValues },
+  });
 }

@@ -426,4 +426,57 @@ describe("codec kernel", () => {
     ).toThrow(TypeError);
     expect(Object.isFrozen(nonPlainState)).toBe(false);
   });
+
+  test("收集器池在嵌套重入调用与未捕获异常恢复后保持路径与错误完全隔离", () => {
+    const InnerPositive = Codec.define({
+      state: { min: 1 },
+      decode(input, ctx): number {
+        if (typeof input !== "number" || input < ctx.state.min) {
+          ctx.issue({ code: "inner.min", message: "too small" });
+        }
+        return Number(input);
+      },
+      encode(input): number {
+        return Number(input);
+      },
+      methods: {},
+    });
+
+    const ReentrantOuter = Codec.define({
+      state: { bonus: 10 },
+      decode(input, ctx): number {
+        // 在外层收集器尚处于活跃状态时重入触发独立的顶层 safeParse（失败与成功各一次）
+        const rejected = InnerPositive.safeParse(0);
+        expect(rejected.ok).toBe(false);
+        const accepted = InnerPositive.parse(5);
+        if (typeof input !== "number") {
+          ctx.issue({ path: ["payload"], code: "outer.type", message: "expected number" });
+          return 0;
+        }
+        if (input === -999) {
+          throw new Error("fatal-custom-bug");
+        }
+        return input + accepted + ctx.state.bonus;
+      },
+      encode(input): number {
+        return Number(input) - 15;
+      },
+      methods: {},
+    });
+
+    const Container = arrayOf(ReentrantOuter);
+
+    expect(Container.parse([2])).toEqual([17]);
+    expect(Container.safeParse(["bad"])).toEqual({
+      ok: false,
+      issues: [{ path: [0, "payload"], code: "outer.type", message: "expected number" }],
+    });
+
+    // 深层自定义异常中断后，后续调用不得继承残留路径段或脏问题列表
+    expect(() => Container.parse([-999])).toThrow("fatal-custom-bug");
+    expect(Container.safeParse(["after-crash"])).toEqual({
+      ok: false,
+      issues: [{ path: [0, "payload"], code: "outer.type", message: "expected number" }],
+    });
+  });
 });

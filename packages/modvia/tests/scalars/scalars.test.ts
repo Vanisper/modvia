@@ -11,7 +11,12 @@ import { isValidIpv4, isValidIpv6 } from "../../src/scalars/ip.ts";
 import { parseBigIntString } from "../../src/scalars/numeric/bigint.ts";
 import { parseSafeIntString } from "../../src/scalars/numeric/int.ts";
 import { parseFiniteNumberString } from "../../src/scalars/numeric/number.ts";
-import { checkIsoDateString, checkIsoTimeString, isLeapYear } from "../../src/scalars/temporal.ts";
+import {
+  checkIsoDateString,
+  checkIsoTimeString,
+  isLeapYear,
+  parseIsoDateTimeEpochMs,
+} from "../../src/scalars/temporal.ts";
 
 describe("pure scalar atoms (zero Codec coupling)", () => {
   test("有序区间与非负长度区间纯代数校验", () => {
@@ -68,6 +73,13 @@ describe("pure scalar atoms (zero Codec coupling)", () => {
     expect(checkIsoDateString("2025-02-29")).toBe("invalid_calendar");
     expect(checkIsoTimeString("23:59:59.5")).toBe("ok");
     expect(checkIsoTimeString("24:00:00")).toBe("invalid_clock");
+    expect(Object.is(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.000Z"), 0)).toBe(true);
+    expect(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.5Z")).toBe(500);
+    expect(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.05Z")).toBe(50);
+    expect(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.005999Z")).toBe(5);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00."))).toBe(true);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.12xZ"))).toBe(true);
+    expect(parseIsoDateTimeEpochMs("+999999-01-01T00:00:00Z")).toBe(Number.POSITIVE_INFINITY);
 
     expect(isValidIpv4("192.168.1.1")).toBe(true);
     expect(isValidIpv4("192.168.01.1")).toBe(false);
