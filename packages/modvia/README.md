@@ -9,8 +9,8 @@
 包提供三个零外部依赖的子路径入口，元操作按领域主体收纳为命名空间，高频数据形态构造器保持直接导入：
 
 - `modvia`：完整主入口，导出领域模型主体（`Model`、`Alias`）与全部核心编解码能力。
-- `modvia/codec`：纯粹的值级双向编解码底座，导出主体命名空间（`Codec`、`Field`、`ValidationError`）、0 阶标量（`string`、`number`、`int`、`boolean`、`unknown`、`literal`、`oneOf`、`isoDateTime`）与 1 阶容器（`arrayOf`、`tupleOf`、`recordOf`）。
-- `modvia/formats`：按需 Tree-shaking 的标准格式、字符串数值转换与 JSON 文本原语（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`intFromString`、`numberFromString`、`booleanFromString`、`bigintFromString`、`jsonString`、`jsonOf`），不引入时零体积开销。
+- `modvia/codec`：纯粹的值级双向编解码底座，导出主体命名空间（`Codec`、`Field`、`ValidationError`）、0 阶原始标量（`string`、`number`、`int`、`bigint`、`boolean`、`unknown`、`literal`、`oneOf`、`isoDateTime`）与 1 阶容器（`arrayOf`、`tupleOf`、`recordOf`）。
+- `modvia/formats`：按需 Tree-shaking 的领域格式与 JSON 文本原语（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`jsonString`、`jsonOf`），不引入时零体积开销。
 
 ## 定义模型与双向转换
 
@@ -116,7 +116,8 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 ```
 
 - `string()`：通过 `.trim()`、`.minLength(n)`、`.maxLength(n)`、`.length(n)`、`.nonEmpty()`、`.pattern(re)` 不可变链式派生（归并状态后始终先 `trim` 再守卫长度与无状态正则）。
-- `number()` 与 `int()`：分别校验有限浮点数与安全整数，支持 `.min(n)`、`.max(n)`、`.gt(n)`、`.lt(n)`、`.positive()`、`.nonNegative()`、`.negative()`、`.nonPositive()` 链式派生，定义期立即拦截空区间。
+- `number()`、`int()` 与 `bigint()`：分别校验有限浮点数、安全整数与原生大整数，统一支持 `.min(n)`、`.max(n)`、`.gt(n)`、`.lt(n)`、`.positive()`、`.nonNegative()`、`.negative()`、`.nonPositive()` 链式派生，定义期立即拦截空区间，并可通过 `.fromString()` 切换为严格收敛的字符串外部表示（与区间方法调用顺序无关）。
+- `boolean()`：校验原生布尔值；调用 `.fromString()` 切换为布尔文本编解码器（`Codec<boolean, string>`），并支持 `.tokens(truthy, falsy)` 与 `.caseSensitive()` 链式派生。
 - `.alias(name)`：指定父对象双向读写该字段时使用的外部键别名；同一模型内的外部键名不能重复。
 - `.or(...literals)` 与 `.nullable()`：将一个或多个原始字面量作为哨兵值加入取值范围，编解码两端均按 `Object.is` 优先短路匹配。
 - `.optional()`、`.required()` 与 `.default(provider)`：`.optional()` 允许父对象省略该键；`.default(...)` 在父对象解码缺键时填入业务默认值（DTO 侧键可选、模型侧键必填，对象或数组默认值须传入工厂函数 `() => value`）。显式传入 `{ sku: undefined }` 时键已存在，是否允许 `undefined` 取决于是否声明了 `.or(undefined)`。
@@ -125,24 +126,13 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 - `literal(...values)` 与 `unknown()`：分别表达多类型精确字面量匹配以及显式原样透传的动态载荷。
 - `.describe(description)`：在 `Codec`、`Field` 或 `Model` 上附加静态文档说明（在内禀自有态与属性态上均保留原有方法与顺序无关性），零运行时校验开销并由 `@modvia/json-schema` 自动导出为 `"description"`。
 
-## 标准格式、字符串数值与 JSON 文本编解码（`modvia/formats`）
+## 领域格式、字符串标量介质与 JSON 文本编解码
 
-`modvia/formats` 子路径提供遵循往返收敛律的常用格式、查询参数/环境变量字符串数值转换与 JSON 文本桥接，同样采用纯链式自有方法并附带可供 `@modvia/json-schema` 读取的格式元数据：
+查询参数、环境变量或大整数协议常以字符串承载数值与布尔标量，直接调用原始标量的 `.fromString()` 即可切换外部传输介质；`modvia/formats` 子路径则按需提供标准领域格式与 JSON 文本桥接：
 
 ```ts
-import { Alias, Model } from "modvia";
-import {
-  bigintFromString,
-  booleanFromString,
-  email,
-  intFromString,
-  ipv4,
-  isoDate,
-  jsonOf,
-  numberFromString,
-  url,
-  uuid,
-} from "modvia/formats";
+import { Alias, bigint, boolean, int, Model, number } from "modvia";
+import { email, ipv4, isoDate, jsonOf, url, uuid } from "modvia/formats";
 
 const WebhookConfig = Model.define({
   alias: Alias.snakeCase,
@@ -150,16 +140,16 @@ const WebhookConfig = Model.define({
     webhookId: uuid(), // 双端自动归一为小写 UUID
     notifyEmail: email().trim().lowercase(),
     callbackUrl: url().https(), // 或 .protocols("https", "http")
-    port: intFromString().min(1).max(65535), // string ↔ number（拒绝空串与空白）
-    sampleRate: numberFromString().gt(0).max(1), // string ↔ number
-    enabled: booleanFromString().tokens(["YES", "1"], ["NO", "0"]), // string ↔ boolean
-    snowflakeId: bigintFromString().positive(), // string ↔ bigint
+    port: int().min(1).max(65535).fromString(), // string ↔ number（与区间方法顺序可交换）
+    sampleRate: number().fromString().gt(0).max(1), // string ↔ number
+    enabled: boolean().fromString().tokens(["YES", "1"], ["NO", "0"]), // string ↔ boolean
+    snowflakeId: bigint().positive().fromString(), // string ↔ bigint
     allowIp: ipv4().optional(),
     expireDate: isoDate(), // 精确校验闰年与月日合法性的 YYYY-MM-DD
   },
 });
 
-// jsonOf(codec) 将任意 Codec 或 Model 包装为「JSON 字符串 ↔ 业务对象」双向 Codec
+// jsonOf(codec) 将任意 Codec 或 Model 包装为「JSON 字符串 ↔ 业务对象」双向 Codec（并保留下游自有方法）
 const WebhookConfigJson = jsonOf(WebhookConfig);
 const config = WebhookConfigJson.parse(rawJsonText);
 const serializedText: string = WebhookConfigJson.encode(config);
@@ -171,7 +161,6 @@ const serializedText: string = WebhookConfigJson.encode(config);
 
 ```ts
 import { Codec, int, isoDateTime, string, type Branded } from "modvia";
-import { intFromString } from "modvia/formats";
 
 // 1. 幂等归一化 + 声明式精化 + 编译期名义品牌（编码端仍保持纯净 string）
 const Email = string()
@@ -189,8 +178,8 @@ const Port = int().check((n, ctx) => {
   }
 });
 
-// 3. 双向管道串联（解码正向执行，编码自动逆向执行）
-const PositiveCount = string().trim().pipe(intFromString().positive());
+// 3. 双向管道串联（解码正向执行，编码逆向执行，并自动保留下游自有链式方法）
+const PositiveCount = string().trim().pipe(int().fromString()).positive().max(1000);
 
 // 4. 从左到右多 Codec 联合、方向反转与外部 StandardSchemaV1 同步校验器接入
 const FlexibleTime = Codec.union(isoDateTime(), int());
@@ -284,7 +273,7 @@ const ContentBlock = Model.union("kind", [TextBlock, ImageBlock]);
 
 ## 自定义 Codec 与自有链式方法
 
-当业务值与外部表示类型不同时，使用 `Codec.define` 声明双向转换逻辑；通过传入冻结初始状态 `state` 与纯状态归并表 `methods`，自定义编解码器即可获得与内置标量完全一致的不可变链式自有方法与动态 Schema 反射：
+当业务值与外部表示类型不同时，使用 `Codec.define` 声明双向转换逻辑；通过传入初始状态 `state` 与增量状态补丁表 `methods`，自定义编解码器即可获得与内置标量一致的不可变链式自有方法、`ctx.state` 只读访问、跨 `pipe` 方法透传以及动态 Schema 反射：
 
 ```ts
 import { Codec, Model } from "modvia";
@@ -295,22 +284,22 @@ interface YuanState {
 
 const yuanToCents = Codec.define({
   state: {} as YuanState,
-  decode(input, context, state) {
+  decode(input, ctx) {
     if (typeof input !== "string" || !/^-?\d+(?:\.\d{1,2})?$/.test(input)) {
-      return context.fail("money.format", "Expected decimal yuan string");
+      return ctx.fail("money.format", "Expected decimal yuan string");
     }
     const cents = Math.round(Number(input) * 100);
-    if (state.minCents !== undefined && cents < state.minCents) {
-      return context.fail("money.min", `Expected >= ${state.minCents} cents`);
+    if (ctx.state.minCents !== undefined && cents < ctx.state.minCents) {
+      return ctx.fail("money.min", `Expected >= ${ctx.state.minCents} cents`);
     }
     return cents;
   },
-  encode(cents, context, state) {
+  encode(cents, ctx) {
     if (typeof cents !== "number" || !Number.isSafeInteger(cents)) {
-      return context.fail("money.cents", "Expected integer cents");
+      return ctx.fail("money.cents", "Expected integer cents");
     }
-    if (state.minCents !== undefined && cents < state.minCents) {
-      return context.fail("money.min", `Expected >= ${state.minCents} cents`);
+    if (ctx.state.minCents !== undefined && cents < ctx.state.minCents) {
+      return ctx.fail("money.min", `Expected >= ${ctx.state.minCents} cents`);
     }
     return (cents / 100).toFixed(2);
   },
@@ -323,8 +312,8 @@ const yuanToCents = Codec.define({
     },
   }),
   methods: {
-    minCents: (state, minCents: number): YuanState => ({ ...state, minCents }),
-    nonNegative: (state): YuanState => ({ ...state, minCents: 0 }),
+    minCents: (minCents: number) => ({ minCents }),
+    nonNegative: () => ({ minCents: 0 }),
   },
 });
 
@@ -335,7 +324,7 @@ const Order = Model.define({
 });
 ```
 
-无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
+无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`；`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
 
 ## 日期时间
 
@@ -389,19 +378,19 @@ const NodeModel: Model<NodeData, NodeDTO> = Model.define({
 | `array.min_length`      | `arrayOf(codec).minLength()` / `.nonEmpty()` / `.length()` 元素个数不足 |
 | `array.max_length`      | `arrayOf(codec).maxLength()` / `.length()` 元素个数超出上限             |
 | `tuple.length`          | `tupleOf` 收到的数组长度与声明的元组长度不一致                          |
-| `type.string`           | `string()` 或字符串格式规则收到非字符串输入                             |
-| `type.number`           | `number()` 或 `numberFromString()` 编码收到非有限数字                   |
-| `type.integer`          | `int()` 或 `intFromString()` 编码收到非安全整数                         |
-| `type.bigint`           | `bigintFromString()` 编码收到非 `bigint` 值                             |
+| `type.string`           | `string()`、`.fromString()` 解码或字符串格式规则收到非字符串输入        |
+| `type.number`           | `number()` 或 `number().fromString()` 编码收到非有限数字                |
+| `type.integer`          | `int()` 或 `int().fromString()` 编码收到非安全整数                      |
+| `type.bigint`           | `bigint()` 或 `bigint().fromString()` 编码收到非 `bigint` 值            |
 | `number.min`            | 数值或整数规则小于闭区间下界（`.min()` / `.nonNegative()`）             |
 | `number.max`            | 数值或整数规则大于闭区间上界（`.max()` / `.nonPositive()`）             |
 | `number.gt`             | 数值或整数规则未满足严格下界（`.gt()` / `.positive()`）                 |
 | `number.lt`             | 数值或整数规则未满足严格上界（`.lt()` / `.negative()`）                 |
-| `bigint.min`            | `bigintFromString()` 小于闭区间下界（`.min()` / `.nonNegative()`）      |
-| `bigint.max`            | `bigintFromString()` 大于闭区间上界（`.max()` / `.nonPositive()`）      |
-| `bigint.gt`             | `bigintFromString()` 未满足严格下界（`.gt()` / `.positive()`）          |
-| `bigint.lt`             | `bigintFromString()` 未满足严格上界（`.lt()` / `.negative()`）          |
-| `type.boolean`          | `boolean()` 或 `booleanFromString()` 编码收到非布尔值                   |
+| `bigint.min`            | `bigint()` 规则小于闭区间下界（`.min()` / `.nonNegative()`）            |
+| `bigint.max`            | `bigint()` 规则大于闭区间上界（`.max()` / `.nonPositive()`）            |
+| `bigint.gt`             | `bigint()` 规则未满足严格下界（`.gt()` / `.positive()`）                |
+| `bigint.lt`             | `bigint()` 规则未满足严格上界（`.lt()` / `.negative()`）                |
+| `type.boolean`          | `boolean()` 或 `boolean().fromString()` 编码收到非布尔值                |
 | `type.datetime`         | `isoDateTime()` 解码输入非字符串，或编码输入不是有效 `Date`             |
 | `string.min_length`     | `string().minLength()` / `.nonEmpty()` / `.length()` 长度不足           |
 | `string.max_length`     | `string().maxLength()` / `.length()` 长度超出上限                       |
@@ -418,10 +407,10 @@ const NodeModel: Model<NodeData, NodeDTO> = Model.define({
 | `format.ipv6`           | `ipv6()` 收到非法 IPv6 地址                                             |
 | `format.iso_date`       | `isoDate()` 收到非法 `YYYY-MM-DD` 公历日期                              |
 | `format.iso_time`       | `isoTime()` 收到非法 `HH:mm:ss` 时钟时间                                |
-| `format.int_string`     | `intFromString()` 收到非十进制安全整数文本                              |
-| `format.number_string`  | `numberFromString()` 收到非有限数值文本                                 |
-| `format.boolean_string` | `booleanFromString()` 收到不在真/假词集合内的文本                       |
-| `format.bigint_string`  | `bigintFromString()` 收到非十进制整数文本                               |
+| `format.int_string`     | `int().fromString()` 收到非十进制安全整数文本                           |
+| `format.number_string`  | `number().fromString()` 收到非有限数值文本                              |
+| `format.boolean_string` | `boolean().fromString()` 收到不在真/假词集合内的文本                    |
+| `format.bigint_string`  | `bigint().fromString()` 收到非十进制整数文本                            |
 | `format.json`           | `jsonString()` 收到非法 JSON 文本或不可 JSON 序列化的值                 |
 | `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞                         |
 | `union.no_match`        | `Codec.union` 的所有候选分支均未匹配当前输入                            |

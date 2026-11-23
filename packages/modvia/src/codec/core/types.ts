@@ -31,6 +31,12 @@ export interface CodecContext {
   issue(this: void, detail: CodecIssueInput): void;
 }
 
+/** 携带当前实例只读冻结状态的状态化编解码上下文 */
+export interface StatefulCodecContext<S extends object> extends CodecContext {
+  /** 当前编解码器实例的只读冻结状态 */
+  readonly state: Readonly<S>;
+}
+
 export declare const brandSymbol: unique symbol;
 
 export interface Brand<Name extends string | symbol> {
@@ -149,6 +155,15 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   /** 为当前 Codec 附加静态文档说明文本（供结构反射与 JSON Schema 导出读取，零运行时开销） */
   describe(this: void, description: string): Codec<T, Encoded>;
   /**
+   * 将当前 Codec 与下游状态化 Codec 串联为双向管道，保留下游自有链式方法
+   *
+   * @description 解码按「当前 → next」顺序执行，编码按「next → 当前」逆序执行
+   */
+  pipe<Next, NextEncoded extends T, Trait extends CodecTrait>(
+    this: void,
+    next: WithCodecTrait<Next, NextEncoded, Trait>,
+  ): WithCodecTrait<Next, Encoded, Trait>;
+  /**
    * 将当前 Codec 与下游 Codec 串联为双向管道
    *
    * @description 解码按「当前 → next」顺序执行，编码按「next → 当前」逆序执行
@@ -261,6 +276,13 @@ export type CodecDescriptor =
       readonly exclusiveMin?: number;
       readonly exclusiveMax?: number;
     }>
+  | WithDescription<{
+      readonly kind: "bigint";
+      readonly min?: bigint;
+      readonly max?: bigint;
+      readonly exclusiveMin?: bigint;
+      readonly exclusiveMax?: bigint;
+    }>
   | WithDescription<{ readonly kind: "boolean" }>
   | WithDescription<{ readonly kind: "unknown" }>
   | WithDescription<{ readonly kind: "literal"; readonly values: readonly FieldLiteral[] }>
@@ -324,9 +346,14 @@ export type CodecDescriptor =
 /** Codec 核心保留成员键集合，自定义链式方法禁止覆盖 */
 export type ReservedCodecKey = keyof Codec<unknown, unknown>;
 
-/** 纯函数状态归并映射表：每个方法基于冻结旧状态计算新状态 */
-export type CodecMethodMap<S> = Readonly<
-  Record<string, (this: void, state: Readonly<S>, ...args: never[]) => S>
+/** 状态增量更新表达：可直接返回局部属性补丁，或返回基于冻结旧状态计算局部补丁的函数 */
+export type StatePatch<S extends object> =
+  | Partial<Readonly<S>>
+  | ((this: void, prev: Readonly<S>) => Partial<Readonly<S>>);
+
+/** 自定义链式方法定义表：参数直接对应公开方法签名，返回局部状态补丁或状态演进函数 */
+export type CodecMethodBuilders<S extends object> = Readonly<
+  Record<string, (this: void, ...args: never[]) => StatePatch<S>>
 >;
 
 /** 编译期拦截与 Codec 核心协议同名的自定义方法键 */
@@ -334,27 +361,31 @@ export type DisallowReservedCodecKeys<M> = {
   readonly [K in keyof M]: K extends ReservedCodecKey ? never : unknown;
 };
 
-/** 将纯状态归并函数映射为返回同族状态化 Codec 实例的链式方法签名 */
-export type BoundCodecMethods<T, Encoded, S extends object, M extends CodecMethodMap<S>> = {
-  readonly [K in keyof M]: M[K] extends (state: Readonly<S>, ...args: infer Args) => unknown
-    ? (this: void, ...args: Args) => StatefulCodec<T, Encoded, S, M>
+/** 脱离具体内部状态类型的自有链式方法签名特征表 */
+export type CodecTrait = object;
+
+/** 将方法特征表绑定为返回同族 WithCodecTrait 实例的链式方法集合 */
+export type BoundCodecTrait<T, Encoded, Trait extends CodecTrait> = {
+  readonly [K in keyof Trait]: Trait[K] extends (...args: infer Args) => unknown
+    ? (this: void, ...args: Args) => WithCodecTrait<T, Encoded, Trait>
     : never;
 };
 
-export interface StatefulCodecBase<
-  T,
-  Encoded,
-  S extends object,
-  M extends CodecMethodMap<S>,
-> extends Codec<T, Encoded> {
-  /** 为当前实例附加静态文档说明文本，同时完整保留自有链式方法与当前状态 */
-  describe(this: void, description: string): StatefulCodec<T, Encoded, S, M>;
+export declare const codecTraitSymbol: unique symbol;
+
+export interface StatefulCodecBase<T, Encoded, Trait extends CodecTrait> extends Codec<T, Encoded> {
+  readonly [codecTraitSymbol]?: Trait;
+  /** 为当前实例附加静态文档说明文本，同时完整保留全部自有链式方法 */
+  describe(this: void, description: string): WithCodecTrait<T, Encoded, Trait>;
 }
 
-/** 携带不可变状态与自有链式派生方法的标准双向编解码器 */
-export type StatefulCodec<
+/** 附着自有链式方法特征的标准双向编解码器（内部状态完全封装） */
+export type WithCodecTrait<T, Encoded, Trait extends CodecTrait> = StatefulCodecBase<
   T,
   Encoded,
-  S extends object,
-  M extends CodecMethodMap<S>,
-> = StatefulCodecBase<T, Encoded, S, M> & BoundCodecMethods<T, Encoded, S, M>;
+  Trait
+> &
+  BoundCodecTrait<T, Encoded, NoInfer<Trait>>;
+
+/** StatefulCodec 作为 WithCodecTrait 的语义别名导出 */
+export type StatefulCodec<T, Encoded, Trait extends CodecTrait> = WithCodecTrait<T, Encoded, Trait>;

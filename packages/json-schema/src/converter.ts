@@ -194,6 +194,14 @@ function buildDescriptorSchema(
       }
       return schema;
     }
+    case "bigint": {
+      if (context.strict) {
+        throw new TypeError(
+          "Native bigint cannot be represented in strict JSON Schema; use bigint().fromString() for string wire representation",
+        );
+      }
+      return {};
+    }
     case "boolean":
       return { type: "boolean" };
     case "unknown":

@@ -22,8 +22,9 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 | `Field<T, E, Source, Presence>` | 对象属性级 | 将 `Codec` 绑定到具名属性槽位，承载外部键别名与键缺省规则；静态提供 `Field.of` 与 `Field.is`。                                                         |
 | `Model<Data, DTO, Out>`         | 领域模型级 | 组合字段表形成对象契约（本身亦是 `Codec<Out, DTO>`）；静态提供 `Model.define` 与 `Model.union`，键映射策略归属 `Alias` 命名空间。                      |
 
-内置 0 阶标量（`string`、`number`、`int`、`boolean`、`oneOf`、`literal`、`unknown`、`isoDateTime`）与 1 阶值容器（`arrayOf`、`tupleOf`、`recordOf`）作为高频数据形态构造器直接导入，与 `Codec.*` 组合算子及 `Model.define` 统一返回标准 `Codec`：
+内置 0 阶标量（`string`、`number`、`int`、`bigint`、`boolean`、`oneOf`、`literal`、`unknown`、`isoDateTime`）与 1 阶值容器（`arrayOf`、`tupleOf`、`recordOf`）作为高频数据形态构造器直接导入，与 `Codec.*` 组合算子及 `Model.define` 统一返回标准 `Codec`：
 
+- 有序数值与布尔原始标量（`number`、`int`、`bigint`、`boolean`）默认以原生类型作为外部编码介质，并统一提供 `.fromString()` 切换为严格收敛的字符串外部表示（可与数值区间方法按任意顺序交换调用；`boolean().fromString()` 进一步解锁 `.tokens(truthy, falsy)` 与 `.caseSensitive()`）。
 - 任意 `Codec`（包括嵌套 `Model`）都可直接调用 `.alias(name)`、`.optional()` 或 `.default(...)` 跃迁为 `Field`，无需额外包装函数。
 - 值级容器与组合子（`arrayOf`、`tupleOf`、`recordOf`、`Codec.pipe`、`Codec.invert`、`Codec.lazy`、`Codec.union`）仅接受值级 `Codec` 或裸 `CodecLike`，在编译期与定义期同时拒绝带键绑定元数据的 `Field`。
 - 若需复用已有 `Field` 的底层值规则作为容器元素，可通过 `field.codec` 显式取回纯值级 `Codec`。
@@ -48,8 +49,9 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。链式调用按职责边界遵循由内向外的**三阶单向跃迁（内禀自有态 → 通用代数态 → 字段槽位态）**，不提供通用黑盒交集算子（`.and()`）或逆向剥壳算子（`.unwrap()`）：
 
-- **内禀状态归并（内置自有方法与状态化 `Codec.define`）**：内置有参原语（如 `string().trim().minLength(3)`、`int().positive().max(100)`、`arrayOf(item).nonEmpty()`）与状态化 `Codec.define({ state, validate?, decode, encode, meta?, methods })` 通过纯函数更新冻结 `State` 并重建单层实例（禁止覆盖 `Codec` 保留协议名）。规范化（如 `trim`）在内核中始终先于范围精化执行，从而保证任意方法调用顺序均满足往返收敛律，区间冲突在定义期立即抛 `RangeError`，且结构元数据无损同步至 `CodecDescriptor`。
-- **三阶收敛边界**：在内禀自有态上调用纯静态说明 `.describe(text)` 仍保留全部自有方法；一旦调用通用闭包/变型算子（`.refine`、`.check`、`.normalize`、`.brand`、`.nullable`、`.pipe`），类型单向收敛为标准 `Codec<T, Encoded>`，防止后续重建底层实例静默丢弃已挂载谓词或抹除子类型/品牌；调用 `.alias` / `.optional` / `.default` 则跃迁至对象槽位 `Field`。
+- **内禀状态归并（内置自有方法与状态化 `Codec.define`）**：内置有参原语（如 `string().trim().minLength(3)`、`int().positive().max(100)`、`arrayOf(item).nonEmpty()`）与状态化 `Codec.define({ state, validate?, decode, encode, meta?, methods })` 通过不可变状态归并重建单层实例。`decode(input, ctx)` 与 `encode(input, ctx)` 统一通过 `ctx.state` 读取冻结的当前状态；`methods` 参数签名直接对应公开链式方法，返回 `Partial<S>` 增量补丁或 `(prev) => Partial<S>` 演进函数（编译期拦截未知属性与 `Codec` 保留协议名）。规范化（如 `trim`）在内核中始终先于范围精化执行，区间冲突在定义期立即抛 `RangeError`，且结构元数据无损同步至 `CodecDescriptor`。
+- **特征封装与跨管道透传（`WithCodecTrait`）**：带自有链式方法的编解码器统一表达为 `WithCodecTrait<T, Encoded, Trait>`，完全隐藏内部状态表示并在基接口统一实现保留自有特征的多态 `.describe(text)`。当通过 `.pipe(next)`、`Codec.pipe(first, second)` 或 `jsonOf(codec)` 串联时，若下游为 `WithCodecTrait`，组合结果自动保留下游全部值域链式方法并将外部编码类型重绑为上游 `Encoded`。
+- **三阶收敛边界**：在内禀自有态上调用纯静态说明 `.describe(text)` 或串联保留特征的 `pipe` 仍维持自有方法；一旦调用通用黑盒闭包或值域变型算子（`.refine`、`.check`、`.normalize`、`.brand`、`.or`、`.nullable`），类型单向收敛为标准 `Codec<T, Encoded>`，防止后续状态重建静默丢弃已挂载谓词或抹除子类型/品牌；调用 `.alias` / `.optional` / `.default` 则跃迁至对象槽位 `Field`。
 - **管道包裹顺序（`.check` / `.pipe`）**：`.check(rule)` 在基础 `Codec` 通过后对业务值执行对称约束，解码与编码均按书写顺序由内向外执行；`Codec.pipe(first, second)` 在解码时按 `first → second` 正向传递，在编码时按 `second → first` 逆向传递。
 - **字面量哨兵优先（`.or` / `.nullable`）**：接受一个或多个原始字面量（`string | number | boolean | null | undefined`），编解码两端均先按 `Object.is` 短路匹配字面量，未命中时再交由当前内部 `Codec` 处理。连续相邻调用 `.or(a).or(b)` 与单次调用 `.or(a, b)` 等价，内部自动扁平化合并；与 `.check` 交错时严格遵循外层包裹内层的洋葱顺序。
 - **多分支从左到右联合（`Codec.union`）**：按参数顺序依次尝试分支，首个无错误返回的分支胜出并回滚前序分支的试探记录；全部分支均不匹配时报 `union.no_match`。

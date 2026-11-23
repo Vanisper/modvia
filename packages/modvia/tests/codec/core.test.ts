@@ -15,7 +15,7 @@ import {
   type InferEncoded,
   type InferValue,
   type StandardSchemaV1,
-} from "../../src/codec/index.ts";
+} from "../../src/codec.ts";
 import { literal, Model } from "../../src/index.ts";
 
 const intFromString = Codec.define<number, string>({
@@ -192,7 +192,7 @@ describe("codec kernel", () => {
     // @ts-expect-error Field.of() 显式包装后的属性描述符同样不可直接放入数组
     expect(() => arrayOf(Field.of(string()))).toThrow(TypeError);
 
-    expectTypeOf(arrayOf(string())).toEqualTypeOf<ArrayCodec<string, string>>();
+    expectTypeOf(arrayOf(string())).toEqualTypeOf<ArrayCodec<string>>();
   });
 
   test("Codec.fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
@@ -328,7 +328,7 @@ describe("codec kernel", () => {
     expect(() => string().describe(123)).toThrow(TypeError);
   });
 
-  test("Codec.define 状态化定义支持自定义不可变链式自有方法、状态冻结、动态元数据与保留字守卫", () => {
+  test("Codec.define 状态化定义支持 ctx.state、增量补丁与函数式演进、多余属性拦截及保留字守卫", () => {
     interface DecimalState {
       readonly scale: number;
       readonly min?: number;
@@ -341,24 +341,25 @@ describe("codec kernel", () => {
           throw new RangeError("scale must be an integer between 0 and 8");
         }
       },
-      decode(input, context, state) {
+      decode(input, ctx) {
+        expect(Object.isFrozen(ctx.state)).toBe(true);
         if (typeof input !== "string" || !/^-?\d+(?:\.\d+)?$/.test(input)) {
-          return context.fail("format.decimal", "Expected decimal string");
+          return ctx.fail("format.decimal", "Expected decimal string");
         }
-        const parsed = Number(Number(input).toFixed(state.scale));
-        if (state.min !== undefined && parsed < state.min) {
-          return context.fail("number.min", `Expected >= ${state.min}`);
+        const parsed = Number(Number(input).toFixed(ctx.state.scale));
+        if (ctx.state.min !== undefined && parsed < ctx.state.min) {
+          return ctx.fail("number.min", `Expected >= ${ctx.state.min}`);
         }
         return Object.is(parsed, -0) ? 0 : parsed;
       },
-      encode(input, context, state) {
+      encode(input, ctx) {
         if (typeof input !== "number" || !Number.isFinite(input)) {
-          return context.fail("type.number", "Expected finite number");
+          return ctx.fail("type.number", "Expected finite number");
         }
-        if (state.min !== undefined && input < state.min) {
-          return context.fail("number.min", `Expected >= ${state.min}`);
+        if (ctx.state.min !== undefined && input < ctx.state.min) {
+          return ctx.fail("number.min", `Expected >= ${ctx.state.min}`);
         }
-        return input.toFixed(state.scale);
+        return input.toFixed(ctx.state.scale);
       },
       meta: (state) => ({
         format: "decimal",
@@ -369,22 +370,23 @@ describe("codec kernel", () => {
         },
       }),
       methods: {
-        scale: (state, scale: number): DecimalState => ({ ...state, scale }),
-        min: (state, min: number): DecimalState => ({ ...state, min }),
-        nonNegative: (state): DecimalState => ({ ...state, min: 0 }),
-        tryMutate: (state): DecimalState => {
-          expect(Object.isFrozen(state)).toBe(true);
-          return state;
-        },
+        // 直接返回增量补丁，参数签名即公开方法签名
+        scale: (scale: number) => ({ scale }),
+        min: (min: number) => ({ min }),
+        nonNegative: () => ({ min: 0 }),
+        // 需要基于旧状态演进时返回 (prev) => patch 函数
+        raiseMin: (floor: number) => (prev) => ({
+          min: prev.min === undefined ? floor : Math.max(prev.min, floor),
+        }),
       },
     });
 
-    // 原实例与链式派生实例完全不可变隔离，且 .describe 换序保留自有方法
-    const Price = decimal.describe("Unit price").nonNegative().scale(3).tryMutate();
+    // 原实例与链式派生实例完全不可变隔离，且多态 .describe 换序保留自有方法
+    const Price = decimal.describe("Unit price").nonNegative().raiseMin(5).scale(3);
     expect(decimal.encode(1.5)).toBe("1.50");
     expect(Price.decode("12.3456")).toBe(12.346);
     expect(Price.encode(12.346)).toBe("12.346");
-    expect(Price.safeDecode("-0.01")).toMatchObject({
+    expect(Price.safeDecode("4.99")).toMatchObject({
       ok: false,
       issues: [{ code: "number.min" }],
     });
@@ -393,20 +395,31 @@ describe("codec kernel", () => {
       format: "decimal",
       description: "Unit price",
       encodedSchema: { type: "string" },
-      decodedSchema: { type: "number", minimum: 0 },
+      decodedSchema: { type: "number", minimum: 5 },
     });
 
     // 定义期状态不变量校验在链式调用时立即生效
     expect(() => decimal.scale(-1)).toThrow(RangeError);
     expect(() => decimal.scale(12)).toThrow(RangeError);
 
-    // 三阶单向跃迁：进入通用精化或字段槽位后不再暴露内禀自有方法
+    // 三阶单向跃迁：进入通用精化后不再暴露内禀自有方法
     const RefinedPrice = Price.refine((v) => v < 1000, "price.cap", "Too expensive");
     expectTypeOf(RefinedPrice).toEqualTypeOf<Codec<number, string>>();
     expect("scale" in RefinedPrice).toBe(false);
 
+    // 编译期多余属性检查：拼错状态字段名立即被 TypeScript 拦截
+    Codec.define({
+      // @ts-expect-error typo 字段不存在于 Partial<DecimalState>
+      state: { scale: 2 } as DecimalState,
+      decode: (v) => Number(v),
+      encode: (v) => String(v),
+      methods: {
+        badPatch: () => ({ scael: 4 }),
+      },
+    });
+
     // 保留字冲突在编译期与定义期双重拒绝
-    const badMethods = { decode: (s: { readonly n: number }) => s };
+    const badMethods = { decode: () => ({ n: 2 }) };
     expect(() =>
       Codec.define({
         // @ts-expect-error 禁止覆盖 Codec 保留成员 decode

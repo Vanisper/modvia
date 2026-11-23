@@ -1,4 +1,4 @@
-export * from "./codec/index.ts";
+export * from "./codec.ts";
 export * from "./model/core/alias.ts";
 export type {
   FieldRecord,

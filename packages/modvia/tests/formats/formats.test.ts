@@ -1,22 +1,20 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
-  bigintFromString,
-  booleanFromString,
   email,
-  intFromString,
   ipv4,
   ipv6,
   isoDate,
   isoTime,
   jsonOf,
   jsonString,
-  numberFromString,
   url,
   uuid,
 } from "../../src/formats/index.ts";
 import {
   Alias,
+  arrayOf,
   Codec,
+  int,
   Model,
   string,
   type InferEncoded,
@@ -104,7 +102,7 @@ describe("modvia/formats", () => {
     }
   });
 
-  test("isoDate 与 isoTime 精确校验公历闰年与日内时钟边界", () => {
+  test("isoDate 与 isoTime 复用公历时间原子精确校验闰年与日内时钟边界", () => {
     const DateStr = isoDate();
     expect(DateStr.decode("2024-02-29")).toBe("2024-02-29");
     for (const invalid of ["2026-02-29", "1900-02-29", "2026-13-01", "2026-04-31", "2026/01/01"]) {
@@ -124,7 +122,7 @@ describe("modvia/formats", () => {
     }
   });
 
-  test("jsonString 与 jsonOf 打通 JSON 文本与领域模型的双向编解码", () => {
+  test("jsonString 与 jsonOf 打通 JSON 文本与领域模型的双向编解码，并保留下游自有方法", () => {
     const RawJson = jsonString();
     expect(RawJson.decode('{"ok":true}')).toStrictEqual({ ok: true });
     expect(RawJson.encode({ ok: true })).toBe('{"ok":true}');
@@ -168,83 +166,19 @@ describe("modvia/formats", () => {
     expect(EventJson.encode(parsed)).toBe(
       '{"event_id":"550e8400-e29b-41d4-a716-446655440000","target_url":"https://modvia.dev"}',
     );
-  });
 
-  test("intFromString、numberFromString、booleanFromString 与 bigintFromString 支持链式自有方法并满足双向收敛", () => {
-    const Port = intFromString().min(1).max(65535);
-    expect(Port.decode("8080")).toBe(8080);
-    expect(Port.encode(8080)).toBe("8080");
-    expect(intFromString().decode("-0")).toBe(0);
-    expect(intFromString().encode(-0)).toBe("0");
-    expect(intFromString().positive().safeDecode("0")).toMatchObject({
+    // jsonOf 包装数组与数值原语时自动保留值域自有方法，且不泄漏介质切换方法 fromString
+    const NonEmptyTagsJson = jsonOf(arrayOf(string())).nonEmpty();
+    expect(NonEmptyTagsJson.decode('["a"]')).toStrictEqual(["a"]);
+    expect(NonEmptyTagsJson.safeDecode("[]")).toMatchObject({
       ok: false,
-      issues: [{ code: "number.gt" }],
-    });
-    for (const invalid of ["", "  ", "8080px", "1.5", "0x10", "9007199254740993"]) {
-      expect(Port.safeDecode(invalid)).toMatchObject({
-        ok: false,
-        issues: [{ code: "format.int_string" }],
-      });
-    }
-    expect(Port.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.min" }] });
-    expect(Port.safeEncode(70000)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
-    expect(Port.safeParse(8080)).toMatchObject({ ok: false, issues: [{ code: "type.string" }] });
-    expect(Port.safeDump("8080")).toMatchObject({ ok: false, issues: [{ code: "type.integer" }] });
-    expect(() => intFromString().min(1.5)).toThrow(RangeError);
-    expect(() => intFromString().min(5).max(1)).toThrow(RangeError);
-    expect(() => intFromString().gt(1).lt(2)).toThrow(RangeError);
-
-    const Ratio = numberFromString().gt(0).max(1);
-    expect(Ratio.decode("0.25")).toBe(0.25);
-    expect(Ratio.decode("1e-2")).toBe(0.01);
-    expect(Ratio.encode(0.25)).toBe("0.25");
-    expect(numberFromString().decode("-0.0")).toBe(0);
-    expect(numberFromString().encode(-0)).toBe("0");
-    for (const invalid of ["", " 0.5 ", "NaN", "Infinity", "1e999", "abc"]) {
-      expect(Ratio.safeDecode(invalid)).toMatchObject({
-        ok: false,
-        issues: [{ code: "format.number_string" }],
-      });
-    }
-    expect(Ratio.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.gt" }] });
-    expect(Ratio.safeEncode(1.1)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
-
-    const BoolFlag = booleanFromString();
-    expect(BoolFlag.decode("TRUE")).toBe(true);
-    expect(BoolFlag.decode("False")).toBe(false);
-    expect(BoolFlag.encode(true)).toBe("true");
-    expect(BoolFlag.encode(false)).toBe("false");
-    expect(BoolFlag.safeDecode("1")).toMatchObject({
-      ok: false,
-      issues: [{ code: "format.boolean_string" }],
+      issues: [{ code: "array.min_length" }],
     });
 
-    const CustomBool = booleanFromString().tokens(["YES", "1"], ["NO", "0"]);
-    expect(CustomBool.decode("yes")).toBe(true);
-    expect(CustomBool.decode("0")).toBe(false);
-    expect(CustomBool.encode(true)).toBe("YES");
-    expect(CustomBool.decode(CustomBool.encode(true))).toBe(true);
-    expect(CustomBool.caseSensitive().safeDecode("yes")).toMatchObject({
-      ok: false,
-      issues: [{ code: "format.boolean_string" }],
-    });
-    expect(() => booleanFromString().tokens(["on"], ["ON"])).toThrow(RangeError);
-
-    const BigId = bigintFromString().positive();
-    expect(BigId.decode("900719925474099312345")).toBe(900719925474099312345n);
-    expect(bigintFromString().encode(-42n)).toBe("-42");
-    expect(BigId.safeDecode("0")).toMatchObject({
-      ok: false,
-      issues: [{ code: "bigint.gt" }],
-    });
-    expect(BigId.safeDecode("12n")).toMatchObject({
-      ok: false,
-      issues: [{ code: "format.bigint_string" }],
-    });
-    expect(BigId.safeDump(12)).toMatchObject({
-      ok: false,
-      issues: [{ code: "type.bigint" }],
-    });
-    expect(() => bigintFromString().gt(1n).lt(2n)).toThrow(RangeError);
+    const PortJson = jsonOf(int()).positive().max(65535);
+    expect(PortJson.decode("8080")).toBe(8080);
+    expect(PortJson.encode(8080)).toBe("8080");
+    expect("fromString" in PortJson).toBe(false);
+    expect("fromString" in int().fromString()).toBe(false);
   });
 });

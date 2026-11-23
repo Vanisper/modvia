@@ -16,15 +16,17 @@ import type {
   CodecContext,
   CodecDescriptor,
   CodecLike,
-  CodecMethodMap,
+  CodecMethodBuilders,
+  CodecTrait,
   DefaultProvider,
   Field,
   FieldLiteral,
   FieldPresence,
   SafeResult,
   StandardSchemaV1,
-  StatefulCodec,
+  StatePatch,
   ValueCodecInput,
+  WithCodecTrait,
 } from "./types.ts";
 
 export type CodecDirection = "decode" | "encode";
@@ -40,6 +42,7 @@ const literalStateSymbol = Symbol.for("modvia.literalState");
 const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
 const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
 const defaultResolverSymbol = Symbol.for("modvia.defaultResolver");
+const traitKeysSymbol = Symbol.for("modvia.traitKeys");
 export const descriptorSymbol = Symbol.for("modvia.codecDescriptor");
 export const fieldBrand = Symbol.for("modvia.Field");
 
@@ -162,8 +165,8 @@ export function createCodec<T, Encoded>(
         descriptor: { ...baseDescriptor, description },
       });
     },
-    pipe<Next>(next: ValueCodecInput<Next, T>) {
-      return createPipedCodec(codec, next);
+    pipe(next: ValueCodecInput<unknown, T>) {
+      return createPipedCodec(codec, next) as never;
     },
     or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(...values: Literals) {
       assertValidLiterals(values);
@@ -271,7 +274,7 @@ export interface StatefulCodecRuntimeSpec<
   T,
   Encoded,
   S extends object,
-  M extends CodecMethodMap<S>,
+  M extends CodecMethodBuilders<S>,
 > {
   readonly state: S;
   readonly description?: string;
@@ -279,32 +282,38 @@ export interface StatefulCodecRuntimeSpec<
   readonly createRunner: (state: Readonly<S>) => InternalRunner<T, Encoded>;
   readonly createDescriptor: (state: Readonly<S>, description?: string) => CodecDescriptor;
   readonly methods: M;
+  readonly extraMethods?: (
+    state: Readonly<S>,
+    description?: string,
+  ) => Readonly<Record<string, (...args: never[]) => unknown>>;
 }
 
-export function createStatefulCodec<T, Encoded, S extends object, M extends CodecMethodMap<S>>(
+export function createStatefulCodec<T, Encoded, S extends object, M extends CodecMethodBuilders<S>>(
   spec: StatefulCodecRuntimeSpec<T, Encoded, S, M>,
-): StatefulCodec<T, Encoded, S, M> {
+): WithCodecTrait<T, Encoded, M> {
   if (!isPlainObject(spec.methods)) {
     throw new TypeError("Codec methods must be a plain object");
   }
   const methodEntries = Object.entries(spec.methods);
-  for (const [name, reducer] of methodEntries) {
+  for (const [name, builder] of methodEntries) {
     if (reservedCodecKeys.has(name)) {
       throw new RangeError(
         `Cannot define custom codec method "${name}" because it conflicts with a reserved Codec member`,
       );
     }
-    if (typeof reducer !== "function") {
-      throw new TypeError(`Codec method "${name}" must be a state reducer function`);
+    if (typeof builder !== "function") {
+      throw new TypeError(`Codec method "${name}" must be a function`);
     }
   }
-  return instantiateStatefulCodec(spec, methodEntries);
+  const traitKeys = Object.freeze(methodEntries.map(([name]) => name));
+  return instantiateStatefulCodec(spec, methodEntries, traitKeys);
 }
 
-function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecMethodMap<S>>(
+function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecMethodBuilders<S>>(
   spec: StatefulCodecRuntimeSpec<T, Encoded, S, M>,
-  methodEntries: ReadonlyArray<readonly [string, (state: Readonly<S>, ...args: never[]) => S]>,
-): StatefulCodec<T, Encoded, S, M> {
+  methodEntries: ReadonlyArray<readonly [string, (...args: never[]) => StatePatch<S>]>,
+  traitKeys: readonly string[],
+): WithCodecTrait<T, Encoded, M> {
   if (typeof spec.state !== "object" || spec.state === null) {
     throw new TypeError("Codec state must be an object");
   }
@@ -318,23 +327,40 @@ function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecM
   const baseCodec = createCodec<T, Encoded>(runner, { descriptor });
 
   const extra: Record<string, unknown> = {
-    describe(description: string): StatefulCodec<T, Encoded, S, M> {
+    describe(description: string): WithCodecTrait<T, Encoded, M> {
       assertValidDescription(description);
-      return instantiateStatefulCodec({ ...spec, description }, methodEntries);
+      return instantiateStatefulCodec({ ...spec, description }, methodEntries, traitKeys);
     },
   };
 
-  for (const [name, reducer] of methodEntries) {
+  for (const [name, builder] of methodEntries) {
     writeOwnField(extra, name, (...args: never[]) => {
-      const nextState = reducer(frozenState, ...args);
-      if (typeof nextState !== "object" || nextState === null) {
-        throw new TypeError(`Codec method "${name}" must return a state object`);
+      const rawPatch = builder(...args);
+      const resolvedPatch =
+        typeof rawPatch === "function"
+          ? (rawPatch as (prev: Readonly<S>) => Partial<Readonly<S>>)(frozenState)
+          : rawPatch;
+      if (!isPlainObject(resolvedPatch)) {
+        throw new TypeError(
+          `Codec method "${name}" must return a plain state patch object or (prev) => patch function`,
+        );
       }
-      return instantiateStatefulCodec({ ...spec, state: nextState }, methodEntries);
+      const nextState = { ...frozenState, ...resolvedPatch } as S;
+      return instantiateStatefulCodec({ ...spec, state: nextState }, methodEntries, traitKeys);
     });
   }
 
-  return extendCodec(baseCodec, extra) as unknown as StatefulCodec<T, Encoded, S, M>;
+  if (spec.extraMethods) {
+    for (const [name, fn] of Object.entries(spec.extraMethods(frozenState, spec.description))) {
+      writeOwnField(extra, name, fn);
+    }
+  }
+
+  return extendCodec(baseCodec, extra, [[traitKeysSymbol, traitKeys]]) as unknown as WithCodecTrait<
+    T,
+    Encoded,
+    M
+  >;
 }
 
 export function getCodecDescriptor(value: CodecLike<unknown, unknown>): CodecDescriptor {
@@ -523,6 +549,14 @@ export function createField<
   return Object.freeze(fieldDescriptor);
 }
 
+export function createPipedCodec<Mid, Encoded, Out, Trait extends CodecTrait>(
+  first: ValueCodecInput<Mid, Encoded>,
+  second: WithCodecTrait<Out, Mid, Trait>,
+): WithCodecTrait<Out, Encoded, Trait>;
+export function createPipedCodec<Mid, Encoded, Out>(
+  first: ValueCodecInput<Mid, Encoded>,
+  second: ValueCodecInput<Out, Mid>,
+): Codec<Out, Encoded>;
 export function createPipedCodec<Mid, Encoded, Out>(
   first: ValueCodecInput<Mid, Encoded>,
   second: ValueCodecInput<Out, Mid>,
@@ -532,8 +566,15 @@ export function createPipedCodec<Mid, Encoded, Out>(
 
   const firstCodec = promoteToCodec(first);
   const secondCodec = promoteToCodec(second);
+  return buildPipedInstance(firstCodec, secondCodec, undefined);
+}
 
-  return createCodec<Out, Encoded>(
+function buildPipedInstance<Mid, Encoded, Out>(
+  firstCodec: Codec<Mid, Encoded>,
+  secondCodec: Codec<Out, Mid>,
+  description: string | undefined,
+): Codec<Out, Encoded> {
+  const basePiped = createCodec<Out, Encoded>(
     (input, direction, collector) => {
       if (direction === "decode") {
         const mid = executeCodec(firstCodec, input, "decode", collector);
@@ -549,9 +590,36 @@ export function createPipedCodec<Mid, Encoded, Out>(
         kind: "pipe",
         first: firstCodec as Codec<unknown, unknown>,
         second: secondCodec as Codec<unknown, unknown>,
+        ...(description !== undefined ? { description } : {}),
       },
     },
   );
+
+  const traitKeys = Reflect.get(secondCodec, traitKeysSymbol) as readonly string[] | undefined;
+  if (!traitKeys || traitKeys.length === 0) {
+    return basePiped;
+  }
+
+  const extra: Record<string, unknown> = {
+    describe(nextDescription: string) {
+      assertValidDescription(nextDescription);
+      return buildPipedInstance(firstCodec, secondCodec, nextDescription);
+    },
+  };
+
+  for (const methodName of traitKeys) {
+    const targetMethod = Reflect.get(secondCodec, methodName) as
+      | ((...args: unknown[]) => Codec<Out, Mid>)
+      | undefined;
+    if (typeof targetMethod === "function") {
+      writeOwnField(extra, methodName, (...args: unknown[]) => {
+        const nextSecond = Reflect.apply(targetMethod, undefined, args);
+        return buildPipedInstance(firstCodec, nextSecond, description);
+      });
+    }
+  }
+
+  return extendCodec(basePiped, extra, [[traitKeysSymbol, traitKeys]]);
 }
 
 export function getStaticLiterals(

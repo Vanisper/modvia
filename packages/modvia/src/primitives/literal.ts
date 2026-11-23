@@ -1,0 +1,57 @@
+import { createCodec } from "../codec/core/runtime.ts";
+import type { Codec, FieldLiteral } from "../codec/core/types.ts";
+import { deduplicateLiterals, formatLiteral, isPrimitiveLiteral } from "../shared/value.ts";
+
+/** 字符串字面量枚举双向编解码器 */
+export function oneOf<const Values extends readonly string[]>(
+  ...allowedValues: Values
+): Codec<Values[number], Values[number]> {
+  if (allowedValues.length === 0) {
+    throw new RangeError("oneOf requires at least one value");
+  }
+  const values = Object.freeze([...new Set<string>(allowedValues)]);
+  const expectedMessage = `Expected one of: ${values.join(", ")}`;
+  const valueSet = new Set<string>(values);
+  const isAllowed = (value: string): value is Values[number] => valueSet.has(value);
+
+  return createCodec<Values[number], Values[number]>(
+    (input, _direction, collector) => {
+      if (typeof input !== "string" || !isAllowed(input)) {
+        return collector.add("string.one_of", expectedMessage);
+      }
+      return input;
+    },
+    {
+      allowedLiterals: values,
+      descriptor: { kind: "enum", values },
+    },
+  );
+}
+
+/** 精确匹配一个或多个原始字面量（按 Object.is 比较） */
+export function literal<const Values extends readonly [FieldLiteral, ...FieldLiteral[]]>(
+  ...allowedValues: Values
+): Codec<Values[number], Values[number]> {
+  if (allowedValues.length === 0) {
+    throw new RangeError("literal requires at least one value");
+  }
+  if (!allowedValues.every(isPrimitiveLiteral)) {
+    throw new TypeError("literal only accepts string, number, boolean, null, or undefined values");
+  }
+
+  const uniqueValues = Object.freeze(deduplicateLiterals([], allowedValues));
+  const expectedMessage = `Expected literal: ${uniqueValues.map(formatLiteral).join(", ")}`;
+
+  return createCodec<Values[number], Values[number]>(
+    (input, _direction, collector) => {
+      for (const candidate of uniqueValues) {
+        if (Object.is(input, candidate)) return candidate as Values[number];
+      }
+      return collector.add("value.literal", expectedMessage);
+    },
+    {
+      allowedLiterals: uniqueValues,
+      descriptor: { kind: "literal", values: uniqueValues },
+    },
+  );
+}

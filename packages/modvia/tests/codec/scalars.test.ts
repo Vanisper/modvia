@@ -1,6 +1,7 @@
 import { runInNewContext } from "node:vm";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
+  bigint,
   boolean,
   int,
   isoDateTime,
@@ -8,7 +9,9 @@ import {
   oneOf,
   string,
   unknown,
-} from "../../src/codec/index.ts";
+  type InferEncoded,
+  type InferValue,
+} from "../../src/codec.ts";
 import { Model } from "../../src/index.ts";
 
 const instant = isoDateTime();
@@ -170,6 +173,74 @@ describe("built-in scalars", () => {
     const complex = { nested: [1, true, null] };
     expect(passthrough.decode(complex)).toBe(complex);
     expect(passthrough.encode(undefined)).toBeUndefined();
+  });
+
+  test("int、number、bigint 与 boolean 统一通过 .fromString() 切换字符串传输介质且与区间方法换序等价", () => {
+    // 1. int: 原生与 .fromString() 换序完全等价
+    const PortA = int().min(1).max(65535).fromString();
+    const PortB = int().fromString().min(1).max(65535);
+    expectTypeOf<InferValue<typeof PortA>>().toEqualTypeOf<number>();
+    expectTypeOf<InferEncoded<typeof PortA>>().toEqualTypeOf<string>();
+
+    for (const Port of [PortA, PortB]) {
+      expect(Port.decode("8080")).toBe(8080);
+      expect(Port.encode(8080)).toBe("8080");
+      expect(Port.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.min" }] });
+      expect(Port.safeEncode(70000)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
+      for (const invalid of ["", "  ", "8080px", "1.5", "0x10", "9007199254740993"]) {
+        expect(Port.safeDecode(invalid)).toMatchObject({
+          ok: false,
+          issues: [{ code: "format.int_string" }],
+        });
+      }
+    }
+    expect(int().fromString().decode("-0")).toBe(0);
+    expect(int().fromString().encode(-0)).toBe("0");
+
+    // 2. number: .fromString() 双向收敛
+    const Ratio = number().gt(0).max(1).fromString();
+    expect(Ratio.decode("0.25")).toBe(0.25);
+    expect(Ratio.decode("1e-2")).toBe(0.01);
+    expect(Ratio.encode(0.25)).toBe("0.25");
+    expect(Ratio.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.gt" }] });
+    for (const invalid of ["", " 0.5 ", "NaN", "Infinity", "1e999", "abc"]) {
+      expect(Ratio.safeDecode(invalid)).toMatchObject({
+        ok: false,
+        issues: [{ code: "format.number_string" }],
+      });
+    }
+
+    // 3. bigint: 原生大整数与 .fromString() 归并
+    const NativeBig = bigint().positive();
+    expect(NativeBig.decode(42n)).toBe(42n);
+    expect(NativeBig.safeDecode(0n)).toMatchObject({ ok: false, issues: [{ code: "bigint.gt" }] });
+    expect(() => bigint().gt(1n).lt(2n)).toThrow(RangeError);
+
+    const BigText = NativeBig.fromString();
+    expect(BigText.decode("900719925474099312345")).toBe(900719925474099312345n);
+    expect(BigText.encode(900719925474099312345n)).toBe("900719925474099312345");
+    expect(BigText.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "bigint.gt" }] });
+    expect(BigText.safeDecode("12n")).toMatchObject({
+      ok: false,
+      issues: [{ code: "format.bigint_string" }],
+    });
+    expect(BigText.safeDump(12)).toMatchObject({ ok: false, issues: [{ code: "type.bigint" }] });
+
+    // 4. boolean: .fromString() 切换至字符串介质并揭露 .tokens() 与 .caseSensitive()
+    const BoolText = boolean().describe("Feature flag").fromString();
+    expect(BoolText.decode("TRUE")).toBe(true);
+    expect(BoolText.encode(true)).toBe("true");
+
+    const CustomBool = BoolText.tokens(["YES", "1"], ["NO", "0"]);
+    expect(CustomBool.decode("yes")).toBe(true);
+    expect(CustomBool.decode("0")).toBe(false);
+    expect(CustomBool.encode(true)).toBe("YES");
+    expect(CustomBool.decode(CustomBool.encode(true))).toBe(true);
+    expect(CustomBool.caseSensitive().safeDecode("yes")).toMatchObject({
+      ok: false,
+      issues: [{ code: "format.boolean_string" }],
+    });
+    expect(() => boolean().fromString().tokens(["on"], ["ON"])).toThrow(RangeError);
   });
 
   test("isoDateTime 支持四位年与扩展年份按同一时间点往返", () => {

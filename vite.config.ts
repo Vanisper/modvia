@@ -1,5 +1,15 @@
 import { defineConfig } from "vite-plus";
 
+function forbidLayers(names: readonly string[]): string[] {
+  const patterns: string[] = [];
+  for (const name of names) {
+    for (const prefix of ["..", "../..", "../../.."]) {
+      patterns.push(`${prefix}/${name}`, `${prefix}/${name}/**`);
+    }
+  }
+  return patterns;
+}
+
 export default defineConfig({
   staged: {
     "*": "vp check --fix",
@@ -16,14 +26,18 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
-              patterns: [
-                "../codec",
-                "../codec/**",
-                "../formats",
-                "../formats/**",
-                "../model",
-                "../model/**",
-              ],
+              patterns: forbidLayers(["scalars", "codec", "primitives", "formats", "model"]),
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/scalars/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: forbidLayers(["codec", "primitives", "formats", "model"]),
             },
           ],
         },
@@ -34,38 +48,7 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
-              patterns: [
-                "../formats",
-                "../formats/**",
-                "../../formats",
-                "../../formats/**",
-                "../model",
-                "../model/**",
-                "../../model",
-                "../../model/**",
-              ],
-            },
-          ],
-        },
-      },
-      {
-        files: ["packages/modvia/src/formats/**"],
-        rules: {
-          "no-restricted-imports": [
-            "error",
-            {
-              patterns: ["../model", "../model/**", "../../model", "../../model/**"],
-            },
-          ],
-        },
-      },
-      {
-        files: ["packages/modvia/src/model/**"],
-        rules: {
-          "no-restricted-imports": [
-            "error",
-            {
-              patterns: ["../formats", "../formats/**", "../../formats", "../../formats/**"],
+              patterns: forbidLayers(["primitives", "formats", "model"]),
             },
           ],
         },
@@ -76,29 +59,40 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
-              patterns: ["../scalars", "../scalars/**", "../operators", "../operators/**"],
-            },
-          ],
-        },
-      },
-      {
-        files: ["packages/modvia/src/codec/scalars/**"],
-        rules: {
-          "no-restricted-imports": [
-            "error",
-            {
               patterns: ["../operators", "../operators/**"],
             },
           ],
         },
       },
       {
-        files: ["packages/modvia/src/codec/operators/**"],
+        files: ["packages/modvia/src/primitives/**"],
         rules: {
           "no-restricted-imports": [
             "error",
             {
-              patterns: ["../scalars", "../scalars/**"],
+              patterns: forbidLayers(["formats", "model"]),
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/formats/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: forbidLayers(["model"]),
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/model/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: forbidLayers(["primitives", "formats"]),
             },
           ],
         },

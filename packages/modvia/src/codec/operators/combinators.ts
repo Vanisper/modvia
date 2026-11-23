@@ -6,13 +6,33 @@ import {
   executeCodec,
   promoteToCodec,
 } from "../core/runtime.ts";
-import type { Codec, InferEncoded, InferValue, ValueCodecInput } from "../core/types.ts";
+import type {
+  Codec,
+  CodecTrait,
+  InferEncoded,
+  InferValue,
+  ValueCodecInput,
+  WithCodecTrait,
+} from "../core/types.ts";
 
+/**
+ * 将上游 Codec 与下游状态化 Codec 首尾串联为双向管道，保留下游自有链式方法
+ *
+ * @description 解码按 first → second 正向执行，编码按 second → first 逆向执行
+ */
+export function pipe<Mid, Encoded, Out, SecondEncoded extends Mid, Trait extends CodecTrait>(
+  first: ValueCodecInput<Mid, Encoded>,
+  second: WithCodecTrait<Out, SecondEncoded, Trait>,
+): WithCodecTrait<Out, Encoded, Trait>;
 /**
  * 将两个值级 Codec 首尾串联为双向管道
  *
  * @description 解码按 first → second 正向执行，编码按 second → first 逆向执行
  */
+export function pipe<Mid, Encoded, Out>(
+  first: ValueCodecInput<Mid, Encoded>,
+  second: ValueCodecInput<Out, Mid>,
+): Codec<Out, Encoded>;
 export function pipe<Mid, Encoded, Out>(
   first: ValueCodecInput<Mid, Encoded>,
   second: ValueCodecInput<Out, Mid>,

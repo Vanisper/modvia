@@ -3,11 +3,15 @@ import * as modviaEntry from "modvia";
 import {
   Alias,
   arrayOf,
+  bigint,
+  boolean,
   Codec,
   Field,
+  int,
   isoDateTime,
   literal,
   Model,
+  number,
   oneOf,
   string,
   ValidationError,
@@ -15,15 +19,8 @@ import {
   type InferDTO,
 } from "modvia";
 import * as codecEntry from "modvia/codec";
-import {
-  bigintFromString,
-  booleanFromString,
-  email,
-  intFromString,
-  jsonOf,
-  numberFromString,
-  uuid,
-} from "modvia/formats";
+import * as formatsEntry from "modvia/formats";
+import { email, jsonOf, uuid } from "modvia/formats";
 
 // 通过包出口消费打包产物（modvia → dist/index.mjs，modvia/codec → dist/codec.mjs），
 // 必须在工作区构建之后运行（vp run ready 已按 构建 → 检查 → 测试 排序）。
@@ -138,26 +135,36 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
 
     const Cents = Codec.define({
       state: { min: 0 },
-      decode(raw, ctx, state) {
+      decode(raw, ctx) {
         if (typeof raw !== "string" || !/^-?\d+$/.test(raw)) {
           return ctx.fail("money.invalid", "Invalid cents");
         }
         const n = Number(raw);
-        if (n < state.min) return ctx.fail("money.min", "Below min");
+        if (n < ctx.state.min) return ctx.fail("money.min", "Below min");
         return n;
       },
-      encode(val, ctx, state) {
-        if (typeof val !== "number" || !Number.isSafeInteger(val) || val < state.min) {
+      encode(val, ctx) {
+        if (typeof val !== "number" || !Number.isSafeInteger(val) || val < ctx.state.min) {
           return ctx.fail("money.min", "Invalid cents");
         }
         return String(val);
       },
       methods: {
-        min: (state, min: number) => ({ ...state, min }),
+        min: (min: number) => ({ min }),
       },
     });
     expect(Cents.min(100).decode("250")).toBe(250);
     expect(Cents.min(100).safeDecode("50").ok).toBe(false);
+
+    // 验证 modvia/formats 已收敛移除旧 *FromString 独立函数，由标量自身 .fromString() 统一承载
+    for (const removedKey of [
+      "intFromString",
+      "numberFromString",
+      "booleanFromString",
+      "bigintFromString",
+    ]) {
+      expect(removedKey in formatsEntry).toBe(false);
+    }
 
     const AccountJson = jsonOf(
       Model.define({
@@ -165,10 +172,10 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
         fields: {
           accountId: uuid(),
           contactEmail: email().trim().lowercase(),
-          port: intFromString().min(1).max(65535),
-          ratio: numberFromString().nonNegative().max(1),
-          enabled: booleanFromString(),
-          quotaBytes: bigintFromString().positive(),
+          port: int().min(1).max(65535).fromString(),
+          ratio: number().nonNegative().max(1).fromString(),
+          enabled: boolean().fromString(),
+          quotaBytes: bigint().positive().fromString(),
         },
       })
         .describe("Account wire payload")

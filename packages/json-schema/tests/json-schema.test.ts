@@ -1,6 +1,7 @@
 import {
   Alias,
   arrayOf,
+  bigint,
   boolean,
   Codec,
   int,
@@ -14,7 +15,7 @@ import {
   tupleOf,
   unknown,
 } from "modvia";
-import { email, intFromString, jsonOf, url, uuid } from "modvia/formats";
+import { email, jsonOf, url, uuid } from "modvia/formats";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { toJsonSchema, withJsonSchema, type StandardJSONSchemaV1 } from "../src/index.ts";
 
@@ -203,8 +204,8 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       anyOf: [{ type: "integer" }, { enum: ["auto", false] }],
     });
 
-    // 字符串传输格式 Codec 在 DTO 侧输出字符串 Schema，在 Data 侧输出数值 Schema
-    const PortText = intFromString().positive().max(65535);
+    // 标量 .fromString() 在 DTO 侧输出字符串 Schema，在 Data 侧输出数值 Schema
+    const PortText = int().positive().max(65535).fromString();
     expect(toJsonSchema(PortText, { side: "dto", includeSchemaUri: false })).toStrictEqual({
       type: "string",
       pattern: "^[+-]?\\d+$",
@@ -219,6 +220,15 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       minimum: 0,
       exclusiveMinimum: true,
       maximum: 65535,
+    });
+
+    // 原生 bigint 在 strict 模式下报 TypeError，切换 .fromString() 后在 DTO 侧可无损输出字符串 Schema
+    expect(() => toJsonSchema(bigint(), { strict: true })).toThrow(TypeError);
+    expect(
+      toJsonSchema(bigint().positive().fromString(), { strict: true, includeSchemaUri: false }),
+    ).toStrictEqual({
+      type: "string",
+      pattern: "^[+-]?\\d+$",
     });
   });
 

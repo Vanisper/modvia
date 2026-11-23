@@ -16,12 +16,13 @@ import type {
   CodecContext,
   CodecDescriptor,
   CodecLike,
-  CodecMethodMap,
+  CodecMethodBuilders,
   CustomCodecMeta,
   DisallowReservedCodecKeys,
   Field,
   FieldPresence,
-  StatefulCodec,
+  StatefulCodecContext,
+  WithCodecTrait,
 } from "./types.ts";
 
 export interface CodecHandlers<T, Encoded> {
@@ -34,49 +35,50 @@ export interface StatefulCodecHandlers<
   T,
   Encoded,
   S extends object,
-  M extends CodecMethodMap<NoInfer<S>>,
+  M extends CodecMethodBuilders<NoInfer<S>>,
 > {
-  /** 初始只读状态对象（每次派生均由内核自动冻结） */
+  /** 初始状态对象（每次派生均由内核浅合并增量补丁并自动冻结） */
   readonly state: S;
   /** 可选的状态不变量校验器，在初始构造与每次自有方法派生时同步执行 */
   validate?(this: void, state: Readonly<NoInfer<S>>): void;
-  /** 基于当前冻结状态将外部输入解码为业务值 */
-  decode(this: void, input: unknown, context: CodecContext, state: Readonly<NoInfer<S>>): T;
-  /** 基于当前冻结状态将业务值编码为外部表示 */
-  encode(this: void, input: unknown, context: CodecContext, state: Readonly<NoInfer<S>>): Encoded;
+  /** 基于 context.state 只读状态将外部输入解码为业务值 */
+  decode(this: void, input: unknown, context: StatefulCodecContext<NoInfer<S>>): T;
+  /** 基于 context.state 只读状态将业务值编码为外部表示 */
+  encode(this: void, input: unknown, context: StatefulCodecContext<NoInfer<S>>): Encoded;
   /** 静态或随状态动态计算的只读结构元数据，供 Schema 导出工具读取 */
   readonly meta?: CustomCodecMeta | ((this: void, state: Readonly<NoInfer<S>>) => CustomCodecMeta);
-  /** 自有链式方法映射表：每个方法接收旧状态并返回新状态，严禁覆盖 Codec 保留成员 */
+  /** 自有链式方法定义表：参数即对外方法签名，返回局部状态补丁或 (prev) => patch 函数 */
   readonly methods: M & DisallowReservedCodecKeys<M>;
 }
 
-/** 通过不可变状态与自有链式方法定义可渐进派生的自定义双向编解码器 */
+/** 通过不可变状态与增量补丁方法定义可渐进派生的自定义双向编解码器 */
 export function defineCodec<
   T,
   Encoded,
   S extends object,
-  const M extends CodecMethodMap<NoInfer<S>>,
->(handlers: StatefulCodecHandlers<T, Encoded, S, M>): StatefulCodec<T, Encoded, S, M>;
+  const M extends CodecMethodBuilders<NoInfer<S>>,
+>(handlers: StatefulCodecHandlers<T, Encoded, S, M>): WithCodecTrait<T, Encoded, M>;
 /** 通过一对双向转换函数创建标准 Codec，正反两端均须对 unknown 输入做校验并可通过 context 报告问题 */
 export function defineCodec<T, Encoded = T>(handlers: CodecHandlers<T, Encoded>): Codec<T, Encoded>;
 export function defineCodec<T, Encoded = T>(
   handlers:
     | CodecHandlers<T, Encoded>
-    | StatefulCodecHandlers<T, Encoded, object, CodecMethodMap<object>>,
+    | StatefulCodecHandlers<T, Encoded, object, CodecMethodBuilders<object>>,
 ): Codec<T, Encoded> {
   if ("state" in handlers || "methods" in handlers) {
-    const stateful = handlers as StatefulCodecHandlers<T, Encoded, object, CodecMethodMap<object>>;
+    const stateful = handlers as StatefulCodecHandlers<
+      T,
+      Encoded,
+      object,
+      CodecMethodBuilders<object>
+    >;
     if (typeof stateful.decode !== "function" || typeof stateful.encode !== "function") {
       throw new TypeError("Codec.define requires decode and encode functions");
     }
     return createStatefulCodec({
       state: stateful.state,
       validate: stateful.validate,
-      createRunner: (state) =>
-        buildHandlerRunner(
-          (input, context) => stateful.decode(input, context, state),
-          (input, context) => stateful.encode(input, context, state),
-        ),
+      createRunner: (state) => buildStatefulHandlerRunner(state, stateful.decode, stateful.encode),
       createDescriptor: (state, explicitDescription) => {
         const resolvedMeta =
           typeof stateful.meta === "function" ? stateful.meta(state) : stateful.meta;
@@ -114,6 +116,37 @@ function buildHandlerRunner<T, Encoded>(
     const context = createScopedContext(collector);
     try {
       const output = direction === "decode" ? decodeFn(input, context) : encodeFn(input, context);
+      return collector.mark() > mark ? INVALID : output;
+    } catch (error) {
+      if (isAbortSignal(error)) {
+        return collector.add(error.code, error.message);
+      }
+      if (ValidationError.is(error)) {
+        return collector.addRelativeIssues(error.issues);
+      }
+      throw error;
+    }
+  };
+}
+
+function buildStatefulHandlerRunner<T, Encoded, S extends object>(
+  state: Readonly<S>,
+  decodeFn: (input: unknown, context: StatefulCodecContext<S>) => T,
+  encodeFn: (input: unknown, context: StatefulCodecContext<S>) => Encoded,
+): InternalRunner<T, Encoded> {
+  return (input, direction, collector) => {
+    const mark = collector.mark();
+    const baseContext = createScopedContext(collector);
+    const statefulContext: StatefulCodecContext<S> = Object.freeze({
+      fail: baseContext.fail,
+      issue: baseContext.issue,
+      state,
+    });
+    try {
+      const output =
+        direction === "decode"
+          ? decodeFn(input, statefulContext)
+          : encodeFn(input, statefulContext);
       return collector.mark() > mark ? INVALID : output;
     } catch (error) {
       if (isAbortSignal(error)) {

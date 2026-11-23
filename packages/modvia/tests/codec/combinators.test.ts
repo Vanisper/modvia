@@ -2,13 +2,14 @@ import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import {
   arrayOf,
   Codec,
+  int,
   isoDateTime,
   literal,
   number,
   string,
   type InferEncoded,
   type InferValue,
-} from "../../src/codec/index.ts";
+} from "../../src/codec.ts";
 import { Model } from "../../src/index.ts";
 
 const intFromString = Codec.define<number, string>({
@@ -181,6 +182,15 @@ describe("codec combinators", () => {
     const topLevelPiped = Codec.pipe(string().trim(), intFromString);
     expect(topLevelPiped.decode(" 7 ")).toBe(7);
     expect(topLevelPiped.encode(7)).toBe("7");
+
+    // 管道接入带自有方法的下游 Codec 时，自动保留下游全部链式方法并重绑外部编码类型
+    const TrimmedBoundedInt = string().trim().pipe(int().fromString()).positive().max(100);
+    expect(TrimmedBoundedInt.decode("  42  ")).toBe(42);
+    expect(TrimmedBoundedInt.encode(42)).toBe("42");
+    expect(TrimmedBoundedInt.safeDecode("  0  ")).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.gt" }],
+    });
 
     expectTypeOf(trimmedPositiveInt).toEqualTypeOf<Codec<number, string>>();
     // @ts-expect-error pipe 不接受带属性修饰的 Field

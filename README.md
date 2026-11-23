@@ -6,7 +6,7 @@ Modvia 是面向 TypeScript 应用的双向编解码与领域模型层基础库�
 
 ## 核心特性
 
-- **分层多入口与主体命名空间**：`modvia/codec` 提供值级双向编解码底座，`modvia/formats` 提供按需 Tree-shaking 的标准格式、字符串数值转换与 JSON 文本原语，`modvia` 构建领域模型；元操作按领域主体收纳为 `Model`、`Codec`、`Field`、`Alias` 与 `ValidationError`，数据形态构造器（`string`、`int`、`arrayOf` 等）保持直接导入。
+- **分层多入口与主体命名空间**：`modvia/codec` 提供值级双向编解码底座与原始标量（内置 `.fromString()` 字符串介质切换），`modvia/formats` 提供按需 Tree-shaking 的领域格式与 JSON 文本原语，`modvia` 构建领域模型；元操作按领域主体收纳为 `Model`、`Codec`、`Field`、`Alias` 与 `ValidationError`，数据形态构造器（`string`、`int`、`bigint`、`arrayOf` 等）保持直接导入。
 - **普通对象优先，class 可选**：默认产出零额外开销的普通对象（可选 `.strict()` 拒绝未知属性）；通过 `withFactory` 可按需构造真实 `class` 实例并保留原型行为。
 - **作用域严格正交**：值域扩展（`.or` / `.nullable`）、文档说明（`.describe`）与对象键规则（`.alias` / `.optional` / `.default`）职责分离，编译期拦截容器作用域误用。
 - **2×2 执行矩阵与全栈互操作**：同时提供面向 `unknown` 动态边界的 `parse` / `dump` 与编译期锁死契约的对称原语 `decode` / `encode`（均含零异常栈 `safe*` 变体），原生实现 `StandardSchemaV1`，并通过独立包 `@modvia/json-schema` 与 `@modvia/zod` 支持双向 JSON Schema / OpenAPI 导出及 Zod v4 桥接。

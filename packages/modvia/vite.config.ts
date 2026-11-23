@@ -4,7 +4,7 @@ export default defineConfig({
   pack: {
     entry: {
       index: "src/index.ts",
-      codec: "src/codec/index.ts",
+      codec: "src/codec.ts",
       formats: "src/formats/index.ts",
     },
     dts: {

@@ -1,13 +1,5 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
-import {
-  arrayOf,
-  isoDateTime,
-  number,
-  oneOf,
-  recordOf,
-  string,
-  tupleOf,
-} from "../../src/codec/index.ts";
+import { arrayOf, isoDateTime, number, oneOf, recordOf, string, tupleOf } from "../../src/codec.ts";
 import { Model, type InferEncoded, type InferValue } from "../../src/index.ts";
 
 const Metric = Model.define({
