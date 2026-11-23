@@ -4,11 +4,12 @@ import {
   createField,
   executeCodec,
   extendCodec,
+  getDefaultResolver,
   isFieldDescriptor,
   isStandardCodec,
   promoteToCodec,
 } from "../../codec/core/runtime.ts";
-import type { CodecLike, PathSegment } from "../../codec/core/types.ts";
+import type { CodecOrField, PathSegment } from "../../codec/core/types.ts";
 import { isObject, isPlainObject, writeOwnField } from "../../shared/object.ts";
 import type { Alias, AliasKind, ApplyAlias } from "./alias.ts";
 import {
@@ -53,6 +54,15 @@ export function defineModel<const Fields extends FieldRecord>(options: {
   const ownFields = snapshotOwnFields(options.fields, options.alias);
   const resolvedFields = resolveFields(ownFields);
   return createModel(ownFields, resolvedFields, (data) => data, { strict: false });
+}
+
+function deriveModelFromFields<Fields extends FieldRecord>(
+  rawFields: Fields,
+  strict: boolean,
+): ModelOf<Fields> {
+  const ownFields = snapshotOwnFields(rawFields);
+  const resolvedFields = resolveFields(ownFields);
+  return createModel(ownFields, resolvedFields, (data) => data, { strict }) as ModelOf<Fields>;
 }
 
 function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
@@ -107,12 +117,14 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
             }),
           );
 
-    const nextFields: Record<string, CodecLike<unknown, unknown>> = {};
+    const nextFields: Record<string, CodecOrField> = {};
     for (const [key, entry] of Object.entries(ownFields)) {
       const shouldOptionalize = selected === undefined || selected.has(key);
       writeOwnField(nextFields, key, shouldOptionalize ? toOptionalField(entry) : entry);
     }
-    return defineModel({ fields: nextFields }) as unknown as ModelOf<PartialFields<Fields>>;
+    return deriveModelFromFields(nextFields, state.strict) as unknown as ModelOf<
+      PartialFields<Fields>
+    >;
   }
 
   const model: Model<Data, DTO, Out, Fields> = extendCodec(
@@ -122,7 +134,7 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
       pick<const Key extends Exclude<keyof Fields, symbol>>(
         ...keys: readonly Key[]
       ): ModelOf<Pick<Fields, Key>> {
-        const picked: Record<string, CodecLike<unknown, unknown>> = {};
+        const picked: Record<string, CodecOrField> = {};
         for (const rawKey of keys) {
           const key = String(rawKey);
           if (!Object.hasOwn(ownFields, key)) {
@@ -130,7 +142,7 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
           }
           writeOwnField(picked, key, ownFields[key]);
         }
-        return defineModel({ fields: picked }) as unknown as ModelOf<Pick<Fields, Key>>;
+        return deriveModelFromFields(picked, state.strict) as unknown as ModelOf<Pick<Fields, Key>>;
       },
       omit<const Key extends Exclude<keyof Fields, symbol>>(
         ...keys: readonly Key[]
@@ -143,13 +155,15 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
           }
           excluded.add(key);
         }
-        const remaining: Record<string, CodecLike<unknown, unknown>> = {};
+        const remaining: Record<string, CodecOrField> = {};
         for (const [key, entry] of Object.entries(ownFields)) {
           if (!excluded.has(key)) {
             writeOwnField(remaining, key, entry);
           }
         }
-        return defineModel({ fields: remaining }) as unknown as ModelOf<Omit<Fields, Key>>;
+        return deriveModelFromFields(remaining, state.strict) as unknown as ModelOf<
+          Omit<Fields, Key>
+        >;
       },
       partial,
       extend<const Extra extends FieldRecord>(
@@ -158,14 +172,16 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
         if (!isPlainObject(extraFields)) {
           throw new TypeError("extend requires a plain fields object");
         }
-        const merged: Record<string, CodecLike<unknown, unknown>> = {};
+        const merged: Record<string, CodecOrField> = {};
         for (const [key, entry] of Object.entries(ownFields)) {
           writeOwnField(merged, key, entry);
         }
         for (const [key, entry] of Object.entries(extraFields)) {
           writeOwnField(merged, key, entry);
         }
-        return defineModel({ fields: merged }) as unknown as ModelOf<MergeFields<Fields, Extra>>;
+        return deriveModelFromFields(merged, state.strict) as unknown as ModelOf<
+          MergeFields<Fields, Extra>
+        >;
       },
       strict(): Model<Data, DTO, Out, Fields> {
         if (state.strict) return model;
@@ -196,7 +212,7 @@ function snapshotOwnFields<Fields extends FieldRecord>(
   fields: Fields,
   aliasStrategy?: Alias<AliasKind>,
 ): Readonly<Fields> {
-  const copy: Record<string, CodecLike<unknown, unknown>> = {};
+  const copy: Record<string, CodecOrField> = {};
   for (const [key, entry] of Object.entries(fields)) {
     const resolvedEntry =
       aliasStrategy !== undefined ? applyAliasToEntry(key, entry, aliasStrategy) : entry;
@@ -207,23 +223,38 @@ function snapshotOwnFields<Fields extends FieldRecord>(
 
 function applyAliasToEntry(
   key: string,
-  entry: CodecLike<unknown, unknown>,
+  entry: CodecOrField,
   aliasStrategy: Alias<AliasKind>,
-): CodecLike<unknown, unknown> {
+): CodecOrField {
   if (isFieldDescriptor(entry)) {
     if (typeof entry.source === "string") return entry;
-    return entry.alias(aliasStrategy.mapKey(key));
+    const inner = isStandardCodec(entry.codec) ? entry.codec : promoteToCodec(entry.codec);
+    const normalizedPresence =
+      entry.presence === "optional"
+        ? "optional"
+        : entry.presence === "defaulted"
+          ? "defaulted"
+          : "required";
+    return createField(
+      inner,
+      aliasStrategy.mapKey(key),
+      normalizedPresence,
+      normalizedPresence === "defaulted" ? getDefaultResolver(entry) : undefined,
+      typeof entry.description === "string" ? entry.description : undefined,
+    );
   }
   return promoteToCodec(entry).alias(aliasStrategy.mapKey(key));
 }
 
-function toOptionalField(entry: CodecLike<unknown, unknown>): CodecLike<unknown, unknown> {
+function toOptionalField(entry: CodecOrField): CodecOrField {
   if (isFieldDescriptor(entry)) {
-    const inner = isStandardCodec(entry.codec) ? entry.codec : promoteToCodec(entry);
+    const inner = isStandardCodec(entry.codec) ? entry.codec : promoteToCodec(entry.codec);
     return createField(
       inner,
       typeof entry.source === "string" ? entry.source : undefined,
       "optional",
+      undefined,
+      typeof entry.description === "string" ? entry.description : undefined,
     );
   }
   return createField(promoteToCodec(entry), undefined, "optional");

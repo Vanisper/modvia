@@ -267,6 +267,22 @@ describe("model introspection & derivation", () => {
         { path: ["typo_flag"], code: "object.unknown_key", message: "Unknown field: typo_flag" },
       ],
     });
+
+    // strict 作为模型边界策略与 pick / omit / partial / extend 完全可交换，派生时不退化丢失
+    expect(StrictAccount.pick("id").safeParse({ id: "u-1", extra: 1 })).toMatchObject({
+      ok: false,
+      issues: [{ path: ["extra"], code: "object.unknown_key" }],
+    });
+    expect(StrictAccount.omit("bio").partial().safeParse({ extra: 1 })).toMatchObject({
+      ok: false,
+      issues: [{ path: ["extra"], code: "object.unknown_key" }],
+    });
+    expect(StrictAccount.extend({ tag: string() }).partial().safeParse({ extra: 1 })).toMatchObject(
+      {
+        ok: false,
+        issues: [{ path: ["extra"], code: "object.unknown_key" }],
+      },
+    );
   });
 
   test("对模型调用 check 时自动将声明字段路径双向翻译为 DTO 外部键与模型内部键", () => {

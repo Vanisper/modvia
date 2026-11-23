@@ -11,7 +11,7 @@ import {
   string,
   ValidationError,
 } from "../../src/index.ts";
-import type { CodecLike, InferData, InferDTO, InferModel } from "../../src/index.ts";
+import type { CodecLike, CodecOrField, InferData, InferDTO, InferModel } from "../../src/index.ts";
 
 const DepartmentModel = Model.define({
   fields: {
@@ -425,7 +425,7 @@ describe("domain model", () => {
     type DTO = InferDTO<typeof model>;
     expectTypeOf<Extract<DTO, { kind: "compact" }>["title"]>().toEqualTypeOf<string>();
 
-    const fields: Record<string, CodecLike<unknown, unknown>> & typeof compact = compact;
+    const fields: Record<string, CodecOrField> & typeof compact = compact;
     const indexed = Model.define({ fields });
     expectTypeOf<InferData<typeof indexed>["label"]>().toEqualTypeOf<string>();
     expectTypeOf<InferDTO<typeof indexed>["title"]>().toEqualTypeOf<string>();

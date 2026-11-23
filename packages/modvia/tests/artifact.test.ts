@@ -85,6 +85,7 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     expect(ValidationError).toBe(codecEntry.ValidationError);
     expect("Model" in codecEntry).toBe(false);
     expect("Alias" in codecEntry).toBe(false);
+    expect("fromStandard" in Codec).toBe(false);
 
     // 验证已移除旧扁平顶层导出，确保主体命名空间边界干净唯一
     for (const legacyKey of [

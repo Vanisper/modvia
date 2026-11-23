@@ -1,6 +1,13 @@
-import type { Codec, CodecLike, Field, FieldPresence } from "../../codec/core/types.ts";
+import type {
+  Codec,
+  CodecLike,
+  CodecOrField,
+  Field,
+  FieldLike,
+  FieldPresence,
+} from "../../codec/core/types.ts";
 
-export type FieldRecord = Readonly<Record<string, CodecLike<unknown, unknown>>>;
+export type FieldRecord = Readonly<Record<string, CodecOrField>>;
 
 export type MergeFields<Base extends FieldRecord, Extra extends FieldRecord> = Omit<
   Base,
@@ -9,7 +16,7 @@ export type MergeFields<Base extends FieldRecord, Extra extends FieldRecord> = O
   Extra;
 
 export type OptionalizeField<C> =
-  C extends Field<infer T, infer E, infer Source, infer _Presence>
+  C extends FieldLike<infer T, infer E, infer Source, infer _Presence>
     ? Field<T, E, Source, "optional">
     : C extends CodecLike<infer T, infer E>
       ? Field<T, E, undefined, "optional">
@@ -71,7 +78,7 @@ export interface TaggedModelLike<
   DTO = unknown,
 > extends CodecLike<Out, DTO> {
   readonly [Symbol.toStringTag]: "modvia.Codec";
-  readonly fields: Readonly<Record<Discriminator, CodecLike<unknown, unknown>>>;
+  readonly fields: Readonly<Record<Discriminator, CodecOrField>>;
 }
 
 export type InferData<M> =
@@ -128,11 +135,20 @@ type FieldLayout<Fields, Side extends "data" | "dto"> = Fields extends unknown
     }
   : never;
 
-type ValueOf<C> = C extends CodecLike<infer Value, infer _Encoded> ? Value : never;
+type ValueOf<C> =
+  C extends FieldLike<infer Value, infer _Encoded>
+    ? Value
+    : C extends CodecLike<infer Value, infer _Encoded>
+      ? Value
+      : never;
 
 // 动态别名推导为索引签名时，按具体键读取可能得到 undefined
 type EncodedOf<C> =
-  C extends CodecLike<infer _Value, infer Encoded> ? Encoded : Extract<C, undefined>;
+  C extends FieldLike<infer _Value, infer Encoded>
+    ? Encoded
+    : C extends CodecLike<infer _Value, infer Encoded>
+      ? Encoded
+      : Extract<C, undefined>;
 
 type DataOf<Fields> = {
   readonly [Key in keyof Fields]: ValueOf<Fields[Key]>;

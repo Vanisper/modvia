@@ -8,9 +8,11 @@ export type {
   CodecIssueInput,
   CodecLike,
   CodecMethodBuilders,
+  CodecOrField,
   CodecTrait,
   CustomCodecMeta,
   DefaultProvider,
+  FieldLike,
   FieldLiteral,
   FieldPresence,
   InferEncoded,
@@ -32,6 +34,6 @@ export * from "./primitives/literal.ts";
 export * from "./primitives/numeric/bigint.ts";
 export * from "./primitives/numeric/int.ts";
 export * from "./primitives/numeric/number.ts";
-export type { OrderedNumericTrait } from "./primitives/numeric/shared.ts";
+export type { OrderedNumericCodec, OrderedNumericTrait } from "./primitives/numeric/shared.ts";
 export * from "./primitives/string.ts";
 export * from "./primitives/unknown.ts";

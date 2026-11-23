@@ -43,7 +43,17 @@ describe("modvia/formats", () => {
     const Email = email().trim().lowercase();
     expect(Email.decode("  User.Name+tag@Example.COM ")).toBe("user.name+tag@example.com");
     expect(Email.encode("User@Example.COM")).toBe("user@example.com");
-    for (const invalid of ["plain", "@example.com", "a..b@example.com", ".a@example.com", "a@b"]) {
+    for (const invalid of [
+      "plain",
+      "@example.com",
+      "a..b@example.com",
+      ".a@example.com",
+      "a.@example.com",
+      "a@b",
+      "user@bad-.com",
+      "user@-bad.com",
+      `${"a".repeat(65)}@example.com`,
+    ]) {
       expect(Email.safeDecode(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "format.email" }],
@@ -62,10 +72,16 @@ describe("modvia/formats", () => {
       ok: false,
       issues: [{ code: "format.url_protocol" }],
     });
-    expect(HttpsOnly.safeDecode("https://example.com/with space")).toMatchObject({
-      ok: false,
-      issues: [{ code: "format.url" }],
-    });
+    for (const badUrl of [
+      "https://example.com/with space",
+      "https:example.com",
+      "https:///only-path",
+    ]) {
+      expect(HttpsOnly.safeDecode(badUrl)).toMatchObject({
+        ok: false,
+        issues: [{ code: "format.url" }],
+      });
+    }
     expect(url().protocols("https", "http").decode("http://modvia.dev")).toBe("http://modvia.dev");
     expect(() => Reflect.apply(url().protocols, undefined, [])).toThrow(RangeError);
 

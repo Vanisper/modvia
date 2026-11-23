@@ -193,41 +193,8 @@ describe("codec kernel", () => {
     expect(() => arrayOf(Field.of(string()))).toThrow(TypeError);
 
     expectTypeOf(arrayOf(string())).toEqualTypeOf<ArrayCodec<string>>();
-  });
-
-  test("Codec.fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
-    const emailStandard: StandardSchemaV1<string, string> = {
-      "~standard": {
-        version: 1,
-        vendor: "custom-validator",
-        validate(value) {
-          if (typeof value !== "string" || !value.includes("@")) {
-            return {
-              issues: [{ message: "Invalid email", path: [{ key: "address" }] }],
-            };
-          }
-          return { value: value.trim() };
-        },
-      },
-    };
-
-    const Email = Codec.fromStandard(emailStandard);
-    expect(Email.decode(" a@b.com ")).toBe("a@b.com");
-    expect(Email.encode(" a@b.com ")).toBe("a@b.com");
-    expect(Email.safeDecode("invalid")).toStrictEqual({
-      ok: false,
-      issues: [{ path: ["address"], code: "standard.invalid", message: "Invalid email" }],
-    });
-
-    const asyncSchema: StandardSchemaV1<string, string> = {
-      "~standard": {
-        version: 1,
-        vendor: "async-validator",
-        validate: async (value) => ({ value: String(value) }),
-      },
-    };
-    const AsyncWrapped = Codec.fromStandard(asyncSchema);
-    expect(() => AsyncWrapped.safeDecode("x")).toThrow(TypeError);
+    // 验证已移除单向黑盒桥接 fromStandard，杜绝协变穿透
+    expect("fromStandard" in Codec).toBe(false);
   });
 
   test("brand 在解码端附加编译期名义类型且编码端保持原始外部类型，运行时零额外包装", () => {
@@ -287,6 +254,12 @@ describe("codec kernel", () => {
       kind: "or",
       literals: [null],
       description: "Optional timestamp",
+    });
+    // 相邻 .or() 合并时保留外层已声明的 description 元数据
+    expect(Codec.inspect(string().or("auto").describe("Mode").or(null))).toMatchObject({
+      kind: "or",
+      literals: ["auto", null],
+      description: "Mode",
     });
 
     const ItemA = Model.define({

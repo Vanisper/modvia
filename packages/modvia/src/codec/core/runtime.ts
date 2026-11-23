@@ -17,9 +17,11 @@ import type {
   CodecDescriptor,
   CodecLike,
   CodecMethodBuilders,
+  CodecOrField,
   CodecTrait,
   DefaultProvider,
   Field,
+  FieldLike,
   FieldLiteral,
   FieldPresence,
   SafeResult,
@@ -349,9 +351,12 @@ function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecM
   ]) as unknown as WithCodecTrait<T, Encoded, M>;
 }
 
-export function getCodecDescriptor(value: CodecLike<unknown, unknown>): CodecDescriptor {
+export function getCodecDescriptor(value: CodecOrField): CodecDescriptor {
   if (isFieldDescriptor(value)) {
-    return getCodecDescriptor(value.codec);
+    const inner = getCodecDescriptor(value.codec);
+    return value.description !== undefined
+      ? Object.freeze({ ...inner, description: value.description })
+      : inner;
   }
   if (typeof value === "object" && value !== null) {
     const descriptor = Reflect.get(value, descriptorSymbol) as CodecDescriptor | undefined;
@@ -423,7 +428,7 @@ export function isStandardCodec(value: unknown): value is Codec<unknown, unknown
 
 export function isFieldDescriptor(
   value: unknown,
-): value is Field<unknown, unknown, string | undefined, FieldPresence> {
+): value is FieldLike<unknown, unknown, string | undefined, FieldPresence> {
   if (typeof value !== "object" || value === null) return false;
   try {
     if (Reflect.get(value, fieldBrand) === true) return true;
@@ -434,30 +439,32 @@ export function isFieldDescriptor(
         candidate.presence === "optional" ||
         candidate.presence === "defaulted") &&
       (candidate.source === undefined || typeof candidate.source === "string") &&
-      typeof candidate.decode === "function" &&
-      typeof candidate.encode === "function" &&
-      typeof candidate.alias === "function" &&
-      typeof candidate.optional === "function" &&
-      typeof candidate.or === "function"
+      typeof candidate.codec === "object" &&
+      candidate.codec !== null &&
+      typeof candidate.codec.decode === "function" &&
+      typeof candidate.codec.encode === "function"
     );
   } catch {
     return false;
   }
 }
 
-export function assertValueCodec<T, Encoded>(codec: CodecLike<T, Encoded>, caller: string): void {
-  if (
-    typeof codec !== "object" ||
-    codec === null ||
-    typeof codec.decode !== "function" ||
-    typeof codec.encode !== "function"
-  ) {
-    throw new TypeError(`${caller} requires a valid Codec`);
-  }
+export function assertValueCodec(
+  codec: unknown,
+  caller: string,
+): asserts codec is CodecLike<unknown, unknown> {
   if (isFieldDescriptor(codec)) {
     throw new TypeError(
       `${caller} accepts a value Codec, not a Field with .alias() or .optional(); apply field modifiers on the outer container or pass field.codec`,
     );
+  }
+  if (
+    typeof codec !== "object" ||
+    codec === null ||
+    typeof (codec as Partial<CodecLike<unknown, unknown>>).decode !== "function" ||
+    typeof (codec as Partial<CodecLike<unknown, unknown>>).encode !== "function"
+  ) {
+    throw new TypeError(`${caller} requires a valid Codec`);
   }
 }
 
@@ -477,9 +484,8 @@ export function createField<
   source: Source,
   presence: Presence,
   defaultResolver?: () => unknown,
+  description?: string,
 ): Field<T, Encoded, Source, Presence> {
-  const runner = Reflect.get(codec, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
-
   const fieldDescriptor: Field<T, Encoded, Source, Presence> & {
     readonly [fieldBrand]: true;
     readonly [defaultResolverSymbol]?: () => unknown;
@@ -487,51 +493,41 @@ export function createField<
     [fieldBrand]: true,
     ...(defaultResolver ? { [defaultResolverSymbol]: defaultResolver } : {}),
     [Symbol.toStringTag]: "modvia.Field",
-    "~standard": codec["~standard"],
     codec,
     source,
     presence,
-    decode: codec.decode,
-    encode: codec.encode,
-    safeDecode: codec.safeDecode,
-    safeEncode: codec.safeEncode,
-    parse: codec.parse,
-    safeParse: codec.safeParse,
-    dump: codec.dump,
-    safeDump: codec.safeDump,
+    description,
     alias<NextSource extends string>(nextSource: NextSource) {
       assertValidSource(nextSource);
-      return createField(codec, nextSource, presence, defaultResolver);
+      return createField(codec, nextSource, presence, defaultResolver, description);
     },
     optional() {
       if (presence === "optional") {
         return fieldDescriptor as Field<T, Encoded, Source, "optional">;
       }
-      return createField(codec, source, "optional");
+      return createField(codec, source, "optional", undefined, description);
     },
     required() {
       if (presence === "required") {
         return fieldDescriptor as Field<T, Encoded, Source, "required">;
       }
-      return createField(codec, source, "required");
+      return createField(codec, source, "required", undefined, description);
     },
     default(provider: DefaultProvider<T>) {
-      return createField(codec, source, "defaulted", toDefaultResolver(provider));
+      return createField(codec, source, "defaulted", toDefaultResolver(provider), description);
     },
     or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(...values: Literals) {
-      return createField(codec.or(...values), source, presence, defaultResolver);
+      return createField(codec.or(...values), source, presence, defaultResolver, description);
     },
     nullable() {
-      return createField(codec.nullable(), source, presence, defaultResolver);
+      return createField(codec.nullable(), source, presence, defaultResolver, description);
     },
-    describe(description: string) {
-      return createField(codec.describe(description), source, presence, defaultResolver);
+    describe(nextDescription: string) {
+      assertValidDescription(nextDescription);
+      return createField(codec, source, presence, defaultResolver, nextDescription);
     },
   };
 
-  if (runner) {
-    Object.defineProperty(fieldDescriptor, runnerSymbol, { value: runner });
-  }
   return Object.freeze(fieldDescriptor);
 }
 
@@ -706,6 +702,7 @@ function createLiteralExtendedCodec<
   existingState?: LiteralState,
 ): Codec<T | Literals[number], Encoded | Literals[number]> {
   const base = (existingState?.base ?? current) as Codec<T, Encoded>;
+  const existingDescription = existingState ? getCodecDescriptor(current).description : undefined;
   const mergedLiterals = deduplicateLiterals(existingState?.literals ?? [], addedLiterals);
   const literalState: LiteralState = {
     base: base as Codec<unknown, unknown>,
@@ -725,6 +722,7 @@ function createLiteralExtendedCodec<
         kind: "or",
         base: literalState.base,
         literals: mergedLiterals,
+        ...(existingDescription !== undefined ? { description: existingDescription } : {}),
       },
     },
   );

@@ -251,19 +251,23 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     const Category: Model<CategoryData, CategoryDTO> = Model.define({
       fields: {
         id: string(),
-        children: arrayOf(Codec.lazy(() => Category)).alias("sub_items"),
+        children: arrayOf(Codec.lazy(() => Category))
+          .alias("sub_items")
+          .describe("Child categories"),
       },
-    });
+    }).describe("Category tree node");
 
     expect(toJsonSchema(Category, { includeSchemaUri: false })).toStrictEqual({
       $ref: "#/$defs/def_0",
       $defs: {
         def_0: {
           type: "object",
+          description: "Category tree node",
           properties: {
             id: { type: "string" },
             sub_items: {
               type: "array",
+              description: "Child categories",
               items: { $ref: "#/$defs/def_0" },
             },
           },

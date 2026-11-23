@@ -58,13 +58,13 @@ const dto: UserDTO = User.encode(user);
 // }
 ```
 
-- 解码只接受普通对象，默认自动剥离未声明的外部属性；调用 `User.strict()` 可派生遇到未知属性即报 `object.unknown_key` 的严格模型。
+- 解码只接受普通对象，默认自动剥离未声明的外部属性；调用 `User.strict()` 可派生遇到当前层未知属性即报 `object.unknown_key` 的单层严格模型（`strict` 策略在后续 `pick` / `omit` / `partial` / `extend` 派生时自动保留）。
 - `UserData` 的属性推导为只读类型，编解码每次均返回新对象容器。
 - 嵌套模型本身就是标准 `Codec`，可直接作为字段、放入数组或继续调用 `.alias()` / `.optional()` / `.nullable()` / `.describe()`。
 
 ## 2×2 执行矩阵与错误处理
 
-所有 `Codec`、`Field` 与 `Model` 统一提供两组正交执行接口，并各自配备不抛异常的 `safe*` 判别结果变体：
+所有值级 `Codec` 与 `Model` 统一提供两组正交执行接口，并各自配备不抛异常的 `safe*` 判别结果变体（`Field` 纯粹表示对象属性槽位，若需单独执行其底层值规则请读取 `field.codec`）：
 
 - **`parse(unknown)` / `dump(unknown)`（含 `safeParse` / `safeDump`）**：面向未知或动态边界输入（如原始 JSON 响应、未定型的表单草稿或中间件载荷），运行时验明正身并执行正向解析或反向输出。
 - **`decode(Encoded)` / `encode(T)`（含 `safeDecode` / `safeEncode`）**：对称强契约原语，在编译期锁死 `Encoded`（如 SDK 生成的 `DTO`）与业务类型 `T` 并提供字段补全，运行时仍完整执行校验。
@@ -89,7 +89,7 @@ try {
 
 - 解码失败时，`issue.path` 使用外部 DTO 键名与数组下标（如 `[1, "created_at"]`）。
 - 编码失败时，`issue.path` 使用模型业务键名与数组下标（如 `[1, "createdAt"]`）。
-- 所有 `Codec`、`Field` 与 `Model` 均内置 `StandardSchemaV1`（`~standard`），可直接传入支持 Standard Schema 的表单与服务端框架。
+- 所有 `Codec` 与 `Model` 均内置 `StandardSchemaV1`（`~standard`），可直接传入支持 Standard Schema 的表单与服务端框架。
 
 ## 字段映射、哨兵值与数组容器
 
@@ -178,13 +178,12 @@ const Port = int().check((n, ctx) => {
   }
 });
 
-// 3. 双向管道串联（解码正向执行，编码逆向执行，并自动保留下游自有链式方法）
+// 3. 跨表示双向管道串联（解码正向执行，编码逆向执行，并自动保留下游自有链式方法）
 const PositiveCount = string().trim().pipe(int().fromString()).positive().max(1000);
 
-// 4. 从左到右多 Codec 联合、方向反转与外部 StandardSchemaV1 同步校验器接入
+// 4. 不相交域异构 Codec 联合与方向反转
 const FlexibleTime = Codec.union(isoDateTime(), int());
 const UtcTextFromDate = Codec.invert(isoDateTime());
-const ExternalRule = Codec.fromStandard(thirdPartyStandardSchema);
 ```
 
 ## 领域工厂与 Class 实例
@@ -415,7 +414,6 @@ const NodeModel: Model<NodeData, NodeDTO> = Model.define({
 | `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞                         |
 | `union.no_match`        | `Codec.union` 的所有候选分支均未匹配当前输入                            |
 | `union.invalid_tag`     | `Model.union` 的判别字段值不在已注册的分支标签集合内                    |
-| `standard.invalid`      | `Codec.fromStandard` 包装的外部校验器未提供错误码时的默认标识           |
 | `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段              |
 
 ## 开发与验证

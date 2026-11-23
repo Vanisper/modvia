@@ -17,9 +17,11 @@ import type {
   CodecDescriptor,
   CodecLike,
   CodecMethodBuilders,
+  CodecOrField,
   CustomCodecMeta,
   DisallowReservedCodecKeys,
   Field,
+  FieldLike,
   FieldPresence,
   StatefulCodecContext,
   WithCodecTrait,
@@ -167,8 +169,11 @@ function buildStatefulHandlerRunner<T, Encoded, S extends object>(
   };
 }
 
-/** 读取任意 Codec、Field、Model 或自定义 CodecLike 的只读结构描述符（Field 自动穿透读取底层值 Codec） */
-export function inspectCodec(codec: CodecLike<unknown, unknown>): CodecDescriptor {
+/** 读取任意 Codec、Field、Model 或自定义 CodecLike 的只读结构描述符（Field 自动叠加槽位级 description） */
+export function inspectCodec(codec: CodecOrField): CodecDescriptor {
+  if (isFieldDescriptor(codec)) {
+    return getCodecDescriptor(codec);
+  }
   if (
     typeof codec !== "object" ||
     codec === null ||
@@ -180,23 +185,31 @@ export function inspectCodec(codec: CodecLike<unknown, unknown>): CodecDescripto
   return getCodecDescriptor(codec);
 }
 
-/** 包装已有字段并保留外部键名与缺省性 */
+/** 包装已有字段并保留外部键名、缺省性与属性说明 */
 export function field<
   T,
   Encoded,
   Source extends string | undefined,
   Presence extends FieldPresence = "required",
->(input: Field<T, Encoded, Source, Presence>): Field<T, Encoded, Source, Presence>;
+>(input: FieldLike<T, Encoded, Source, Presence>): Field<T, Encoded, Source, Presence>;
 /** 将任意 Codec 或自定义 CodecLike 转为字段描述符 */
 export function field<T, Encoded>(input: CodecLike<T, Encoded>): Field<T, Encoded>;
 export function field<T, Encoded>(
-  input: CodecLike<T, Encoded>,
+  input: CodecOrField<T, Encoded>,
 ): Field<T, Encoded, string | undefined, FieldPresence> {
   if (!isField(input)) {
+    if (
+      typeof input !== "object" ||
+      input === null ||
+      typeof input.decode !== "function" ||
+      typeof input.encode !== "function"
+    ) {
+      throw new TypeError("Field.of requires a valid Codec, Field, or CodecLike object");
+    }
     return createField(promoteToCodec(input), undefined, "required");
   }
-  const { source, presence } = input;
-  const inner = isStandardCodec(input.codec) ? input.codec : promoteToCodec(input);
+  const { source, presence, description } = input;
+  const inner = isStandardCodec(input.codec) ? input.codec : promoteToCodec(input.codec);
   const normalizedPresence: FieldPresence =
     presence === "optional" ? "optional" : presence === "defaulted" ? "defaulted" : "required";
   return createField(
@@ -204,18 +217,19 @@ export function field<T, Encoded>(
     typeof source === "string" ? source : undefined,
     normalizedPresence,
     normalizedPresence === "defaulted" ? getDefaultResolver(input) : undefined,
+    typeof description === "string" ? description : undefined,
   );
 }
 
 /** 判断目标值是否为带外部键名与缺省性元数据的 Field 描述符 */
 export function isField<T, Encoded>(
-  value: CodecLike<T, Encoded>,
-): value is Field<T, Encoded, string | undefined, FieldPresence>;
+  value: CodecOrField<T, Encoded>,
+): value is FieldLike<T, Encoded, string | undefined, FieldPresence>;
 export function isField(
   value: unknown,
-): value is Field<unknown, unknown, string | undefined, FieldPresence>;
+): value is FieldLike<unknown, unknown, string | undefined, FieldPresence>;
 export function isField(
   value: unknown,
-): value is Field<unknown, unknown, string | undefined, FieldPresence> {
+): value is FieldLike<unknown, unknown, string | undefined, FieldPresence> {
   return isFieldDescriptor(value);
 }

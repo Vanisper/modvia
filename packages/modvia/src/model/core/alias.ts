@@ -1,4 +1,4 @@
-import type { CodecLike, Field } from "../../codec/core/types.ts";
+import type { CodecLike, CodecOrField, Field, FieldLike } from "../../codec/core/types.ts";
 
 export type AliasKind = "snake_case" | "kebab-case" | "custom";
 
@@ -67,7 +67,7 @@ export type MapAliasedKey<Key extends string, Kind extends AliasKind> = Kind ext
     : string;
 
 type BindFieldSource<Entry, MappedSource extends string> =
-  Entry extends Field<infer T, infer E, infer Source, infer Presence>
+  Entry extends FieldLike<infer T, infer E, infer Source, infer Presence>
     ? Source extends string
       ? Entry
       : Field<T, E, MappedSource, Presence>
@@ -76,7 +76,7 @@ type BindFieldSource<Entry, MappedSource extends string> =
       : never;
 
 export type ApplyAlias<
-  Fields extends Readonly<Record<string, CodecLike<unknown, unknown>>>,
+  Fields extends Readonly<Record<string, CodecOrField>>,
   Kind extends AliasKind,
 > = {
   readonly [Key in keyof Fields]: Key extends string

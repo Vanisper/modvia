@@ -14,7 +14,7 @@ Modvia 以双向编解码契约为底座，围绕应用数据边界组织校验�
    - 不构造 `Codec` 实例、不分配错误对象，供上层容器算子、原始标量编解码器与领域格式规则跨层共享。
 3. **双向编解码引擎与算子层（Codec Kernel & Operators，`src/codec`）**
    - **内核（`core`）**：定义双向协议 `CodecLike<T, E>`、标准实例 `Codec<T, E>`、特征承载体 `WithCodecTrait<T, E, Trait>` 与属性描述符 `Field`；提供零异常栈开销的 `IssueCollector`、状态化增量补丁构造机制以及 `StandardSchemaV1` 挂载。
-   - **算子（`operators`）**：构建数组、元组与动态字典容器（`arrayOf` 复用 `src/scalars` 的长度区间代数），以及保留下游自有方法特征的管道串联（`pipe`）、方向反转（`invert`）、惰性递归（`lazy`）、顺序联合（`unionOf`）与外部 `StandardSchemaV1` 同步桥接。
+   - **算子（`operators`）**：构建数组、元组与动态字典容器（`arrayOf` 复用 `src/scalars` 的长度区间代数），以及保留下游自有方法特征的管道串联（`pipe`）、方向反转（`invert`）、惰性递归（`lazy`）与顺序联合（`unionOf`）。
 4. **原始标量与领域格式编解码层（Primitives & Domain Formats，`src/primitives` / `src/formats`）**
    - **原始标量层（`src/primitives`）**：将 `src/scalars` 的计算原子桥接至 `src/codec`，提供 `string`、`number`、`int`、`bigint`、`boolean`、`literal`、`oneOf`、`unknown` 与 `isoDateTime`，并在有序数值与布尔原语上统一内建 `.fromString()` 外部字符串介质切换。
    - **领域格式层（`src/formats`）**：按主题子目录组织互联网、标识、日历时间与 JSON 文本格式（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`jsonString`、`jsonOf`）；`primitives` 与 `formats` 平级隔离、互不依赖。
@@ -68,11 +68,10 @@ packages/modvia/src/
 │   │   ├── errors.ts             # [公开] ValidationError（含静态 ValidationError.is）
 │   │   ├── define.ts             # [内部定义] defineCodec、inspectCodec、field 与 isField
 │   │   ├── collector.ts          # [内部] 零异常栈开销 IssueCollector 与中断信号
-│   │   └── runtime.ts            # [内部] Codec/Field/StatefulCodec/Pipe 实例构造与执行调度器
+│   │   └── runtime.ts            # [内部] Codec/Field/Trait/Pipe 实例构造与执行调度器
 │   └── operators/                # 值容器与组合算子
 │       ├── containers.ts         # [公开] arrayOf、recordOf、tupleOf
-│       ├── combinators.ts        # [内部定义] pipe、invert、lazy、unionOf（由 Codec.* 暴露）
-│       └── standard.ts           # [内部定义] StandardSchemaV1 同步输入桥接 fromStandard
+│       └── combinators.ts        # [内部定义] pipe、invert、lazy、unionOf（由 Codec.* 暴露）
 ├── primitives/                   # 原始标量编解码器层（消费 scalars + codec，严禁导入 formats / model）
 │   ├── string.ts                 # [公开] string（StringCodec / StringTrait）
 │   ├── boolean.ts                # [公开] boolean（含 .fromString() → BooleanStringCodec）
@@ -80,7 +79,7 @@ packages/modvia/src/
 │   ├── unknown.ts                # [公开] unknown
 │   ├── datetime.ts               # [公开] isoDateTime（复用 scalars/temporal）
 │   └── numeric/
-│       ├── shared.ts             # [内部] 有序数值通用工厂与 OrderedNumericTrait
+│       ├── shared.ts             # [内部] 有序数值通用工厂、OrderedNumericCodec 与 OrderedNumericTrait
 │       ├── number.ts             # [公开] number（含 .fromString() 字符串介质切换）
 │       ├── int.ts                # [公开] int（含 .fromString() 字符串介质切换）
 │       └── bigint.ts             # [公开] bigint（含 .fromString() 字符串介质切换）
@@ -128,7 +127,7 @@ packages/modvia/src/
 1. **阶段一：分层底座与校验引擎收敛**（已完成）
    - 建立 `modvia/codec` 与 `modvia` 入口、零异常栈收集引擎、强契约 `decode`/`encode` 与宽边界 `parse`/`dump` 2×2 执行矩阵、`StandardSchemaV1` 以及 `Codec` / `Field` 作用域隔离。
 2. **阶段二：纯标量原子层、原始标量与领域格式体系收敛**（已完成）
-   - 下沉零 `Codec` 耦合的 `src/scalars` 纯计算原子层，确立变形 / 规范化 / 精化三分体系，统一 `string`、`number`、`int`、`bigint`、`boolean` 原始标量与 `.fromString()` 介质切换，按细粒度子模块组织 `modvia/formats` 领域格式与 JSON 桥接，并落地 `Codec.pipe`（保留下游特征）、`Codec.invert`、`Codec.lazy`、`Codec.union`、`Codec.fromStandard`、`tupleOf` 与 `recordOf`。
+   - 下沉零 `Codec` 耦合的 `src/scalars` 纯计算原子层，确立变形 / 规范化 / 精化三分体系，统一 `string`、`number`、`int`、`bigint`、`boolean` 原始标量与 `.fromString()` 介质切换，按细粒度子模块组织 `modvia/formats` 领域格式与 JSON 桥接，并落地 `Codec.pipe`（保留下游特征）、`Codec.invert`、`Codec.lazy`、`Codec.union`、`tupleOf` 与 `recordOf`。
 3. **阶段三：分层主体命名空间、模型派生与多态联合**（已完成）
    - 建立 `Model`、`Codec`、`Field`、`Alias` 与 `ValidationError` 类型-值合并命名空间层次，公开只读字段表元数据与 `Codec.inspect` 结构描述符（含 `.describe` 文档说明），支持 `Field.default`、`pick` / `omit` / `partial` / `extend` / `strict` 模型派生、批量键别名策略与按标签分发的 `Model.union`。
 4. **阶段四：生态桥接与静态 Schema 导出**（已完成）
