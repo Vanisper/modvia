@@ -31,14 +31,14 @@ import {
 const Department = Model.define({
   fields: {
     id: string(),
-    name: string({ trim: true, minLength: 1 }),
+    name: string().trim().nonEmpty(),
   },
 });
 
 const MemberModel = Model.define({
   fields: {
     id: string(),
-    name: string({ trim: true, minLength: 1 }),
+    name: string().trim().nonEmpty(),
     role: oneOf("admin", "manager", "member"),
     joinedAt: isoDateTime().alias("joined_at"),
     department: Department,
@@ -122,7 +122,10 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     expect(positiveMap.safeDecode({ a: 1.5 }).ok).toBe(false);
 
     const pair = codecEntry.tupleOf(
-      codecEntry.string({ trim: true }).normalize((s) => s.toLowerCase()),
+      codecEntry
+        .string()
+        .trim()
+        .normalize((s) => s.toLowerCase()),
       codecEntry.unknown(),
     );
     expect(pair.decode(["  OK ", { raw: 1 }])).toStrictEqual(["ok", { raw: 1 }]);
@@ -133,16 +136,39 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
       value: [1, "auto", null],
     });
 
+    const Cents = Codec.define({
+      state: { min: 0 },
+      decode(raw, ctx, state) {
+        if (typeof raw !== "string" || !/^-?\d+$/.test(raw)) {
+          return ctx.fail("money.invalid", "Invalid cents");
+        }
+        const n = Number(raw);
+        if (n < state.min) return ctx.fail("money.min", "Below min");
+        return n;
+      },
+      encode(val, ctx, state) {
+        if (typeof val !== "number" || !Number.isSafeInteger(val) || val < state.min) {
+          return ctx.fail("money.min", "Invalid cents");
+        }
+        return String(val);
+      },
+      methods: {
+        min: (state, min: number) => ({ ...state, min }),
+      },
+    });
+    expect(Cents.min(100).decode("250")).toBe(250);
+    expect(Cents.min(100).safeDecode("50").ok).toBe(false);
+
     const AccountJson = jsonOf(
       Model.define({
         alias: Alias.snakeCase,
         fields: {
           accountId: uuid(),
-          contactEmail: email({ trim: true, lowercase: true }),
-          port: intFromString({ min: 1, max: 65535 }),
-          ratio: numberFromString({ min: 0, max: 1 }),
+          contactEmail: email().trim().lowercase(),
+          port: intFromString().min(1).max(65535),
+          ratio: numberFromString().nonNegative().max(1),
           enabled: booleanFromString(),
-          quotaBytes: bigintFromString(),
+          quotaBytes: bigintFromString().positive(),
         },
       })
         .describe("Account wire payload")

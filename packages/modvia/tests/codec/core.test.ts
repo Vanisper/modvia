@@ -9,6 +9,7 @@ import {
   number,
   string,
   ValidationError,
+  type ArrayCodec,
   type Branded,
   type CodecLike,
   type InferEncoded,
@@ -191,7 +192,7 @@ describe("codec kernel", () => {
     // @ts-expect-error Field.of() 显式包装后的属性描述符同样不可直接放入数组
     expect(() => arrayOf(Field.of(string()))).toThrow(TypeError);
 
-    expectTypeOf(arrayOf(string())).toEqualTypeOf<Codec<string[], string[]>>();
+    expectTypeOf(arrayOf(string())).toEqualTypeOf<ArrayCodec<string, string>>();
   });
 
   test("Codec.fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
@@ -230,7 +231,7 @@ describe("codec kernel", () => {
   });
 
   test("brand 在解码端附加编译期名义类型且编码端保持原始外部类型，运行时零额外包装", () => {
-    const base = string({ trim: true, minLength: 1 });
+    const base = string().trim().nonEmpty();
     const UserId = base.brand<"UserId">();
     const OrderId = base.brand<"OrderId">();
 
@@ -256,7 +257,11 @@ describe("codec kernel", () => {
   });
 
   test("Codec.inspect 与 .describe 公开只读结构描述符，并在精化/规范化/品牌/字段与工厂派生下保持结构透明", () => {
-    const Username = string({ trim: true, minLength: 3, maxLength: 16, pattern: /^[a-z0-9_]+$/ })
+    const Username = string()
+      .trim()
+      .minLength(3)
+      .maxLength(16)
+      .pattern(/^[a-z0-9_]+$/)
       .describe("Unique handle")
       .normalize((s) => s.toLowerCase())
       .refine((s) => !s.startsWith("_"), "user.leading_underscore", "No leading underscore")
@@ -271,7 +276,7 @@ describe("codec kernel", () => {
       description: "Unique handle",
     });
     expect(Codec.inspect(Username.alias("user_name").optional())).toBe(Codec.inspect(Username));
-    expect(Codec.inspect(int({ min: 0, max: 10 }))).toStrictEqual({
+    expect(Codec.inspect(int().min(0).max(10))).toStrictEqual({
       kind: "integer",
       min: 0,
       max: 10,
@@ -321,5 +326,95 @@ describe("codec kernel", () => {
 
     // @ts-expect-error describe 必须传入字符串
     expect(() => string().describe(123)).toThrow(TypeError);
+  });
+
+  test("Codec.define 状态化定义支持自定义不可变链式自有方法、状态冻结、动态元数据与保留字守卫", () => {
+    interface DecimalState {
+      readonly scale: number;
+      readonly min?: number;
+    }
+
+    const decimal = Codec.define({
+      state: { scale: 2 } as DecimalState,
+      validate(state) {
+        if (!Number.isSafeInteger(state.scale) || state.scale < 0 || state.scale > 8) {
+          throw new RangeError("scale must be an integer between 0 and 8");
+        }
+      },
+      decode(input, context, state) {
+        if (typeof input !== "string" || !/^-?\d+(?:\.\d+)?$/.test(input)) {
+          return context.fail("format.decimal", "Expected decimal string");
+        }
+        const parsed = Number(Number(input).toFixed(state.scale));
+        if (state.min !== undefined && parsed < state.min) {
+          return context.fail("number.min", `Expected >= ${state.min}`);
+        }
+        return Object.is(parsed, -0) ? 0 : parsed;
+      },
+      encode(input, context, state) {
+        if (typeof input !== "number" || !Number.isFinite(input)) {
+          return context.fail("type.number", "Expected finite number");
+        }
+        if (state.min !== undefined && input < state.min) {
+          return context.fail("number.min", `Expected >= ${state.min}`);
+        }
+        return input.toFixed(state.scale);
+      },
+      meta: (state) => ({
+        format: "decimal",
+        encodedSchema: { type: "string" },
+        decodedSchema: {
+          type: "number",
+          ...(state.min !== undefined ? { minimum: state.min } : {}),
+        },
+      }),
+      methods: {
+        scale: (state, scale: number): DecimalState => ({ ...state, scale }),
+        min: (state, min: number): DecimalState => ({ ...state, min }),
+        nonNegative: (state): DecimalState => ({ ...state, min: 0 }),
+        tryMutate: (state): DecimalState => {
+          expect(Object.isFrozen(state)).toBe(true);
+          return state;
+        },
+      },
+    });
+
+    // 原实例与链式派生实例完全不可变隔离，且 .describe 换序保留自有方法
+    const Price = decimal.describe("Unit price").nonNegative().scale(3).tryMutate();
+    expect(decimal.encode(1.5)).toBe("1.50");
+    expect(Price.decode("12.3456")).toBe(12.346);
+    expect(Price.encode(12.346)).toBe("12.346");
+    expect(Price.safeDecode("-0.01")).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.min" }],
+    });
+    expect(Codec.inspect(Price)).toStrictEqual({
+      kind: "custom",
+      format: "decimal",
+      description: "Unit price",
+      encodedSchema: { type: "string" },
+      decodedSchema: { type: "number", minimum: 0 },
+    });
+
+    // 定义期状态不变量校验在链式调用时立即生效
+    expect(() => decimal.scale(-1)).toThrow(RangeError);
+    expect(() => decimal.scale(12)).toThrow(RangeError);
+
+    // 三阶单向跃迁：进入通用精化或字段槽位后不再暴露内禀自有方法
+    const RefinedPrice = Price.refine((v) => v < 1000, "price.cap", "Too expensive");
+    expectTypeOf(RefinedPrice).toEqualTypeOf<Codec<number, string>>();
+    expect("scale" in RefinedPrice).toBe(false);
+
+    // 保留字冲突在编译期与定义期双重拒绝
+    const badMethods = { decode: (s: { readonly n: number }) => s };
+    expect(() =>
+      Codec.define({
+        // @ts-expect-error 禁止覆盖 Codec 保留成员 decode
+        state: { n: 1 },
+        decode: (v) => Number(v),
+        encode: (v) => Number(v),
+        methods: badMethods,
+      }),
+    ).toThrow(RangeError);
   });
 });

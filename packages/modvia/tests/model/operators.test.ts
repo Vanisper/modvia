@@ -19,7 +19,7 @@ import {
 const BaseUser = Model.define({
   fields: {
     id: string(),
-    name: string({ trim: true, minLength: 1 }),
+    name: string().trim().nonEmpty(),
     role: oneOf("admin", "member"),
     createdAt: isoDateTime().alias("created_at"),
     bio: string().optional(),
@@ -273,8 +273,8 @@ describe("model introspection & derivation", () => {
     const PasswordReset = Model.define({
       alias: Alias.snakeCase,
       fields: {
-        newPassword: string({ minLength: 6 }),
-        confirmPassword: string({ minLength: 6 }),
+        newPassword: string().minLength(6),
+        confirmPassword: string().minLength(6),
       },
     }).check((data, context) => {
       if (data.newPassword !== data.confirmPassword) {
@@ -324,7 +324,7 @@ describe("Model.union", () => {
   const TextBlock = Model.define({
     fields: {
       kind: oneOf("text").alias("block_type"),
-      body: string({ trim: true, minLength: 1 }),
+      body: string().trim().nonEmpty(),
     },
   });
 
@@ -344,7 +344,7 @@ describe("Model.union", () => {
   const ImageBlock = Model.define({
     fields: {
       kind: literal("image").alias("block_type"),
-      url: string({ minLength: 1 }).alias("image_url"),
+      url: string().nonEmpty().alias("image_url"),
     },
   }).withFactory((data) => new ImageBlockEntity(data));
 

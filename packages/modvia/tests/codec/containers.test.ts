@@ -52,7 +52,7 @@ describe("containers (recordOf)", () => {
 
   test("recordOf 支持受限键 Codec、检测转换后键名冲突并安全处理 __proto__", () => {
     const Locale = oneOf("zh-CN", "en-US");
-    const Messages = recordOf(Locale, string({ trim: true, minLength: 1 }));
+    const Messages = recordOf(Locale, string().trim().nonEmpty());
 
     const messages = Messages.decode({ "zh-CN": "  你好  " });
     expect(messages).toStrictEqual({ "zh-CN": "你好" });
@@ -71,7 +71,7 @@ describe("containers (recordOf)", () => {
     >();
 
     // 键转换后发生碰撞时报告 record.duplicate_key
-    const TrimmedDict = recordOf(string({ trim: true }), number());
+    const TrimmedDict = recordOf(string().trim(), number());
     expect(TrimmedDict.safeDecode({ a: 1, " a ": 2 })).toMatchObject({
       ok: false,
       issues: [{ path: [" a "], code: "record.duplicate_key" }],
@@ -121,8 +121,8 @@ describe("containers (recordOf)", () => {
     expect(() => tupleOf(string().optional())).toThrow(TypeError);
   });
 
-  test("arrayOf 支持配置 minLength 与 maxLength 并在越界时短路返回稳定错误码", () => {
-    const BoundedTags = arrayOf(string({ minLength: 1 }), { minLength: 1, maxLength: 3 });
+  test("arrayOf 支持链式 nonEmpty、minLength、maxLength 与 length 派生，并在越界时短路返回稳定错误码", () => {
+    const BoundedTags = arrayOf(string().nonEmpty()).nonEmpty().maxLength(3);
 
     expect(BoundedTags.decode(["a", "b"])).toStrictEqual(["a", "b"]);
     expect(BoundedTags.safeDecode([])).toMatchObject({
@@ -134,7 +134,14 @@ describe("containers (recordOf)", () => {
       issues: [{ path: [], code: "array.max_length" }],
     });
 
-    expect(() => arrayOf(string(), { minLength: -1 })).toThrow(RangeError);
-    expect(() => arrayOf(string(), { minLength: 3, maxLength: 2 })).toThrow(RangeError);
+    const PairArray = arrayOf(number()).length(2);
+    expect(PairArray.decode([1, 2])).toStrictEqual([1, 2]);
+    expect(PairArray.safeDecode([1])).toMatchObject({
+      ok: false,
+      issues: [{ code: "array.min_length" }],
+    });
+
+    expect(() => arrayOf(string()).minLength(-1)).toThrow(RangeError);
+    expect(() => arrayOf(string()).minLength(3).maxLength(2)).toThrow(RangeError);
   });
 });

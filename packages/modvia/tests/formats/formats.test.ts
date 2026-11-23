@@ -42,7 +42,7 @@ describe("modvia/formats", () => {
     });
     expect(Codec.inspect(Uuid)).toMatchObject({ kind: "custom", format: "uuid" });
 
-    const Email = email({ trim: true, lowercase: true });
+    const Email = email().trim().lowercase();
     expect(Email.decode("  User.Name+tag@Example.COM ")).toBe("user.name+tag@example.com");
     expect(Email.encode("User@Example.COM")).toBe("user@example.com");
     for (const invalid of ["plain", "@example.com", "a..b@example.com", ".a@example.com", "a@b"]) {
@@ -53,8 +53,8 @@ describe("modvia/formats", () => {
     }
   });
 
-  test("url、ipv4 与 ipv6 严格校验网络标识并支持协议白名单", () => {
-    const HttpsOnly = url({ protocols: ["https"] });
+  test("url、ipv4 与 ipv6 严格校验网络标识并支持链式协议白名单", () => {
+    const HttpsOnly = url().https();
     expect(HttpsOnly.decode("https://modvia.dev/docs?v=1")).toBe("https://modvia.dev/docs?v=1");
     expect(HttpsOnly.safeDecode("http://modvia.dev")).toMatchObject({
       ok: false,
@@ -68,7 +68,8 @@ describe("modvia/formats", () => {
       ok: false,
       issues: [{ code: "format.url" }],
     });
-    expect(() => url({ protocols: [] })).toThrow(RangeError);
+    expect(url().protocols("https", "http").decode("http://modvia.dev")).toBe("http://modvia.dev");
+    expect(() => Reflect.apply(url().protocols, undefined, [])).toThrow(RangeError);
 
     const v4 = ipv4();
     expect(v4.decode("192.168.0.1")).toBe("192.168.0.1");
@@ -144,7 +145,7 @@ describe("modvia/formats", () => {
       alias: Alias.snakeCase,
       fields: {
         eventId: uuid(),
-        targetUrl: url({ protocols: ["https"] }),
+        targetUrl: url().https(),
         note: string().optional(),
       },
     });
@@ -169,12 +170,16 @@ describe("modvia/formats", () => {
     );
   });
 
-  test("intFromString、numberFromString、booleanFromString 与 bigintFromString 满足严格文本双向收敛", () => {
-    const Port = intFromString({ min: 1, max: 65535 });
+  test("intFromString、numberFromString、booleanFromString 与 bigintFromString 支持链式自有方法并满足双向收敛", () => {
+    const Port = intFromString().min(1).max(65535);
     expect(Port.decode("8080")).toBe(8080);
     expect(Port.encode(8080)).toBe("8080");
     expect(intFromString().decode("-0")).toBe(0);
     expect(intFromString().encode(-0)).toBe("0");
+    expect(intFromString().positive().safeDecode("0")).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.gt" }],
+    });
     for (const invalid of ["", "  ", "8080px", "1.5", "0x10", "9007199254740993"]) {
       expect(Port.safeDecode(invalid)).toMatchObject({
         ok: false,
@@ -185,10 +190,11 @@ describe("modvia/formats", () => {
     expect(Port.safeEncode(70000)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
     expect(Port.safeParse(8080)).toMatchObject({ ok: false, issues: [{ code: "type.string" }] });
     expect(Port.safeDump("8080")).toMatchObject({ ok: false, issues: [{ code: "type.integer" }] });
-    expect(() => intFromString({ min: 1.5 })).toThrow(RangeError);
-    expect(() => intFromString({ min: 5, max: 1 })).toThrow(RangeError);
+    expect(() => intFromString().min(1.5)).toThrow(RangeError);
+    expect(() => intFromString().min(5).max(1)).toThrow(RangeError);
+    expect(() => intFromString().gt(1).lt(2)).toThrow(RangeError);
 
-    const Ratio = numberFromString({ min: 0, max: 1 });
+    const Ratio = numberFromString().gt(0).max(1);
     expect(Ratio.decode("0.25")).toBe(0.25);
     expect(Ratio.decode("1e-2")).toBe(0.01);
     expect(Ratio.encode(0.25)).toBe("0.25");
@@ -200,7 +206,7 @@ describe("modvia/formats", () => {
         issues: [{ code: "format.number_string" }],
       });
     }
-    expect(Ratio.safeDecode("-0.1")).toMatchObject({ ok: false, issues: [{ code: "number.min" }] });
+    expect(Ratio.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.gt" }] });
     expect(Ratio.safeEncode(1.1)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
 
     const BoolFlag = booleanFromString();
@@ -213,19 +219,24 @@ describe("modvia/formats", () => {
       issues: [{ code: "format.boolean_string" }],
     });
 
-    const CustomBool = booleanFromString({
-      truthy: ["YES", "1"],
-      falsy: ["NO", "0"],
-    });
+    const CustomBool = booleanFromString().tokens(["YES", "1"], ["NO", "0"]);
     expect(CustomBool.decode("yes")).toBe(true);
     expect(CustomBool.decode("0")).toBe(false);
     expect(CustomBool.encode(true)).toBe("YES");
     expect(CustomBool.decode(CustomBool.encode(true))).toBe(true);
-    expect(() => booleanFromString({ truthy: ["on"], falsy: ["ON"] })).toThrow(RangeError);
+    expect(CustomBool.caseSensitive().safeDecode("yes")).toMatchObject({
+      ok: false,
+      issues: [{ code: "format.boolean_string" }],
+    });
+    expect(() => booleanFromString().tokens(["on"], ["ON"])).toThrow(RangeError);
 
-    const BigId = bigintFromString();
+    const BigId = bigintFromString().positive();
     expect(BigId.decode("900719925474099312345")).toBe(900719925474099312345n);
-    expect(BigId.encode(-42n)).toBe("-42");
+    expect(bigintFromString().encode(-42n)).toBe("-42");
+    expect(BigId.safeDecode("0")).toMatchObject({
+      ok: false,
+      issues: [{ code: "bigint.gt" }],
+    });
     expect(BigId.safeDecode("12n")).toMatchObject({
       ok: false,
       issues: [{ code: "format.bigint_string" }],
@@ -234,5 +245,6 @@ describe("modvia/formats", () => {
       ok: false,
       issues: [{ code: "type.bigint" }],
     });
+    expect(() => bigintFromString().gt(1n).lt(2n)).toThrow(RangeError);
   });
 });

@@ -9,9 +9,9 @@ describe("@modvia/json-schema packaged artifact", () => {
       Model.define({
         alias: Alias.snakeCase,
         fields: {
-          memberEmail: email({ trim: true }),
-          displayName: string({ minLength: 1, maxLength: 32 }).describe("Member display name"),
-          seatLimit: int({ min: 1 }).default(5),
+          memberEmail: email().trim(),
+          displayName: string().nonEmpty().maxLength(32).describe("Member display name"),
+          seatLimit: int().min(1).default(5),
         },
       }).describe("Create member payload"),
     );

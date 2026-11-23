@@ -14,13 +14,13 @@ import { Model } from "../../src/index.ts";
 const instant = isoDateTime();
 
 describe("built-in scalars", () => {
-  test("string 按配置执行 trim、UTF-16 长度上下界与无状态正则校验，并在定义期检查参数", () => {
-    const slug = string({
-      trim: true,
-      minLength: 2,
-      maxLength: 8,
-      pattern: /^[a-z0-9-]+$/g, // 即使传入带 g 标志的正则，连续调用亦保持无状态幂等
-    });
+  test("string 支持链式 trim、长度、固定长度、nonEmpty 与正则派生，且归并状态后始终先裁剪再守卫长度", () => {
+    const slug = string()
+      .trim()
+      .minLength(2)
+      .maxLength(8)
+      .pattern(/^[a-z0-9-]+$/g); // 即使传入带 g 标志的正则，连续调用亦保持无状态幂等
+
     expect(slug.decode("  ab-12  ")).toBe("ab-12");
     expect(slug.decode("  ab-12  ")).toBe("ab-12");
     expect(slug.encode("  ab-12  ")).toBe("ab-12");
@@ -45,19 +45,43 @@ describe("built-in scalars", () => {
       issues: [{ path: [], code: "type.string" }],
     });
 
-    expect(string({ minLength: 2 }).decode("🙂")).toBe("🙂");
+    // 状态归并保证：即便先声明 minLength(5) 再声明 trim()，依然先 trim 再校验长度，守住往返收敛律
+    const reversedOrder = string().minLength(5).trim();
+    expect(reversedOrder.safeDecode("  a  ")).toMatchObject({
+      ok: false,
+      issues: [{ code: "string.min_length" }],
+    });
+
+    const pinCode = string().length(4).pattern(/^\d+$/);
+    expect(pinCode.decode("0420")).toBe("0420");
+    expect(pinCode.safeDecode("123")).toMatchObject({
+      ok: false,
+      issues: [{ code: "string.min_length" }],
+    });
+    expect(pinCode.safeDecode("12345")).toMatchObject({
+      ok: false,
+      issues: [{ code: "string.max_length" }],
+    });
+
+    expect(string().nonEmpty().safeDecode("")).toMatchObject({
+      ok: false,
+      issues: [{ code: "string.min_length" }],
+    });
+    expect(string().minLength(2).decode("🙂")).toBe("🙂");
 
     for (const invalid of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => string({ minLength: invalid })).toThrow(RangeError);
-      expect(() => string({ maxLength: invalid })).toThrow(RangeError);
+      expect(() => string().minLength(invalid)).toThrow(RangeError);
+      expect(() => string().maxLength(invalid)).toThrow(RangeError);
+      expect(() => string().length(invalid)).toThrow(RangeError);
     }
-    expect(() => string({ minLength: 5, maxLength: 3 })).toThrow(RangeError);
+    expect(() => string().minLength(5).maxLength(3)).toThrow(RangeError);
+    expect(() => string().maxLength(0).nonEmpty()).toThrow(RangeError);
     // @ts-expect-error pattern 必须为 RegExp 实例
-    expect(() => string({ pattern: "^a$" })).toThrow(TypeError);
+    expect(() => string().pattern("^a$")).toThrow(TypeError);
   });
 
-  test("number、int、boolean 与 oneOf 严格校验基础类型、数值闭区间与枚举范围", () => {
-    const percentage = number({ min: 0, max: 100 });
+  test("number、int、boolean 与 oneOf 支持闭区间、开区间与正负号链式派生，并在定义期拦截空区间", () => {
+    const percentage = number().min(0).max(100);
     expect(percentage.decode(0)).toBe(0);
     expect(percentage.encode(100)).toBe(100);
     expect(percentage.safeDecode(-0.1)).toMatchObject({
@@ -68,14 +92,32 @@ describe("built-in scalars", () => {
       ok: false,
       issues: [{ code: "number.max" }],
     });
+
+    const openUnit = number().gt(0).lt(1);
+    expect(openUnit.decode(0.5)).toBe(0.5);
+    expect(openUnit.safeDecode(0)).toMatchObject({ ok: false, issues: [{ code: "number.gt" }] });
+    expect(openUnit.safeDecode(1)).toMatchObject({ ok: false, issues: [{ code: "number.lt" }] });
+    expect(number().positive().safeDecode(0)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.gt" }],
+    });
+    expect(number().nonNegative().decode(0)).toBe(0);
+    expect(number().negative().safeDecode(0)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.lt" }],
+    });
+    expect(number().nonPositive().decode(0)).toBe(0);
+
     for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, "1"]) {
       expect(percentage.safeParse(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "type.number" }],
       });
     }
-    expect(() => number({ min: Number.NaN })).toThrow(RangeError);
-    expect(() => number({ min: 10, max: 5 })).toThrow(RangeError);
+    expect(() => number().min(Number.NaN)).toThrow(RangeError);
+    expect(() => number().min(10).max(5)).toThrow(RangeError);
+    expect(() => number().gt(5).max(5)).toThrow(RangeError);
+    expect(() => number().min(5).lt(5)).toThrow(RangeError);
 
     const flag = boolean();
     expect(flag.decode(false)).toBe(false);
@@ -92,7 +134,7 @@ describe("built-in scalars", () => {
       issues: [{ code: "string.one_of" }],
     });
 
-    const port = int({ min: 1, max: 65535 });
+    const port = int().min(1).max(65535);
     expect(port.decode(8080)).toBe(8080);
     expect(port.encode(443)).toBe(443);
     expect(port.safeDecode(0)).toMatchObject({
@@ -103,14 +145,26 @@ describe("built-in scalars", () => {
       ok: false,
       issues: [{ code: "number.max" }],
     });
+    expect(int().positive().decode(1)).toBe(1);
+    expect(int().positive().safeDecode(0)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.gt" }],
+    });
+    expect(int().negative().decode(-1)).toBe(-1);
+    expect(int().nonNegative().decode(0)).toBe(0);
+    expect(int().nonPositive().decode(0)).toBe(0);
+
     for (const invalid of [1.5, 1e25, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
       expect(port.safeParse(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "type.integer" }],
       });
     }
-    expect(() => int({ min: 1.5 })).toThrow(RangeError);
-    expect(() => int({ min: 10, max: 5 })).toThrow(RangeError);
+    expect(() => int().min(1.5)).toThrow(RangeError);
+    expect(() => int().min(10).max(5)).toThrow(RangeError);
+    // 离散整数开区间 (1, 2) 不存在合法整数，定义期立即拦截
+    expect(() => int().gt(1).lt(2)).toThrow(RangeError);
+    expect(() => int().gt(Number.MAX_SAFE_INTEGER)).toThrow(RangeError);
 
     const passthrough = unknown();
     const complex = { nested: [1, true, null] };

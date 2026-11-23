@@ -176,6 +176,22 @@ function buildDescriptorSchema(
       const schema: JsonSchemaObject = { type: descriptor.kind };
       if (descriptor.min !== undefined) schema.minimum = descriptor.min;
       if (descriptor.max !== undefined) schema.maximum = descriptor.max;
+      if (descriptor.exclusiveMin !== undefined) {
+        if (context.target === "openapi-3.0") {
+          schema.minimum = descriptor.exclusiveMin;
+          schema.exclusiveMinimum = true;
+        } else {
+          schema.exclusiveMinimum = descriptor.exclusiveMin;
+        }
+      }
+      if (descriptor.exclusiveMax !== undefined) {
+        if (context.target === "openapi-3.0") {
+          schema.maximum = descriptor.exclusiveMax;
+          schema.exclusiveMaximum = true;
+        } else {
+          schema.exclusiveMaximum = descriptor.exclusiveMax;
+        }
+      }
       return schema;
     }
     case "boolean":
@@ -327,7 +343,18 @@ function buildDescriptorSchema(
           ? descriptor.encodedSchema
           : (descriptor.decodedSchema ?? descriptor.encodedSchema);
       if (schemaFragment !== undefined) {
-        return { ...schemaFragment };
+        const cloned: JsonSchemaObject = { ...schemaFragment };
+        if (context.target === "openapi-3.0") {
+          if (typeof cloned.exclusiveMinimum === "number") {
+            cloned.minimum = cloned.exclusiveMinimum;
+            cloned.exclusiveMinimum = true;
+          }
+          if (typeof cloned.exclusiveMaximum === "number") {
+            cloned.maximum = cloned.exclusiveMaximum;
+            cloned.exclusiveMaximum = true;
+          }
+        }
+        return cloned;
       }
       if (context.strict) {
         throw new TypeError(

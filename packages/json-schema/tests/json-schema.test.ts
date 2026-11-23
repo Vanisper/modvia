@@ -24,10 +24,14 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       alias: Alias.snakeCase,
       fields: {
         userId: uuid().describe("Primary user UUID"),
-        emailAddress: email({ trim: true, lowercase: true }),
-        username: string({ trim: true, minLength: 3, maxLength: 20, pattern: /^[a-z0-9_]+$/ }),
-        age: int({ min: 0, max: 150 }).optional().describe("Age in years"),
-        score: number({ min: 0, max: 100 }).default(60),
+        emailAddress: email().trim().lowercase(),
+        username: string()
+          .trim()
+          .minLength(3)
+          .maxLength(20)
+          .pattern(/^[a-z0-9_]+$/),
+        age: int().nonNegative().max(150).optional().describe("Age in years"),
+        score: number().nonNegative().max(100).default(60),
         role: oneOf("admin", "member").alias("account_role"),
         active: boolean(),
         nickname: string().nullable(),
@@ -95,18 +99,18 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     const TextBlock = Model.define({
       fields: {
         kind: literal("text").alias("block_type"),
-        body: string({ minLength: 1 }),
+        body: string().nonEmpty(),
       },
     });
     const LinkBlock = Model.define({
       fields: {
         kind: literal("link").alias("block_type"),
-        href: url({ protocols: ["https"] }).nullable(),
+        href: url().https().nullable(),
       },
     });
     const Block = Model.union("kind", [TextBlock, LinkBlock]);
 
-    // OpenAPI 3.0：无 $schema，nullable 折叠为 nullable: true，taggedUnion 带 discriminator
+    // OpenAPI 3.0：无 $schema，nullable 折叠为 nullable: true，Model.union 带 discriminator
     const openApiSchema = toJsonSchema(Block, { target: "openapi-3.0" });
     expect(openApiSchema).toStrictEqual({
       oneOf: [
@@ -133,7 +137,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     });
 
     // Draft-07 与 Draft-2020-12 在 tuple 上的差异
-    const Pair = tupleOf(string(), int({ min: 1 }));
+    const Pair = tupleOf(string(), int().min(1));
     expect(toJsonSchema(Pair, { includeSchemaUri: false })).toStrictEqual({
       type: "array",
       prefixItems: [{ type: "string" }, { type: "integer", minimum: 1 }],
@@ -149,13 +153,27 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       additionalItems: false,
     });
 
-    // 数组长度、字典与管道/反转双视角
-    const Bounded = arrayOf(string(), { minLength: 1, maxLength: 5 });
+    // 数组长度、开区间数值及 OpenAPI 3.0 exclusiveMinimum 布尔转换
+    const Bounded = arrayOf(string()).nonEmpty().maxLength(5);
     expect(toJsonSchema(Bounded, { includeSchemaUri: false })).toStrictEqual({
       type: "array",
       items: { type: "string" },
       minItems: 1,
       maxItems: 5,
+    });
+
+    const OpenRatio = number().positive().lt(1);
+    expect(toJsonSchema(OpenRatio, { includeSchemaUri: false })).toStrictEqual({
+      type: "number",
+      exclusiveMinimum: 0,
+      exclusiveMaximum: 1,
+    });
+    expect(toJsonSchema(OpenRatio, { target: "openapi-3.0" })).toStrictEqual({
+      type: "number",
+      minimum: 0,
+      exclusiveMinimum: true,
+      maximum: 1,
+      exclusiveMaximum: true,
     });
 
     const LocaleMap = recordOf(oneOf("zh", "en"), string());
@@ -186,14 +204,20 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     });
 
     // 字符串传输格式 Codec 在 DTO 侧输出字符串 Schema，在 Data 侧输出数值 Schema
-    const PortText = intFromString({ min: 1, max: 65535 });
+    const PortText = intFromString().positive().max(65535);
     expect(toJsonSchema(PortText, { side: "dto", includeSchemaUri: false })).toStrictEqual({
       type: "string",
       pattern: "^[+-]?\\d+$",
     });
     expect(toJsonSchema(PortText, { side: "data", includeSchemaUri: false })).toStrictEqual({
       type: "integer",
-      minimum: 1,
+      exclusiveMinimum: 0,
+      maximum: 65535,
+    });
+    expect(toJsonSchema(PortText, { side: "data", target: "openapi-3.0" })).toStrictEqual({
+      type: "integer",
+      minimum: 0,
+      exclusiveMinimum: true,
       maximum: 65535,
     });
   });

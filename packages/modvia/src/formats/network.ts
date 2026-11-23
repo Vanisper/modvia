@@ -1,109 +1,133 @@
 import { defineCodec } from "../codec/core/define.ts";
-import type { Codec } from "../codec/core/types.ts";
+import type { Codec, CodecContext } from "../codec/core/types.ts";
 
-export interface UrlOptions {
-  /** 允许的协议白名单（如 ["https:", "http:"] 或 ["https", "http"]） */
-  readonly protocols?: readonly string[];
+/** 标准 URL 双向编解码器，支持协议白名单与 HTTPS 约束链式派生 */
+export interface UrlCodec extends Codec<string, string> {
+  /** 限制允许的协议白名单（如 .protocols("https", "http") 或 "https:"） */
+  protocols(this: void, ...allowed: readonly [string, ...string[]]): UrlCodec;
+  /** 仅允许 https 协议（等价于 .protocols("https")） */
+  https(this: void): UrlCodec;
+  /** 为当前 URL 编解码器附加静态文档说明文本，保留全部 URL 自有方法 */
+  describe(this: void, description: string): UrlCodec;
+}
+
+interface UrlState {
+  readonly allowedProtocols?: ReadonlySet<string>;
 }
 
 interface GlobalUrlConstructor {
   new (input: string): { readonly protocol: string };
 }
 
-/** 标准 URL 双向编解码器，可选限制协议白名单 */
-export function url(options: UrlOptions = {}): Codec<string, string> {
-  let allowedProtocols: Set<string> | undefined;
-  if (options.protocols !== undefined) {
-    if (!Array.isArray(options.protocols) || options.protocols.length === 0) {
-      throw new RangeError("protocols must be a non-empty array of protocol names");
-    }
-    allowedProtocols = new Set(
-      options.protocols.map((entry) => {
-        if (typeof entry !== "string" || entry.length === 0) {
-          throw new TypeError("Each protocol in protocols must be a non-empty string");
-        }
-        const lower = entry.toLowerCase();
-        return lower.endsWith(":") ? lower : `${lower}:`;
-      }),
-    );
+function normalizeProtocols(rawList: readonly string[]): ReadonlySet<string> {
+  if (!Array.isArray(rawList) || rawList.length === 0) {
+    throw new RangeError("protocols requires at least one protocol name");
   }
+  return new Set(
+    rawList.map((entry) => {
+      if (typeof entry !== "string" || entry.length === 0) {
+        throw new TypeError("Each protocol must be a non-empty string");
+      }
+      const lower = entry.toLowerCase();
+      return lower.endsWith(":") ? lower : `${lower}:`;
+    }),
+  );
+}
 
+function validateUrl(input: unknown, context: CodecContext, state: Readonly<UrlState>): string {
+  if (typeof input !== "string") {
+    return context.fail("type.string", "Expected a string");
+  }
   const UrlCtor = (globalThis as { readonly URL?: GlobalUrlConstructor }).URL;
+  if (input.length === 0 || /\s/.test(input) || !UrlCtor) {
+    return context.fail("format.url", "Expected a valid URL");
+  }
+  let parsed: { readonly protocol: string };
+  try {
+    parsed = new UrlCtor(input);
+  } catch {
+    return context.fail("format.url", "Expected a valid URL");
+  }
+  if (
+    state.allowedProtocols !== undefined &&
+    !state.allowedProtocols.has(parsed.protocol.toLowerCase())
+  ) {
+    return context.fail("format.url_protocol", `URL protocol "${parsed.protocol}" is not allowed`);
+  }
+  return input;
+}
 
-  const run = (input: unknown, context: { fail(code: string, message: string): never }): string => {
-    if (typeof input !== "string") {
-      return context.fail("type.string", "Expected a string");
-    }
-    if (input.length === 0 || /\s/.test(input) || !UrlCtor) {
-      return context.fail("format.url", "Expected a valid URL");
-    }
-    let parsed: { readonly protocol: string };
-    try {
-      parsed = new UrlCtor(input);
-    } catch {
-      return context.fail("format.url", "Expected a valid URL");
-    }
-    if (allowedProtocols !== undefined && !allowedProtocols.has(parsed.protocol.toLowerCase())) {
-      return context.fail(
-        "format.url_protocol",
-        `URL protocol "${parsed.protocol}" is not allowed`,
-      );
-    }
-    return input;
-  };
+const defaultUrlCodec: UrlCodec = defineCodec({
+  state: {} as UrlState,
+  decode: validateUrl,
+  encode: validateUrl,
+  meta: {
+    format: "uri",
+    encodedSchema: { type: "string", format: "uri" },
+  },
+  methods: {
+    protocols: (state, ...allowed: readonly [string, ...string[]]): UrlState => ({
+      ...state,
+      allowedProtocols: normalizeProtocols(allowed),
+    }),
+    https: (state): UrlState => ({
+      ...state,
+      allowedProtocols: normalizeProtocols(["https"]),
+    }),
+  },
+});
 
-  return defineCodec<string, string>({
-    decode: run,
-    encode: run,
-    meta: {
-      format: "uri",
-      encodedSchema: { type: "string", format: "uri" },
-    },
-  });
+const defaultIpv4Codec: Codec<string, string> = defineCodec<string, string>({
+  decode: validateIpv4,
+  encode: validateIpv4,
+  meta: {
+    format: "ipv4",
+    encodedSchema: { type: "string", format: "ipv4" },
+  },
+});
+
+const defaultIpv6Codec: Codec<string, string> = defineCodec<string, string>({
+  decode: validateIpv6,
+  encode: validateIpv6,
+  meta: {
+    format: "ipv6",
+    encodedSchema: { type: "string", format: "ipv6" },
+  },
+});
+
+/** 标准 URL 双向编解码器，可通过 .protocols(...) 或 .https() 链式限制协议 */
+export function url(): UrlCodec {
+  return defaultUrlCodec;
 }
 
 /** IPv4 点分十进制地址双向编解码器（拒绝前导零） */
 export function ipv4(): Codec<string, string> {
-  const run = (input: unknown, context: { fail(code: string, message: string): never }): string => {
-    if (typeof input !== "string") {
-      return context.fail("type.string", "Expected a string");
-    }
-    if (!isValidIpv4(input)) {
-      return context.fail("format.ipv4", "Expected a valid IPv4 address");
-    }
-    return input;
-  };
-
-  return defineCodec<string, string>({
-    decode: run,
-    encode: run,
-    meta: {
-      format: "ipv4",
-      encodedSchema: { type: "string", format: "ipv4" },
-    },
-  });
+  return defaultIpv4Codec;
 }
 
 /** IPv6（RFC 4291）地址双向编解码器，支持零压缩与内嵌 IPv4 尾部 */
 export function ipv6(): Codec<string, string> {
-  const run = (input: unknown, context: { fail(code: string, message: string): never }): string => {
-    if (typeof input !== "string") {
-      return context.fail("type.string", "Expected a string");
-    }
-    if (!isValidIpv6(input)) {
-      return context.fail("format.ipv6", "Expected a valid IPv6 address");
-    }
-    return input;
-  };
+  return defaultIpv6Codec;
+}
 
-  return defineCodec<string, string>({
-    decode: run,
-    encode: run,
-    meta: {
-      format: "ipv6",
-      encodedSchema: { type: "string", format: "ipv6" },
-    },
-  });
+function validateIpv4(input: unknown, context: CodecContext): string {
+  if (typeof input !== "string") {
+    return context.fail("type.string", "Expected a string");
+  }
+  if (!isValidIpv4(input)) {
+    return context.fail("format.ipv4", "Expected a valid IPv4 address");
+  }
+  return input;
+}
+
+function validateIpv6(input: unknown, context: CodecContext): string {
+  if (typeof input !== "string") {
+    return context.fail("type.string", "Expected a string");
+  }
+  if (!isValidIpv6(input)) {
+    return context.fail("format.ipv6", "Expected a valid IPv6 address");
+  }
+  return input;
 }
 
 function isValidIpv4(value: string): boolean {

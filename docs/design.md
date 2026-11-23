@@ -44,10 +44,12 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - **执行闭包与只读结构描述符分离**：运行时校验始终直接执行极简函数闭包，不经过 AST 解释器；内置标量（含长度/区间/正则配置）、容器、组合子、模型与 `modvia/formats` 构造时同步挂载冻结的 `CodecDescriptor`（可通过 `Codec.inspect(codec)` 读取，支持 `.describe(text)` 附加静态文档说明，`.refine` / `.check` / `.normalize` / `.brand` 自动透传底层结构描述符），供独立包 `@modvia/json-schema` 按 DTO 或 Data 视角零损耗导出 JSON Schema 与 OpenAPI 规范。
 - 所有 `Codec`、`Field` 与 `Model` 均原生挂载 `StandardSchemaV1` 的 `"~standard"` 属性，同时可通过零依赖的 `Codec.fromStandard(schema)` 将外部同步 `StandardSchemaV1` 校验器桥接为对称 `Codec`。
 
-## 组合代数与链式规则
+## 组合代数与三阶单向跃迁
 
-每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。系统不提供通用的黑盒交集算子（`.and()`），而是将「单值叠加约束」与「对象合并字段」分别交由值级管道（`.check` / `Codec.pipe`）与模型扩展承接。各方法遵循明确的代数规则：
+每次调用修饰方法均返回冻结的新定义，原定义保持不可变并可跨模型复用。链式调用按职责边界遵循由内向外的**三阶单向跃迁（内禀自有态 → 通用代数态 → 字段槽位态）**，不提供通用黑盒交集算子（`.and()`）或逆向剥壳算子（`.unwrap()`）：
 
+- **内禀状态归并（内置自有方法与状态化 `Codec.define`）**：内置有参原语（如 `string().trim().minLength(3)`、`int().positive().max(100)`、`arrayOf(item).nonEmpty()`）与状态化 `Codec.define({ state, validate?, decode, encode, meta?, methods })` 通过纯函数更新冻结 `State` 并重建单层实例（禁止覆盖 `Codec` 保留协议名）。规范化（如 `trim`）在内核中始终先于范围精化执行，从而保证任意方法调用顺序均满足往返收敛律，区间冲突在定义期立即抛 `RangeError`，且结构元数据无损同步至 `CodecDescriptor`。
+- **三阶收敛边界**：在内禀自有态上调用纯静态说明 `.describe(text)` 仍保留全部自有方法；一旦调用通用闭包/变型算子（`.refine`、`.check`、`.normalize`、`.brand`、`.nullable`、`.pipe`），类型单向收敛为标准 `Codec<T, Encoded>`，防止后续重建底层实例静默丢弃已挂载谓词或抹除子类型/品牌；调用 `.alias` / `.optional` / `.default` 则跃迁至对象槽位 `Field`。
 - **管道包裹顺序（`.check` / `.pipe`）**：`.check(rule)` 在基础 `Codec` 通过后对业务值执行对称约束，解码与编码均按书写顺序由内向外执行；`Codec.pipe(first, second)` 在解码时按 `first → second` 正向传递，在编码时按 `second → first` 逆向传递。
 - **字面量哨兵优先（`.or` / `.nullable`）**：接受一个或多个原始字面量（`string | number | boolean | null | undefined`），编解码两端均先按 `Object.is` 短路匹配字面量，未命中时再交由当前内部 `Codec` 处理。连续相邻调用 `.or(a).or(b)` 与单次调用 `.or(a, b)` 等价，内部自动扁平化合并；与 `.check` 交错时严格遵循外层包裹内层的洋葱顺序。
 - **多分支从左到右联合（`Codec.union`）**：按参数顺序依次尝试分支，首个无错误返回的分支胜出并回滚前序分支的试探记录；全部分支均不匹配时报 `union.no_match`。
@@ -61,7 +63,7 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 父模型负责判断属性键是否存在，字段内部的 `Codec` 负责校验已存在键的值。两者互不混同。
 
-以 `SKU = string({ trim: true, minLength: 1 })` 为例：
+以 `SKU = string().trim().nonEmpty()` 为例：
 
 | 字段声明                       | `{}`         | `{ sku: null }` | `{ sku: undefined }` |
 | ------------------------------ | ------------ | --------------- | -------------------- |

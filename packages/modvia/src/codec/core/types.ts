@@ -258,6 +258,8 @@ export type CodecDescriptor =
       readonly kind: "number" | "integer";
       readonly min?: number;
       readonly max?: number;
+      readonly exclusiveMin?: number;
+      readonly exclusiveMax?: number;
     }>
   | WithDescription<{ readonly kind: "boolean" }>
   | WithDescription<{ readonly kind: "unknown" }>
@@ -318,3 +320,41 @@ export type CodecDescriptor =
       readonly encodedSchema?: Readonly<Record<string, unknown>>;
       readonly decodedSchema?: Readonly<Record<string, unknown>>;
     }>;
+
+/** Codec 核心保留成员键集合，自定义链式方法禁止覆盖 */
+export type ReservedCodecKey = keyof Codec<unknown, unknown>;
+
+/** 纯函数状态归并映射表：每个方法基于冻结旧状态计算新状态 */
+export type CodecMethodMap<S> = Readonly<
+  Record<string, (this: void, state: Readonly<S>, ...args: never[]) => S>
+>;
+
+/** 编译期拦截与 Codec 核心协议同名的自定义方法键 */
+export type DisallowReservedCodecKeys<M> = {
+  readonly [K in keyof M]: K extends ReservedCodecKey ? never : unknown;
+};
+
+/** 将纯状态归并函数映射为返回同族状态化 Codec 实例的链式方法签名 */
+export type BoundCodecMethods<T, Encoded, S extends object, M extends CodecMethodMap<S>> = {
+  readonly [K in keyof M]: M[K] extends (state: Readonly<S>, ...args: infer Args) => unknown
+    ? (this: void, ...args: Args) => StatefulCodec<T, Encoded, S, M>
+    : never;
+};
+
+export interface StatefulCodecBase<
+  T,
+  Encoded,
+  S extends object,
+  M extends CodecMethodMap<S>,
+> extends Codec<T, Encoded> {
+  /** 为当前实例附加静态文档说明文本，同时完整保留自有链式方法与当前状态 */
+  describe(this: void, description: string): StatefulCodec<T, Encoded, S, M>;
+}
+
+/** 携带不可变状态与自有链式派生方法的标准双向编解码器 */
+export type StatefulCodec<
+  T,
+  Encoded,
+  S extends object,
+  M extends CodecMethodMap<S>,
+> = StatefulCodecBase<T, Encoded, S, M> & BoundCodecMethods<T, Encoded, S, M>;

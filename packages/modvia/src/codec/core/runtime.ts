@@ -1,3 +1,4 @@
+import { isPlainObject, writeOwnField } from "../../shared/object.ts";
 import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
   createCollector,
@@ -15,12 +16,14 @@ import type {
   CodecContext,
   CodecDescriptor,
   CodecLike,
+  CodecMethodMap,
   DefaultProvider,
   Field,
   FieldLiteral,
   FieldPresence,
   SafeResult,
   StandardSchemaV1,
+  StatefulCodec,
   ValueCodecInput,
 } from "./types.ts";
 
@@ -216,14 +219,122 @@ export function extendCodec<T, Encoded, Extra extends object>(
       symbolMap.set(sym, value);
     }
   }
-  const extended = {
+  const extended: Codec<T, Encoded> & Extra = {
     ...base,
+    brand<const Name extends string | symbol>() {
+      return extended as unknown as Codec<Branded<T, Name>, Encoded>;
+    },
+    alias<NextSource extends string>(source: NextSource) {
+      assertValidSource(source);
+      return createField(extended, source, "required");
+    },
+    optional() {
+      return createField(extended, undefined, "optional");
+    },
+    default(provider: DefaultProvider<T>) {
+      return createField(extended, undefined, "defaulted", toDefaultResolver(provider));
+    },
     ...extra,
   };
   for (const [sym, value] of symbolMap) {
     Object.defineProperty(extended, sym, { value });
   }
   return Object.freeze(extended);
+}
+
+const reservedCodecKeys = new Set<string>([
+  "~standard",
+  "decode",
+  "encode",
+  "safeDecode",
+  "safeEncode",
+  "parse",
+  "safeParse",
+  "dump",
+  "safeDump",
+  "check",
+  "refine",
+  "normalize",
+  "brand",
+  "describe",
+  "pipe",
+  "or",
+  "nullable",
+  "alias",
+  "optional",
+  "default",
+  "__proto__",
+  "constructor",
+]);
+
+export interface StatefulCodecRuntimeSpec<
+  T,
+  Encoded,
+  S extends object,
+  M extends CodecMethodMap<S>,
+> {
+  readonly state: S;
+  readonly description?: string;
+  readonly validate?: (state: Readonly<S>) => void;
+  readonly createRunner: (state: Readonly<S>) => InternalRunner<T, Encoded>;
+  readonly createDescriptor: (state: Readonly<S>, description?: string) => CodecDescriptor;
+  readonly methods: M;
+}
+
+export function createStatefulCodec<T, Encoded, S extends object, M extends CodecMethodMap<S>>(
+  spec: StatefulCodecRuntimeSpec<T, Encoded, S, M>,
+): StatefulCodec<T, Encoded, S, M> {
+  if (!isPlainObject(spec.methods)) {
+    throw new TypeError("Codec methods must be a plain object");
+  }
+  const methodEntries = Object.entries(spec.methods);
+  for (const [name, reducer] of methodEntries) {
+    if (reservedCodecKeys.has(name)) {
+      throw new RangeError(
+        `Cannot define custom codec method "${name}" because it conflicts with a reserved Codec member`,
+      );
+    }
+    if (typeof reducer !== "function") {
+      throw new TypeError(`Codec method "${name}" must be a state reducer function`);
+    }
+  }
+  return instantiateStatefulCodec(spec, methodEntries);
+}
+
+function instantiateStatefulCodec<T, Encoded, S extends object, M extends CodecMethodMap<S>>(
+  spec: StatefulCodecRuntimeSpec<T, Encoded, S, M>,
+  methodEntries: ReadonlyArray<readonly [string, (state: Readonly<S>, ...args: never[]) => S]>,
+): StatefulCodec<T, Encoded, S, M> {
+  if (typeof spec.state !== "object" || spec.state === null) {
+    throw new TypeError("Codec state must be an object");
+  }
+  const frozenState = Object.freeze(
+    isPlainObject(spec.state) ? { ...spec.state } : spec.state,
+  ) as Readonly<S>;
+  spec.validate?.(frozenState);
+
+  const runner = spec.createRunner(frozenState);
+  const descriptor = spec.createDescriptor(frozenState, spec.description);
+  const baseCodec = createCodec<T, Encoded>(runner, { descriptor });
+
+  const extra: Record<string, unknown> = {
+    describe(description: string): StatefulCodec<T, Encoded, S, M> {
+      assertValidDescription(description);
+      return instantiateStatefulCodec({ ...spec, description }, methodEntries);
+    },
+  };
+
+  for (const [name, reducer] of methodEntries) {
+    writeOwnField(extra, name, (...args: never[]) => {
+      const nextState = reducer(frozenState, ...args);
+      if (typeof nextState !== "object" || nextState === null) {
+        throw new TypeError(`Codec method "${name}" must return a state object`);
+      }
+      return instantiateStatefulCodec({ ...spec, state: nextState }, methodEntries);
+    });
+  }
+
+  return extendCodec(baseCodec, extra) as unknown as StatefulCodec<T, Encoded, S, M>;
 }
 
 export function getCodecDescriptor(value: CodecLike<unknown, unknown>): CodecDescriptor {

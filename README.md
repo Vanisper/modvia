@@ -20,7 +20,7 @@ const User = Model.define({
   alias: Alias.snakeCase,
   fields: {
     id: string(),
-    name: string({ trim: true, minLength: 1 }),
+    name: string().trim().nonEmpty(),
     createdAt: isoDateTime(),
   },
 });

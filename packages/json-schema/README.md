@@ -25,10 +25,10 @@ const User = Model.define({
   alias: Alias.snakeCase,
   fields: {
     userId: uuid().describe("Primary user UUID"),
-    contactEmail: email({ trim: true, lowercase: true }),
-    username: string({ minLength: 3, maxLength: 20 }),
+    contactEmail: email().trim().lowercase(),
+    username: string().minLength(3).maxLength(20),
     role: oneOf("admin", "member").default("member"),
-    seatQuota: int({ min: 1, max: 100 }),
+    seatQuota: int().positive().max(100),
     createdAt: isoDateTime(),
   },
 }).describe("User profile contract");

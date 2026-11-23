@@ -16,7 +16,7 @@ import type { CodecLike, InferData, InferDTO, InferModel } from "../../src/index
 const DepartmentModel = Model.define({
   fields: {
     id: string(),
-    name: string({ trim: true, minLength: 1 }),
+    name: string().trim().nonEmpty(),
   },
 });
 
@@ -25,7 +25,7 @@ type DepartmentData = InferData<typeof DepartmentModel>;
 const UserModel = Model.define({
   fields: {
     id: string(),
-    name: string({ trim: true, minLength: 1 }),
+    name: string().trim().nonEmpty(),
     role: oneOf("admin", "manager", "member"),
     createdAt: isoDateTime().alias("created_at"),
     department: DepartmentModel,

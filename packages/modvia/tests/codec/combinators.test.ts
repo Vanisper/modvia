@@ -119,7 +119,8 @@ describe("codec combinators", () => {
   });
 
   test("normalize 在解码与编码两端维持幂等规范形态且满足往返收敛", () => {
-    const Email = string({ trim: true })
+    const Email = string()
+      .trim()
       .normalize((value) => value.toLowerCase())
       .refine((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value), "string.email", "Invalid email");
 
@@ -140,7 +141,8 @@ describe("codec combinators", () => {
   });
 
   test("check 与 or 混排遵循由内向外的包裹顺序", () => {
-    const slugOrNull = string({ trim: true })
+    const slugOrNull = string()
+      .trim()
       .check((value, context) => {
         if (!/^[a-z0-9-]+$/.test(value)) {
           context.fail("string.slug", "Expected a lowercase slug");
@@ -158,7 +160,8 @@ describe("codec combinators", () => {
   });
 
   test("pipe 正向串联解码并逆向串联编码，支持方法链与顶层调用", () => {
-    const trimmedPositiveInt = string({ trim: true })
+    const trimmedPositiveInt = string()
+      .trim()
       .pipe(intFromString)
       .check((value, context) => {
         if (value <= 0) context.fail("number.positive", "Expected > 0");
@@ -175,7 +178,7 @@ describe("codec combinators", () => {
       issues: [{ code: "number.positive" }],
     });
 
-    const topLevelPiped = Codec.pipe(string({ trim: true }), intFromString);
+    const topLevelPiped = Codec.pipe(string().trim(), intFromString);
     expect(topLevelPiped.decode(" 7 ")).toBe(7);
     expect(topLevelPiped.encode(7)).toBe("7");
 
@@ -211,7 +214,7 @@ describe("codec combinators", () => {
 
     const Category: Model<CategoryData, CategoryDTO> = Model.define({
       fields: {
-        id: string({ trim: true, minLength: 1 }),
+        id: string().trim().nonEmpty(),
         children: arrayOf(Codec.lazy(() => Category)),
       },
     });

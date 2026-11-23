@@ -53,7 +53,7 @@ describe("field binding", () => {
   });
 
   test("optional 控制父对象缺键，显式 undefined 仍由值规则决定", () => {
-    const SKU = string({ minLength: 1 });
+    const SKU = string().nonEmpty();
     const required = Model.define({ fields: { sku: SKU.or(undefined) } });
     const optional = Model.define({ fields: { sku: SKU.optional() } });
     const both = Model.define({ fields: { sku: SKU.optional().or(undefined) } });
