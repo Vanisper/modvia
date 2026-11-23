@@ -27,7 +27,7 @@ describe("field binding", () => {
     });
   });
 
-  test("alias 覆盖生效，optional 与 required 幂等转换，Field 纯粹承载对象槽位且不伪装为独立 Codec", () => {
+  test("alias 覆盖生效，optional 与 required 幂等转换，Field 精确暴露对象槽位属性与派生方法", () => {
     const base = number();
     const first = base.alias("old_key").optional();
     expect(first.optional()).toBe(first);
@@ -37,10 +37,19 @@ describe("field binding", () => {
     expect(rebound.source).toBe("new_key");
     expect(rebound.presence).toBe("required");
     expect(rebound.codec).toBe(base);
-    expect("parse" in rebound).toBe(false);
-    expect("decode" in rebound).toBe(false);
-    expect("encode" in rebound).toBe(false);
-    expect("~standard" in rebound).toBe(false);
+    expect(Object.keys(rebound).sort()).toStrictEqual([
+      "alias",
+      "codec",
+      "default",
+      "describe",
+      "description",
+      "nullable",
+      "optional",
+      "or",
+      "presence",
+      "required",
+      "source",
+    ]);
     expect(rebound.codec.parse(5)).toBe(5);
     expect(rebound.codec.dump(5)).toBe(5);
     expect(rebound.codec.safeParse("bad").ok).toBe(false);

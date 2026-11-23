@@ -15,12 +15,12 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 
 系统由四个渐进接口与对应的主体命名空间构成：
 
-| 接口 / 主体                     | 所属作用域 | 职责与静态操作                                                                                                                    |
-| ------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `CodecLike<T, E>`               | 值级协议   | 最小双向实现协议，正反两端均接收 `unknown` 做运行时防御并分别产出 `T` 与 `E`，供自定义对象直接接入。                              |
-| `Codec<T, E>`                   | 值级主体   | 标准双向编解码器与元操作命名空间（`Codec.define`、`Codec.inspect`、`Codec.pipe`、`Codec.invert`、`Codec.lazy`、`Codec.union`）。  |
-| `Field<T, E, Source, Presence>` | 对象属性级 | 纯对象属性槽位描述符（非独立值级 `Codec`，承载槽位级 `source`、`presence` 与 `description`）；静态提供 `Field.of` 与 `Field.is`。 |
-| `Model<Data, DTO, Out>`         | 领域模型级 | 组合字段表形成对象契约（本身亦是 `Codec<Out, DTO>`）；静态提供 `Model.define` 与 `Model.union`，键映射策略归属 `Alias` 命名空间。 |
+| 接口 / 主体                     | 所属作用域 | 职责与静态操作                                                                                                                          |
+| ------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `CodecLike<T, E>`               | 值级协议   | 最小双向协变协议，正反两端均接收 `unknown` 做运行时防御并分别产出 `T` 与 `E`，供自定义对象直接接入。                                    |
+| `Codec<T, E>`                   | 值级主体   | 标准双向编解码器与元操作命名空间（`Codec.define`、`Codec.inspect`、`Codec.pipe`、`Codec.invert`、`Codec.lazy`、`Codec.union`）。        |
+| `Field<T, E, Source, Presence>` | 对象属性级 | 对象属性槽位描述符（实现协变协议 `FieldLike`，承载槽位级 `source`、`presence`、`description` 与 `codec`）；静态提供 `Field.of` / `is`。 |
+| `Model<Data, DTO, Out>`         | 领域模型级 | 组合字段表形成对象契约（本身亦是 `Codec<Out, DTO>`）；静态提供 `Model.define` 与 `Model.union`，键映射策略归属 `Alias` 命名空间。       |
 
 内置 0 阶标量（`string`、`number`、`int`、`bigint`、`boolean`、`oneOf`、`literal`、`unknown`、`isoDateTime`）与 1 阶值容器（`arrayOf`、`tupleOf`、`recordOf`）作为高频数据形态构造器直接导入，与 `Codec.*` 组合算子及 `Model.define` 统一返回标准 `Codec`：
 
@@ -43,7 +43,7 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - **抛错与安全结果对偶**：`safeDecode`、`safeEncode`、`safeParse` 与 `safeDump` 直接返回冻结的判别联合 `SafeResult<T>`，全程不构造 `Error` 实例；普通方法仅在顶层出口一次性构造并抛出 `ValidationError`（可通过 `ValidationError.is(err)` 跨上下文识别）。
 - 自定义底层规则（`Codec.define` / `CodecLike`）在正反两端均须校验 `unknown` 输入，可通过 `context.fail(code, message)` 立即中断当前规则，或通过 `context.issue({ code, message, path? })` 非中断收集多条错误及相对子路径；其他普通运行时异常原样向外传播。
 - **执行闭包与只读结构描述符分离**：运行时校验始终直接执行极简函数闭包，不经过 AST 解释器；内置标量（含长度/区间/正则配置）、容器、组合子、模型与 `modvia/formats` 构造时同步挂载冻结的 `CodecDescriptor`（可通过 `Codec.inspect(codec)` 读取，支持 `.describe(text)` 附加静态文档说明，`.refine` / `.check` / `.normalize` / `.brand` 自动透传底层结构描述符），供独立包 `@modvia/json-schema` 按 DTO 或 Data 视角零损耗导出 JSON Schema 与 OpenAPI 规范。
-- 所有值级 `Codec` 与 `Model` 均向外挂载 `StandardSchemaV1` 的 `"~standard"` 属性，供表单与全栈框架零依赖消费；核心包不提供将单向黑盒 `StandardSchemaV1` 反向伪装为双向 `Codec` 的入口，第三方校验库统一通过可检查 AST 与反向编码能力的独立适配包（如 `@modvia/zod`）桥接。
+- 所有值级 `Codec` 与 `Model` 均原生实现 `StandardSchemaV1`（`"~standard"`），可直接接入支持该协议的表单与服务端框架；外部校验生态向 Modvia 的双向接入统一由专用适配包（如 `@modvia/zod`）基于 AST 可逆性校验与原生反向编码承接。
 
 ## 组合代数、信息维度与三阶单向跃迁
 
@@ -147,13 +147,13 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - **日历与范围校验**：先按输入字面值校验公历闰年与月日合法性，再将亚毫秒小数截断为毫秒并按偏移换算为 UTC；超出原生 `Date` 可表示范围（距 Unix 纪元超过 `±8_640_000_000_000_000` 毫秒）时报 `datetime.out_of_range`。
 - **编码格式**：通过 `Date.prototype.toISOString` 统一输出毫秒精度的 UTC 字符串（`0000`–`9999` 年输出四位年份，其余范围输出带符号六位年份），确保任意有效 `Date`（含跨上下文实例与自定义子类）均可无损往返。
 
-## 设计红线（Non-Goals）
+## 设计边界
 
-以下能力因破坏双向可逆性、作用域纯粹性或零依赖边界，明确排除在设计范围之外：
+为守住双向可逆性、作用域正交与零依赖原则，系统确立以下边界约束：
 
-- **异步编解码与远程 I/O 规则**：所有 `Codec` 与 `Model` 保持 100% 同步确定性计算，不引入 `Promise` 执行分支。
-- **单向转换、隐式强转与单向黑盒接入**：不提供 `.transform()`、`.preprocess()`、`coerce` 或无反向契约保证的单向 Schema 吞入接口。
-- **吞错兜底（`.catch`）**：`.default()` 仅处理父对象合法缺键，绝不静默吞没已存在键的类型或格式错误。
-- **单字段方向分裂开关（`readOnly` / `writeOnly` / `groups`）**：读写契约差异统一通过 `pick`、`omit`、`partial`、`extend` 派生独立模型表达。
-- **未知属性混入（`.passthrough`）与深层递归可选化（`.deepPartial`）**：动态透传字段须显式声明 `recordOf(unknown())` 或 `unknown()`，可选化仅限单层明确声明。
-- **装饰器侵入与内置文案国际化字典**：领域 `class` 始终通过外部 `withFactory` 无侵入装配，核心仅维护机器可读的稳定 `issue.code`。
+- **同步确定性执行**：所有 `Codec` 与 `Model` 均为同步纯计算，I/O 与远程存在性校验归属应用服务层。
+- **显式可逆变形**：跨类型转换须同时提供正向 `decode` 与反向 `encode`，不引入单向转换或隐式宽泛强转。
+- **缺键补全与值错误分离**：`.default()` 仅作用于父对象缺键场景，已存在键的值违规始终显式报告错误。
+- **模型派生替代方向开关**：读写契约差异通过 `pick`、`omit`、`partial`、`extend` 派生独立模型表达，不在单字段引入读写方向开关。
+- **显式动态载荷与单层可选化**：动态扩展数据须显式声明为 `unknown()` 或 `recordOf(unknown())`，局部更新可选化保持单层明确边界。
+- **外部无侵入装配与稳定错误码**：领域 `class` 经由 `withFactory` 从外部构造，校验失败统一输出机器可读的稳定 `issue.code` 供上层映射多语言文案。

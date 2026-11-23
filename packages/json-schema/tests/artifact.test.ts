@@ -1,3 +1,4 @@
+import * as jsonSchemaEntry from "@modvia/json-schema";
 import { toJsonSchema, withJsonSchema } from "@modvia/json-schema";
 import { Alias, int, Model, string } from "modvia";
 import { email } from "modvia/formats";
@@ -5,6 +6,7 @@ import { describe, expect, test } from "vite-plus/test";
 
 describe("@modvia/json-schema packaged artifact", () => {
   test("通过包出口消费 @modvia/json-schema、modvia 与 modvia/formats 完成 Schema 导出", () => {
+    expect(Object.keys(jsonSchemaEntry).sort()).toStrictEqual(["toJsonSchema", "withJsonSchema"]);
     const CreateMember = withJsonSchema(
       Model.define({
         alias: Alias.snakeCase,

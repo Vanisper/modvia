@@ -1,15 +1,6 @@
 import { defineCodec } from "../../codec/core/define.ts";
 import type { Codec, CodecContext } from "../../codec/core/types.ts";
-
-export function isValidIpv4(value: string): boolean {
-  const parts = value.split(".");
-  if (parts.length !== 4) return false;
-  for (const part of parts) {
-    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return false;
-    if (Number(part) > 255) return false;
-  }
-  return true;
-}
+import { isValidIpv4 } from "../../scalars/ip.ts";
 
 function validateIpv4(input: unknown, context: CodecContext): string {
   if (typeof input !== "string") {

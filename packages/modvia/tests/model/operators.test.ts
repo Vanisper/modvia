@@ -268,7 +268,7 @@ describe("model introspection & derivation", () => {
       ],
     });
 
-    // strict 作为模型边界策略与 pick / omit / partial / extend 完全可交换，派生时不退化丢失
+    // strict 作为模型边界策略与 pick / omit / partial / extend 可交换并在派生后保持一致
     expect(StrictAccount.pick("id").safeParse({ id: "u-1", extra: 1 })).toMatchObject({
       ok: false,
       issues: [{ path: ["extra"], code: "object.unknown_key" }],

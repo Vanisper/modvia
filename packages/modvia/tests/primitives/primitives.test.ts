@@ -16,7 +16,7 @@ import { Model } from "../../src/index.ts";
 
 const instant = isoDateTime();
 
-describe("built-in scalars", () => {
+describe("primitive codecs", () => {
   test("string 支持链式 trim、长度、固定长度、nonEmpty 与正则派生，且归并状态后始终先裁剪再守卫长度", () => {
     const slug = string()
       .trim()
