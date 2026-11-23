@@ -1,19 +1,41 @@
 {
   "name": "modvia",
   "version": "0.0.0",
-  "private": true,
   "description": "A TypeScript bidirectional codec and domain model layer for runtime validation, DTO mapping, and serialization.",
+  "keywords": [
+    "bidirectional",
+    "codec",
+    "domain-model",
+    "dto",
+    "serialization",
+    "standard-schema",
+    "typescript",
+    "validation"
+  ],
+  "homepage": "https://github.com/Vanisper/modvia#readme",
+  "bugs": {
+    "url": "https://github.com/Vanisper/modvia/issues"
+  },
   "license": "MIT",
+  "author": "Vanisper",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanisper/modvia.git",
+    "directory": "packages/modvia"
+  },
   "files": [
     "dist"
   ],
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./dist/index.mjs",
-    "./codec": "./dist/codec.mjs",
-    "./formats": "./dist/formats.mjs",
+    ".": "./dist/index.js",
+    "./codec": "./dist/codec.js",
+    "./formats": "./dist/formats.js",
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",

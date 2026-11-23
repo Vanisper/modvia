@@ -57,8 +57,8 @@ vp run ready
 
 `vp run ready` 按依赖顺序执行：
 
-1. 工作区构建（生成 `dist` 与类型声明）；
+1. 工作区构建（生成 `dist` 与类型声明，并通过 `publint` 与 `attw` 校验包出口契约）；
 2. 格式、静态检查与分层依赖守卫；
 3. 单元与产物集成测试（`tests/artifact.test.ts` 直接通过 `modvia`、`modvia/codec`、`modvia/formats`、`@modvia/json-schema` 与 `@modvia/zod` 包出口验证构建产物）。
 
-核心实现位于 `packages/modvia`，生态导出与桥接位于 `packages/json-schema` 与 `packages/zod`；`apps/website` 与 `packages/utils` 仅保留为 Vite+ 工具链示例。
+核心实现位于 `packages/modvia`，生态导出与桥接位于 `packages/json-schema` 与 `packages/zod`。

@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "ready": "vp run -r build && vp check && vp run -r test",
-    "dev": "vp run website#dev",
     "prepare": "vp config"
   },
   "devDependencies": {
+    "@arethetypeswrong/core": "catalog:",
+    "publint": "catalog:",
     "vite-plus": "catalog:"
   },
   "devEngines": {
