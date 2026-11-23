@@ -13,6 +13,7 @@ import type {
   Branded,
   Codec,
   CodecContext,
+  CodecDescriptor,
   CodecLike,
   DefaultProvider,
   Field,
@@ -36,7 +37,10 @@ const literalStateSymbol = Symbol.for("modvia.literalState");
 const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
 const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
 const defaultResolverSymbol = Symbol.for("modvia.defaultResolver");
+const descriptorSymbol = Symbol.for("modvia.codecDescriptor");
 export const fieldBrand = Symbol.for("modvia.Field");
+
+const defaultCustomDescriptor: CodecDescriptor = Object.freeze({ kind: "custom" });
 
 interface LiteralState {
   readonly base: Codec<unknown, unknown>;
@@ -47,6 +51,7 @@ export interface CodecMetadata {
   readonly literalState?: LiteralState;
   readonly allowedLiterals?: readonly FieldLiteral[];
   readonly decodeSegmentMapper?: SegmentMapper;
+  readonly descriptor?: CodecDescriptor;
 }
 
 export function createCodec<T, Encoded>(
@@ -178,6 +183,9 @@ export function createCodec<T, Encoded>(
   if (decodeSegmentMapper) {
     Object.defineProperty(codec, segmentMapperSymbol, { value: decodeSegmentMapper });
   }
+  if (metadata?.descriptor) {
+    Object.defineProperty(codec, descriptorSymbol, { value: Object.freeze(metadata.descriptor) });
+  }
   return Object.freeze(codec);
 }
 
@@ -188,6 +196,7 @@ export function extendCodec<T, Encoded, Extra extends object>(
 ): Codec<T, Encoded> & Extra {
   const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
   const segmentMapper = Reflect.get(base, segmentMapperSymbol) as SegmentMapper | undefined;
+  const descriptor = Reflect.get(base, descriptorSymbol) as CodecDescriptor | undefined;
   const extended = {
     ...base,
     ...extra,
@@ -198,12 +207,26 @@ export function extendCodec<T, Encoded, Extra extends object>(
   if (segmentMapper) {
     Object.defineProperty(extended, segmentMapperSymbol, { value: segmentMapper });
   }
+  if (descriptor) {
+    Object.defineProperty(extended, descriptorSymbol, { value: descriptor });
+  }
   if (extraSymbols) {
     for (const [sym, value] of extraSymbols) {
       Object.defineProperty(extended, sym, { value });
     }
   }
   return Object.freeze(extended);
+}
+
+export function getCodecDescriptor(value: CodecLike<unknown, unknown>): CodecDescriptor {
+  if (isFieldDescriptor(value)) {
+    return getCodecDescriptor(value.codec);
+  }
+  if (typeof value === "object" && value !== null) {
+    const descriptor = Reflect.get(value, descriptorSymbol) as CodecDescriptor | undefined;
+    if (descriptor !== undefined) return descriptor;
+  }
+  return defaultCustomDescriptor;
 }
 
 export function executeCodec<T, Encoded>(
@@ -385,16 +408,28 @@ export function createPipedCodec<Mid, Encoded, Out>(
   assertValueCodec(first, "pipe");
   assertValueCodec(second, "pipe");
 
-  return createCodec<Out, Encoded>((input, direction, collector) => {
-    if (direction === "decode") {
-      const mid = executeCodec(first, input, "decode", collector);
+  const firstCodec = promoteToCodec(first);
+  const secondCodec = promoteToCodec(second);
+
+  return createCodec<Out, Encoded>(
+    (input, direction, collector) => {
+      if (direction === "decode") {
+        const mid = executeCodec(firstCodec, input, "decode", collector);
+        if (mid === INVALID) return INVALID;
+        return executeCodec(secondCodec, mid, "decode", collector);
+      }
+      const mid = executeCodec(secondCodec, input, "encode", collector);
       if (mid === INVALID) return INVALID;
-      return executeCodec(second, mid, "decode", collector);
-    }
-    const mid = executeCodec(second, input, "encode", collector);
-    if (mid === INVALID) return INVALID;
-    return executeCodec(first, mid, "encode", collector);
-  });
+      return executeCodec(firstCodec, mid, "encode", collector);
+    },
+    {
+      descriptor: {
+        kind: "pipe",
+        first: firstCodec as Codec<unknown, unknown>,
+        second: secondCodec as Codec<unknown, unknown>,
+      },
+    },
+  );
 }
 
 export function getStaticLiterals(
@@ -438,7 +473,7 @@ function createCheckedCodec<T, Encoded>(
         throw error;
       }
     },
-    { decodeSegmentMapper },
+    { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
   );
 }
 
@@ -460,7 +495,7 @@ function createNormalizedCodec<T, Encoded>(
       if (Object.is(normalized, input)) return firstPass;
       return executeCodec(base, normalized, "encode", collector);
     },
-    { decodeSegmentMapper },
+    { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
   );
 }
 
@@ -489,6 +524,10 @@ function createLiteralExtendedCodec<
 ): Codec<T | Literals[number], Encoded | Literals[number]> {
   const base = (existingState?.base ?? current) as Codec<T, Encoded>;
   const mergedLiterals = deduplicateLiterals(existingState?.literals ?? [], addedLiterals);
+  const literalState: LiteralState = {
+    base: base as Codec<unknown, unknown>,
+    literals: mergedLiterals,
+  };
 
   return createCodec<T | Literals[number], Encoded | Literals[number]>(
     (input, direction, collector) => {
@@ -498,8 +537,10 @@ function createLiteralExtendedCodec<
       return executeCodec(base, input, direction, collector);
     },
     {
-      literalState: {
-        base: base as Codec<unknown, unknown>,
+      literalState,
+      descriptor: {
+        kind: "or",
+        base: literalState.base,
         literals: mergedLiterals,
       },
     },

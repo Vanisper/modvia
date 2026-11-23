@@ -16,7 +16,14 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
-              patterns: ["../codec", "../codec/**", "../model", "../model/**"],
+              patterns: [
+                "../codec",
+                "../codec/**",
+                "../formats",
+                "../formats/**",
+                "../model",
+                "../model/**",
+              ],
             },
           ],
         },
@@ -27,7 +34,38 @@ export default defineConfig({
           "no-restricted-imports": [
             "error",
             {
+              patterns: [
+                "../formats",
+                "../formats/**",
+                "../../formats",
+                "../../formats/**",
+                "../model",
+                "../model/**",
+                "../../model",
+                "../../model/**",
+              ],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/formats/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
               patterns: ["../model", "../model/**", "../../model", "../../model/**"],
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/modvia/src/model/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: ["../formats", "../formats/**", "../../formats", "../../formats/**"],
             },
           ],
         },

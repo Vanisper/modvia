@@ -14,38 +14,68 @@ import { defineModel } from "../../src/index.ts";
 const instant = isoDateTime();
 
 describe("built-in scalars", () => {
-  test("string 按配置执行 trim 与 UTF-16 长度校验，并在定义期检查 minLength", () => {
-    const nonBlank = string({ trim: true, minLength: 2 });
-    expect(nonBlank.decode("  林舟  ")).toBe("林舟");
-    expect(nonBlank.encode("  林舟  ")).toBe("林舟");
-    expect(nonBlank.decode("🙂")).toBe("🙂");
-    expect(nonBlank.safeDecode(" a ")).toMatchObject({
+  test("string 按配置执行 trim、UTF-16 长度上下界与无状态正则校验，并在定义期检查参数", () => {
+    const slug = string({
+      trim: true,
+      minLength: 2,
+      maxLength: 8,
+      pattern: /^[a-z0-9-]+$/g, // 即使传入带 g 标志的正则，连续调用亦保持无状态幂等
+    });
+    expect(slug.decode("  ab-12  ")).toBe("ab-12");
+    expect(slug.decode("  ab-12  ")).toBe("ab-12");
+    expect(slug.encode("  ab-12  ")).toBe("ab-12");
+    expect(slug.safeDecode(" a ")).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "string.min_length" }],
     });
-    expect(nonBlank.safeParse(12)).toMatchObject({
+    expect(slug.safeDecode("too-long-slug")).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "string.max_length" }],
+    });
+    expect(slug.safeDecode("Bad_Slug")).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "string.pattern" }],
+    });
+    expect(slug.safeParse(12)).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "type.string" }],
     });
-    expect(nonBlank.safeDump(12)).toMatchObject({
+    expect(slug.safeDump(12)).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "type.string" }],
     });
+
+    expect(string({ minLength: 2 }).decode("🙂")).toBe("🙂");
 
     for (const invalid of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => string({ minLength: invalid })).toThrow(RangeError);
+      expect(() => string({ maxLength: invalid })).toThrow(RangeError);
     }
+    expect(() => string({ minLength: 5, maxLength: 3 })).toThrow(RangeError);
+    // @ts-expect-error pattern 必须为 RegExp 实例
+    expect(() => string({ pattern: "^a$" })).toThrow(TypeError);
   });
 
-  test("number、boolean 与 oneOf 严格校验基础类型与枚举范围", () => {
-    const finite = number();
-    expect(finite.decode(0)).toBe(0);
+  test("number、int、boolean 与 oneOf 严格校验基础类型、数值闭区间与枚举范围", () => {
+    const percentage = number({ min: 0, max: 100 });
+    expect(percentage.decode(0)).toBe(0);
+    expect(percentage.encode(100)).toBe(100);
+    expect(percentage.safeDecode(-0.1)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.min" }],
+    });
+    expect(percentage.safeEncode(100.1)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.max" }],
+    });
     for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, "1"]) {
-      expect(finite.safeParse(invalid)).toMatchObject({
+      expect(percentage.safeParse(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "type.number" }],
       });
     }
+    expect(() => number({ min: Number.NaN })).toThrow(RangeError);
+    expect(() => number({ min: 10, max: 5 })).toThrow(RangeError);
 
     const flag = boolean();
     expect(flag.decode(false)).toBe(false);
@@ -62,15 +92,25 @@ describe("built-in scalars", () => {
       issues: [{ code: "string.one_of" }],
     });
 
-    const safeInt = int();
-    expect(safeInt.decode(0)).toBe(0);
-    expect(safeInt.encode(-42)).toBe(-42);
+    const port = int({ min: 1, max: 65535 });
+    expect(port.decode(8080)).toBe(8080);
+    expect(port.encode(443)).toBe(443);
+    expect(port.safeDecode(0)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.min" }],
+    });
+    expect(port.safeEncode(70000)).toMatchObject({
+      ok: false,
+      issues: [{ code: "number.max" }],
+    });
     for (const invalid of [1.5, 1e25, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
-      expect(safeInt.safeParse(invalid)).toMatchObject({
+      expect(port.safeParse(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "type.integer" }],
       });
     }
+    expect(() => int({ min: 1.5 })).toThrow(RangeError);
+    expect(() => int({ min: 10, max: 5 })).toThrow(RangeError);
 
     const passthrough = unknown();
     const complex = { nested: [1, true, null] };

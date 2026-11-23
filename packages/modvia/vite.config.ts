@@ -5,6 +5,7 @@ export default defineConfig({
     entry: {
       index: "src/index.ts",
       codec: "src/codec/index.ts",
+      formats: "src/formats/index.ts",
     },
     dts: {
       generator: "tsgo",

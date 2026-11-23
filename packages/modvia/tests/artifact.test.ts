@@ -13,6 +13,7 @@ import {
   type InferDTO,
 } from "modvia";
 import * as codecEntry from "modvia/codec";
+import { email, jsonOf, uuid } from "modvia/formats";
 
 // 通过包出口消费打包产物（modvia → dist/index.mjs，modvia/codec → dist/codec.mjs），
 // 必须在工作区构建之后运行（vp run ready 已按 构建 → 检查 → 测试 排序）。
@@ -95,6 +96,27 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     expect(nums.safeDecode([1, "auto", null])).toStrictEqual({
       ok: true,
       value: [1, "auto", null],
+    });
+
+    const AccountJson = jsonOf(
+      defineModel({
+        alias: snakeCase,
+        fields: {
+          accountId: uuid(),
+          contactEmail: email({ trim: true, lowercase: true }),
+        },
+      }),
+    );
+    const account = AccountJson.decode(
+      '{"account_id":"550E8400-E29B-41D4-A716-446655440000","contact_email":" Ops@Example.com "}',
+    );
+    expect(account).toStrictEqual({
+      accountId: "550e8400-e29b-41d4-a716-446655440000",
+      contactEmail: "ops@example.com",
+    });
+    expect(JSON.parse(AccountJson.encode(account))).toStrictEqual({
+      account_id: "550e8400-e29b-41d4-a716-446655440000",
+      contact_email: "ops@example.com",
     });
   });
 

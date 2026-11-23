@@ -5,6 +5,8 @@ import {
   defineCodec,
   field,
   fromStandard,
+  inspectCodec,
+  int,
   isValidationError,
   isoDateTime,
   number,
@@ -17,6 +19,7 @@ import {
   type InferValue,
   type StandardSchemaV1,
 } from "../../src/codec/index.ts";
+import { defineModel, literal, taggedUnion } from "../../src/index.ts";
 
 const intFromString = defineCodec<number, string>({
   decode(input, context) {
@@ -254,5 +257,58 @@ describe("codec kernel", () => {
     acceptUserId(oid);
     // @ts-expect-error 裸 string 不可直接传入品牌参数
     acceptUserId("u-1");
+  });
+
+  test("inspectCodec 公开只读结构描述符，并在精化/规范化/品牌/字段与工厂派生下保持结构透明", () => {
+    const Username = string({ trim: true, minLength: 3, maxLength: 16, pattern: /^[a-z0-9_]+$/ })
+      .normalize((s) => s.toLowerCase())
+      .refine((s) => !s.startsWith("_"), "user.leading_underscore", "No leading underscore")
+      .brand<"Username">();
+
+    expect(inspectCodec(Username)).toStrictEqual({
+      kind: "string",
+      trim: true,
+      minLength: 3,
+      maxLength: 16,
+      pattern: "^[a-z0-9_]+$",
+    });
+    expect(inspectCodec(Username.alias("user_name").optional())).toBe(inspectCodec(Username));
+    expect(inspectCodec(int({ min: 0, max: 10 }))).toStrictEqual({
+      kind: "integer",
+      min: 0,
+      max: 10,
+    });
+
+    const NullableDate = isoDateTime().nullable();
+    expect(inspectCodec(NullableDate)).toMatchObject({
+      kind: "or",
+      literals: [null],
+    });
+
+    const ItemA = defineModel({ fields: { type: literal("a").alias("item_type"), val: Username } });
+    const ItemB = defineModel({ fields: { type: literal("b").alias("item_type") } });
+    const DerivedA = ItemA.withFactory((d) => ({ ...d, extra: true }));
+    expect(inspectCodec(DerivedA)).toStrictEqual({
+      kind: "model",
+      fields: ItemA.fields,
+    });
+
+    const Poly = taggedUnion("type", [DerivedA, ItemB]);
+    expect(inspectCodec(Poly)).toMatchObject({
+      kind: "taggedUnion",
+      discriminator: "type",
+      externalKey: "item_type",
+    });
+
+    const CustomDecimal = defineCodec<number, string>({
+      decode: (v) => Number(v),
+      encode: (v) => String(v),
+      meta: { format: "decimal", encodedSchema: { type: "string", format: "decimal" } },
+    });
+    expect(inspectCodec(CustomDecimal)).toStrictEqual({
+      kind: "custom",
+      format: "decimal",
+      encodedSchema: { type: "string", format: "decimal" },
+    });
   });
 });

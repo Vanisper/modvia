@@ -41,6 +41,7 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - **`parse` / `dump`**：面向编译期未知或动态来源（如原始网络载荷、未定型表单草稿、通用缓存/消息中间件），运行时验明正身并转换。
 - **抛错与安全结果对偶**：`safeDecode`、`safeEncode`、`safeParse` 与 `safeDump` 直接返回冻结的判别联合 `SafeResult<T>`，全程不构造 `Error` 实例；普通方法仅在顶层出口一次性构造并抛出 `ValidationError`。
 - 自定义底层规则（`defineCodec` / `CodecLike`）在正反两端均须校验 `unknown` 输入，可通过 `context.fail(code, message)` 立即中断当前规则，或通过 `context.issue({ code, message, path? })` 非中断收集多条错误及相对子路径；其他普通运行时异常原样向外传播。
+- **执行闭包与只读结构描述符分离**：运行时校验始终直接执行极简函数闭包，不经过 AST 解释器；内置标量（含长度/区间/正则配置）、容器、组合子、模型与 `modvia/formats` 构造时同步挂载冻结的 `CodecDescriptor`（可通过 `inspectCodec(codec)` 读取，`.refine` / `.check` / `.normalize` / `.brand` 自动透传底层结构描述符），供独立包 `@modvia/json-schema` 按 DTO 或 Data 视角零损耗导出 JSON Schema 与 OpenAPI 规范。
 - 所有 `Codec`、`Field` 与 `Model` 均原生挂载 `StandardSchemaV1` 的 `"~standard"` 属性，同时可通过零依赖的 `fromStandard(schema)` 将外部同步 `StandardSchemaV1` 校验器桥接为对称 `Codec`。
 
 ## 组合代数与链式规则

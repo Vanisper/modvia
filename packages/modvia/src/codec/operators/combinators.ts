@@ -1,6 +1,12 @@
 import { INVALID } from "../core/collector.ts";
-import { assertValueCodec, createCodec, createPipedCodec, executeCodec } from "../core/runtime.ts";
-import type { Codec, CodecLike, InferEncoded, InferValue, ValueCodecInput } from "../core/types.ts";
+import {
+  assertValueCodec,
+  createCodec,
+  createPipedCodec,
+  executeCodec,
+  promoteToCodec,
+} from "../core/runtime.ts";
+import type { Codec, InferEncoded, InferValue, ValueCodecInput } from "../core/types.ts";
 
 /**
  * 将两个值级 Codec 首尾串联为双向管道
@@ -17,8 +23,16 @@ export function pipe<Mid, Encoded, Out>(
 /** 交换 Codec 的解码与编码方向 */
 export function invert<T, Encoded>(codec: ValueCodecInput<T, Encoded>): Codec<Encoded, T> {
   assertValueCodec(codec, "invert");
-  return createCodec<Encoded, T>((input, direction, collector) =>
-    executeCodec(codec, input, direction === "decode" ? "encode" : "decode", collector),
+  const innerCodec = promoteToCodec(codec);
+  return createCodec<Encoded, T>(
+    (input, direction, collector) =>
+      executeCodec(innerCodec, input, direction === "decode" ? "encode" : "decode", collector),
+    {
+      descriptor: {
+        kind: "invert",
+        inner: innerCodec as Codec<unknown, unknown>,
+      },
+    },
   );
 }
 
@@ -28,18 +42,24 @@ export function lazy<T, Encoded = T>(getter: () => ValueCodecInput<T, Encoded>):
     throw new TypeError("lazy requires a function returning a Codec");
   }
 
-  let cached: CodecLike<T, Encoded> | undefined;
-  const resolveTarget = (): CodecLike<T, Encoded> => {
+  let cached: Codec<T, Encoded> | undefined;
+  const resolveTarget = (): Codec<T, Encoded> => {
     if (cached === undefined) {
       const target = getter();
       assertValueCodec(target, "lazy");
-      cached = target;
+      cached = promoteToCodec(target);
     }
     return cached;
   };
 
-  return createCodec<T, Encoded>((input, direction, collector) =>
-    executeCodec(resolveTarget(), input, direction, collector),
+  return createCodec<T, Encoded>(
+    (input, direction, collector) => executeCodec(resolveTarget(), input, direction, collector),
+    {
+      descriptor: {
+        kind: "lazy",
+        resolve: () => resolveTarget() as Codec<unknown, unknown>,
+      },
+    },
   );
 }
 
@@ -62,19 +82,29 @@ export function unionOf<
     assertValueCodec(branch, "unionOf");
   }
 
+  const promotedBranches = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
+
   type UnionValue = InferValue<Branches[number]>;
   type UnionEncoded = InferEncoded<Branches[number]>;
 
-  return createCodec<UnionValue, UnionEncoded>((input, direction, collector) => {
-    const mark = collector.mark();
-    for (const branch of branches) {
-      const result = executeCodec(branch, input, direction, collector);
-      if (result !== INVALID) {
+  return createCodec<UnionValue, UnionEncoded>(
+    (input, direction, collector) => {
+      const mark = collector.mark();
+      for (const branch of promotedBranches) {
+        const result = executeCodec(branch, input, direction, collector);
+        if (result !== INVALID) {
+          collector.restore(mark);
+          return result as UnionValue | UnionEncoded;
+        }
         collector.restore(mark);
-        return result as UnionValue | UnionEncoded;
       }
-      collector.restore(mark);
-    }
-    return collector.add("union.no_match", "Input did not match any union branch");
-  });
+      return collector.add("union.no_match", "Input did not match any union branch");
+    },
+    {
+      descriptor: {
+        kind: "union",
+        branches: promotedBranches,
+      },
+    },
+  );
 }

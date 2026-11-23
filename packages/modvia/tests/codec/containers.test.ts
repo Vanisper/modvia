@@ -1,5 +1,13 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
-import { isoDateTime, number, oneOf, recordOf, string, tupleOf } from "../../src/codec/index.ts";
+import {
+  arrayOf,
+  isoDateTime,
+  number,
+  oneOf,
+  recordOf,
+  string,
+  tupleOf,
+} from "../../src/codec/index.ts";
 import { defineModel, type InferEncoded, type InferValue } from "../../src/index.ts";
 
 const Metric = defineModel({
@@ -111,5 +119,22 @@ describe("containers (recordOf)", () => {
 
     // @ts-expect-error tupleOf 不接受带属性修饰的 Field
     expect(() => tupleOf(string().optional())).toThrow(TypeError);
+  });
+
+  test("arrayOf 支持配置 minLength 与 maxLength 并在越界时短路返回稳定错误码", () => {
+    const BoundedTags = arrayOf(string({ minLength: 1 }), { minLength: 1, maxLength: 3 });
+
+    expect(BoundedTags.decode(["a", "b"])).toStrictEqual(["a", "b"]);
+    expect(BoundedTags.safeDecode([])).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "array.min_length" }],
+    });
+    expect(BoundedTags.safeEncode(["a", "b", "c", "d"])).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "array.max_length" }],
+    });
+
+    expect(() => arrayOf(string(), { minLength: -1 })).toThrow(RangeError);
+    expect(() => arrayOf(string(), { minLength: 3, maxLength: 2 })).toThrow(RangeError);
   });
 });
