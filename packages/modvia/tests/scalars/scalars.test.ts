@@ -7,6 +7,7 @@ import {
   validateDiscreteBigIntBounds,
   validateDiscreteIntBounds,
 } from "../../src/scalars/bounds/ordered.ts";
+import { isValidIpv4, isValidIpv6 } from "../../src/scalars/ip.ts";
 import { parseBigIntString } from "../../src/scalars/numeric/bigint.ts";
 import { parseSafeIntString } from "../../src/scalars/numeric/int.ts";
 import { parseFiniteNumberString } from "../../src/scalars/numeric/number.ts";
@@ -67,5 +68,10 @@ describe("pure scalar atoms (zero Codec coupling)", () => {
     expect(checkIsoDateString("2025-02-29")).toBe("invalid_calendar");
     expect(checkIsoTimeString("23:59:59.5")).toBe("ok");
     expect(checkIsoTimeString("24:00:00")).toBe("invalid_clock");
+
+    expect(isValidIpv4("192.168.1.1")).toBe(true);
+    expect(isValidIpv4("192.168.01.1")).toBe(false);
+    expect(isValidIpv6("::ffff:192.0.2.128")).toBe(true);
+    expect(isValidIpv6("2001::85a3::7334")).toBe(false);
   });
 });

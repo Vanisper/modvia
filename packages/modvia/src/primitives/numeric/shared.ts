@@ -1,6 +1,6 @@
 import type { Invalid, IssueCollector } from "../../codec/core/collector.ts";
 import { createStatefulCodec, type InternalRunner } from "../../codec/core/runtime.ts";
-import type { CodecDescriptor } from "../../codec/core/types.ts";
+import type { CodecDescriptor, TraitCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
 import { checkOrderedBounds, type OrderedBounds } from "../../scalars/bounds/ordered.ts";
 
 /** 有序数值编解码器通用的区间与正负号链式方法特征 */
@@ -22,6 +22,38 @@ export interface OrderedNumericTrait<N extends number | bigint> {
   /** 要求非正值（value <= 0） */
   nonPositive(): unknown;
 }
+
+interface NativeOrderedNumericCodec<N extends number | bigint> extends TraitCodecBase<
+  N,
+  N,
+  OrderedNumericTrait<N>
+> {
+  /** 切换外部编码表示为十进制数值字符串（string ↔ N），保留全部已声明区间约束 */
+  fromString(this: void): WithCodecTrait<N, string, OrderedNumericTrait<N>>;
+  /** 为当前实例附加静态文档说明文本，同时完整保留区间与字符串切换方法 */
+  describe(this: void, description: string): NativeOrderedNumericCodec<N>;
+  /** 限制闭区间最小下界（value >= min） */
+  min(this: void, min: N): NativeOrderedNumericCodec<N>;
+  /** 限制闭区间最大上界（value <= max） */
+  max(this: void, max: N): NativeOrderedNumericCodec<N>;
+  /** 限制开区间严格下界（value > bound） */
+  gt(this: void, bound: N): NativeOrderedNumericCodec<N>;
+  /** 限制开区间严格上界（value < bound） */
+  lt(this: void, bound: N): NativeOrderedNumericCodec<N>;
+  /** 要求严格正值（value > 0） */
+  positive(this: void): NativeOrderedNumericCodec<N>;
+  /** 要求非负值（value >= 0） */
+  nonNegative(this: void): NativeOrderedNumericCodec<N>;
+  /** 要求严格负值（value < 0） */
+  negative(this: void): NativeOrderedNumericCodec<N>;
+  /** 要求非正值（value <= 0） */
+  nonPositive(this: void): NativeOrderedNumericCodec<N>;
+}
+
+/** 有序数值双向编解码器，默认以原生类型编码，经 .fromString() 切换后以 string 编码 */
+export type OrderedNumericCodec<N extends number | bigint, Encoded = N> = [Encoded] extends [N]
+  ? NativeOrderedNumericCodec<N>
+  : WithCodecTrait<N, Encoded, OrderedNumericTrait<N>>;
 
 export interface OrderedScalarAdapter<N extends number | bigint> {
   readonly zero: N;

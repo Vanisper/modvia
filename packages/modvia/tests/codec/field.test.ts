@@ -27,7 +27,7 @@ describe("field binding", () => {
     });
   });
 
-  test("alias 覆盖生效，optional 与 required 幂等转换且不改变值规则", () => {
+  test("alias 覆盖生效，optional 与 required 幂等转换，Field 精确暴露对象槽位属性与派生方法", () => {
     const base = number();
     const first = base.alias("old_key").optional();
     expect(first.optional()).toBe(first);
@@ -37,10 +37,23 @@ describe("field binding", () => {
     expect(rebound.source).toBe("new_key");
     expect(rebound.presence).toBe("required");
     expect(rebound.codec).toBe(base);
-    expect(rebound.parse(5)).toBe(5);
-    expect(rebound.dump(5)).toBe(5);
-    expect(rebound.safeParse("bad").ok).toBe(false);
-    expect(rebound.safeDump("bad").ok).toBe(false);
+    expect(Object.keys(rebound).sort()).toStrictEqual([
+      "alias",
+      "codec",
+      "default",
+      "describe",
+      "description",
+      "nullable",
+      "optional",
+      "or",
+      "presence",
+      "required",
+      "source",
+    ]);
+    expect(rebound.codec.parse(5)).toBe(5);
+    expect(rebound.codec.dump(5)).toBe(5);
+    expect(rebound.codec.safeParse("bad").ok).toBe(false);
+    expect(rebound.codec.safeDump("bad").ok).toBe(false);
 
     const CountModel = Model.define({ fields: { count: rebound } });
     expect(CountModel.decode({ new_key: 5 })).toStrictEqual({ count: 5 });
@@ -84,12 +97,13 @@ describe("field binding", () => {
     expectTypeOf<InferData<typeof both>>().toEqualTypeOf<{ readonly sku?: string | undefined }>();
   });
 
-  test("对象展开拷贝保留字段元数据，无标识对象的同名属性不参与字段声明", () => {
+  test("对象展开拷贝保留字段元数据，无标识自定义 CodecLike 的同名属性不参与字段声明", () => {
     const copy = { ...string().optional().alias("external") };
     const {
       codec,
       source,
       presence,
+      description,
       alias,
       or,
       nullable,
@@ -97,20 +111,12 @@ describe("field binding", () => {
       required,
       default: withDefault,
       describe: describeField,
-      decode,
-      encode,
-      safeDecode,
-      safeEncode,
-      parse,
-      safeParse,
-      dump,
-      safeDump,
-      "~standard": standard,
     } = string().alias("ignored").optional();
-    const plain = {
+    const tagged = {
       codec,
       source,
       presence,
+      description,
       alias,
       or,
       nullable,
@@ -118,17 +124,14 @@ describe("field binding", () => {
       required,
       default: withDefault,
       describe: describeField,
-      decode,
-      encode,
-      safeDecode,
-      safeEncode,
-      parse,
-      safeParse,
-      dump,
-      safeDump,
-      "~standard": standard,
+      [Symbol.toStringTag]: "modvia.Field",
+    } as const;
+    const plain = {
+      decode: codec.decode,
+      encode: codec.encode,
+      source: "ignored",
+      presence: "optional",
     };
-    const tagged = { ...plain, [Symbol.toStringTag]: "modvia.Field" } as const;
     expect(Field.is(copy)).toBe(true);
     expect(Field.is(tagged)).toBe(true);
     expect(Field.is(plain)).toBe(false);
@@ -151,7 +154,7 @@ describe("field binding", () => {
     });
   });
 
-  test("数组元素值域与数组字段属性修饰换序等价，且 describe 在任意顺序下保留文档元数据", () => {
+  test("Field 槽位级元数据（alias / optional / default / describe / or）在同一等级内完全顺序无关，且不克隆底层 codec", () => {
     const list = arrayOf(isoDateTime().nullable());
     const required = Model.define({ fields: { dates: list } });
     const wrapped = Model.define({
@@ -161,19 +164,20 @@ describe("field binding", () => {
     });
     const reordered = Model.define({
       fields: {
-        dates: list.describe("Event schedule").optional().or(false).alias("event_dates"),
+        dates: list.optional().describe("Event schedule").or(false).alias("event_dates"),
       },
     });
+    expect(wrapped.fields.dates.description).toBe("Event schedule");
+    expect(reordered.fields.dates.description).toBe("Event schedule");
     expect(Codec.inspect(wrapped.fields.dates).description).toBe("Event schedule");
-    const reorderedDesc = Codec.inspect(reordered.fields.dates);
-    expect(reorderedDesc.kind).toBe("or");
-    if (reorderedDesc.kind === "or") {
-      expect(Codec.inspect(reorderedDesc.base).description).toBe("Event schedule");
-    }
-    expect(Codec.inspect(string().describe("Code").alias("item_code").optional()).description).toBe(
-      "Code",
-    );
-    expect(Codec.inspect(string().alias("item_code").optional().describe("Code")).description).toBe(
+    expect(Codec.inspect(reordered.fields.dates).description).toBe("Event schedule");
+
+    const baseStr = string();
+    const describedSlot = baseStr.alias("item_code").describe("Code").optional();
+    expect(describedSlot.codec).toBe(baseStr);
+    expect(describedSlot.description).toBe("Code");
+    expect(Codec.inspect(describedSlot).description).toBe("Code");
+    expect(Codec.inspect(baseStr.describe("Code").alias("item_code").optional()).description).toBe(
       "Code",
     );
 

@@ -5,7 +5,6 @@ import type {
   FieldPresence,
 } from "./core/types.ts";
 import { invert, lazy, pipe, unionOf } from "./operators/combinators.ts";
-import { fromStandard } from "./operators/standard.ts";
 
 /** 标准双向值编解码器契约与元操作命名空间 */
 export type Codec<T, Encoded = T> = CodecInterface<T, Encoded>;
@@ -17,10 +16,9 @@ export const Codec = Object.freeze({
   invert,
   lazy,
   union: unionOf,
-  fromStandard,
 });
 
-/** 绑定了外部键别名与键缺省规则的对象字段描述符与工具命名空间 */
+/** 绑定了外部键别名、缺省规则与属性说明的对象槽位描述符与工具命名空间 */
 export type Field<
   T,
   Encoded = T,

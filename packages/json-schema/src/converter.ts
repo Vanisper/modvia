@@ -1,4 +1,4 @@
-import { Codec, Field, type CodecDescriptor, type CodecLike, type FieldLiteral } from "modvia";
+import { Codec, Field, type CodecDescriptor, type CodecOrField, type FieldLiteral } from "modvia";
 import type {
   JsonSchemaObject,
   JsonSchemaSide,
@@ -27,7 +27,7 @@ interface ConversionContext {
  * @description 默认导出外部传输侧（side: "dto"），自动应用字段 .alias() / 模型级 alias 策略、默认值可选化及 isoDateTime 字符串格式
  */
 export function toJsonSchema(
-  codec: CodecLike<unknown, unknown>,
+  codec: CodecOrField,
   options: ToJsonSchemaOptions = {},
 ): JsonSchemaObject {
   const target = normalizeTarget(options.target ?? "draft-2020-12");
@@ -80,11 +80,7 @@ function normalizeTarget(raw: string): JsonSchemaTarget {
   );
 }
 
-function getNodeKey(
-  codec: CodecLike<unknown, unknown>,
-  side: JsonSchemaSide,
-  context: ConversionContext,
-): string {
+function getNodeKey(codec: CodecOrField, side: JsonSchemaSide, context: ConversionContext): string {
   const targetObj = Field.is(codec) ? codec.codec : codec;
   let id = context.codecIds.get(targetObj);
   if (id === undefined) {
@@ -100,10 +96,17 @@ function makeRef(defName: string, target: JsonSchemaTarget): JsonSchemaObject {
 }
 
 function convertNode(
-  codec: CodecLike<unknown, unknown>,
+  codec: CodecOrField,
   side: JsonSchemaSide,
   context: ConversionContext,
 ): JsonSchemaObject {
+  if (Field.is(codec)) {
+    const innerSchema = convertNode(codec.codec, side, context);
+    return codec.description !== undefined
+      ? { ...innerSchema, description: codec.description }
+      : innerSchema;
+  }
+
   const descriptor = Codec.inspect(codec);
 
   // lazy 节点先穿透到实际目标 Codec，再统一按目标身份检测递归环
@@ -346,10 +349,7 @@ function buildDescriptorSchema(
       return convertNode(descriptor.resolve(), side, context);
     }
     case "custom": {
-      const schemaFragment =
-        side === "dto"
-          ? descriptor.encodedSchema
-          : (descriptor.decodedSchema ?? descriptor.encodedSchema);
+      const schemaFragment = side === "dto" ? descriptor.encodedSchema : descriptor.decodedSchema;
       if (schemaFragment !== undefined) {
         const cloned: JsonSchemaObject = { ...schemaFragment };
         if (context.target === "openapi-3.0") {

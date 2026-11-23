@@ -17,8 +17,19 @@ interface EmailState {
   readonly lowercase: boolean;
 }
 
-const emailPattern =
-  /^(?!\.)(?!.*\.\.)([a-zA-Z0-9_'+\-.]*)[a-zA-Z0-9_+-]@([a-zA-Z0-9][a-zA-Z0-9-]*\.)+[a-zA-Z]{2,}$/;
+const localPartPattern = /^(?!\.)(?!.*\.\.)[a-zA-Z0-9_'+\-.]*[a-zA-Z0-9_'+-]$/;
+const domainPartPattern = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+
+function isValidEmailAddress(value: string): boolean {
+  if (value.length > 254) return false;
+  const atIndex = value.indexOf("@");
+  if (atIndex < 1 || atIndex > 64 || value.indexOf("@", atIndex + 1) !== -1) {
+    return false;
+  }
+  const local = value.slice(0, atIndex);
+  const domain = value.slice(atIndex + 1);
+  return localPartPattern.test(local) && domainPartPattern.test(domain);
+}
 
 function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): string {
   if (typeof input !== "string") {
@@ -28,11 +39,13 @@ function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): s
   if (ctx.state.lowercase) {
     normalized = normalized.toLowerCase();
   }
-  if (normalized.length > 254 || !emailPattern.test(normalized)) {
+  if (!isValidEmailAddress(normalized)) {
     return ctx.fail("format.email", "Expected a valid email address");
   }
   return normalized;
 }
+
+const emailSchema = Object.freeze({ type: "string", format: "email", maxLength: 254 });
 
 const defaultEmailCodec: EmailCodec = defineCodec({
   state: { trim: false, lowercase: false } as EmailState,
@@ -40,7 +53,8 @@ const defaultEmailCodec: EmailCodec = defineCodec({
   encode: validateEmail,
   meta: {
     format: "email",
-    encodedSchema: { type: "string", format: "email", maxLength: 254 },
+    encodedSchema: emailSchema,
+    decodedSchema: emailSchema,
   },
   methods: {
     trim: () => ({ trim: true }),

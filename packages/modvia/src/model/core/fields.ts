@@ -31,7 +31,7 @@ export function resolveFields(fields: FieldRecord): readonly ResolvedField[] {
 
     return Object.freeze({
       key,
-      codec: field?.codec ?? entry,
+      codec: field ? field.codec : (entry as CodecLike<unknown, unknown>),
       source: typeof source === "string" ? source : key,
       presence,
       ...(resolveDefault ? { resolveDefault } : {}),

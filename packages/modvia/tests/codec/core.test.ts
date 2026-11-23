@@ -18,7 +18,7 @@ import {
 } from "../../src/codec.ts";
 import { literal, Model } from "../../src/index.ts";
 
-const intFromString = Codec.define<number, string>({
+const customIntCodec = Codec.define<number, string>({
   decode(input, context) {
     if (typeof input !== "string" || !/^-?\d+$/.test(input)) {
       return context.fail("number.integer_string", "Expected an integer string");
@@ -39,11 +39,11 @@ const intFromString = Codec.define<number, string>({
 
 describe("codec kernel", () => {
   test("2×2 执行矩阵：decode/encode 约束编译期契约，parse/dump 面向 unknown 动态边界", () => {
-    const okDecoded = intFromString.safeDecode("42");
+    const okDecoded = customIntCodec.safeDecode("42");
     expect(okDecoded).toStrictEqual({ ok: true, value: 42 });
     expect(Object.isFrozen(okDecoded)).toBe(true);
 
-    const badDecoded = intFromString.safeDecode("abc");
+    const badDecoded = customIntCodec.safeDecode("abc");
     expect(badDecoded.ok).toBe(false);
     if (badDecoded.ok) throw new Error("Expected failure");
     expect(badDecoded.issues).toStrictEqual([
@@ -52,40 +52,40 @@ describe("codec kernel", () => {
     expect(Object.isFrozen(badDecoded.issues)).toBe(true);
     expect(Object.isFrozen(badDecoded.issues[0]?.path)).toBe(true);
 
-    expect(intFromString.safeEncode(42)).toStrictEqual({ ok: true, value: "42" });
-    const badEncoded = intFromString.safeEncode(Number.NaN);
+    expect(customIntCodec.safeEncode(42)).toStrictEqual({ ok: true, value: "42" });
+    const badEncoded = customIntCodec.safeEncode(Number.NaN);
     expect(badEncoded).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "number.safe_integer" }],
     });
 
     // @ts-expect-error decode 编译期拒绝非 Encoded 类型
-    expect(intFromString.safeDecode(42).ok).toBe(false);
+    expect(customIntCodec.safeDecode(42).ok).toBe(false);
     // @ts-expect-error encode 编译期拒绝非 T 类型
-    expect(intFromString.safeEncode("42").ok).toBe(false);
+    expect(customIntCodec.safeEncode("42").ok).toBe(false);
 
     // parse / safeParse 与 dump / safeDump 接收任意 unknown 并在运行时安全校验
     const rawIn: unknown = "42";
     const rawOut: unknown = 42;
-    expect(intFromString.parse(rawIn)).toBe(42);
-    expect(intFromString.dump(rawOut)).toBe("42");
-    expect(intFromString.safeParse(null)).toMatchObject({
+    expect(customIntCodec.parse(rawIn)).toBe(42);
+    expect(customIntCodec.dump(rawOut)).toBe("42");
+    expect(customIntCodec.safeParse(null)).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "number.integer_string" }],
     });
-    expect(intFromString.safeDump(null)).toMatchObject({
+    expect(customIntCodec.safeDump(null)).toMatchObject({
       ok: false,
       issues: [{ path: [], code: "number.safe_integer" }],
     });
-    expect(() => intFromString.parse({})).toThrow(ValidationError);
-    expect(() => intFromString.dump({})).toThrow(ValidationError);
+    expect(() => customIntCodec.parse({})).toThrow(ValidationError);
+    expect(() => customIntCodec.dump({})).toThrow(ValidationError);
 
-    expectTypeOf<InferValue<typeof intFromString>>().toEqualTypeOf<number>();
-    expectTypeOf<InferEncoded<typeof intFromString>>().toEqualTypeOf<string>();
+    expectTypeOf<InferValue<typeof customIntCodec>>().toEqualTypeOf<number>();
+    expectTypeOf<InferEncoded<typeof customIntCodec>>().toEqualTypeOf<string>();
   });
 
   test("ValidationError 支持跨上下文识别并格式化嵌套路径", () => {
-    const matrix = arrayOf(arrayOf(intFromString));
+    const matrix = arrayOf(arrayOf(customIntCodec));
     let caught: unknown;
     try {
       matrix.decode([["1"], ["bad"]]);
@@ -162,7 +162,7 @@ describe("codec kernel", () => {
       return schema["~standard"];
     }
 
-    const standard = acceptStandard(intFromString);
+    const standard = acceptStandard(customIntCodec);
     expect(standard.version).toBe(1);
     expect(standard.vendor).toBe("modvia");
     expect(standard.validate("18")).toStrictEqual({ value: 18 });
@@ -170,7 +170,7 @@ describe("codec kernel", () => {
       issues: [{ path: [], message: "Expected an integer string" }],
     });
 
-    type Types = NonNullable<(typeof intFromString)["~standard"]["types"]>;
+    type Types = NonNullable<(typeof customIntCodec)["~standard"]["types"]>;
     expectTypeOf<Types["input"]>().toEqualTypeOf<string>();
     expectTypeOf<Types["output"]>().toEqualTypeOf<number>();
   });
@@ -193,41 +193,6 @@ describe("codec kernel", () => {
     expect(() => arrayOf(Field.of(string()))).toThrow(TypeError);
 
     expectTypeOf(arrayOf(string())).toEqualTypeOf<ArrayCodec<string>>();
-  });
-
-  test("Codec.fromStandard 将同步 StandardSchemaV1 校验器桥接为双向对称 Codec", () => {
-    const emailStandard: StandardSchemaV1<string, string> = {
-      "~standard": {
-        version: 1,
-        vendor: "custom-validator",
-        validate(value) {
-          if (typeof value !== "string" || !value.includes("@")) {
-            return {
-              issues: [{ message: "Invalid email", path: [{ key: "address" }] }],
-            };
-          }
-          return { value: value.trim() };
-        },
-      },
-    };
-
-    const Email = Codec.fromStandard(emailStandard);
-    expect(Email.decode(" a@b.com ")).toBe("a@b.com");
-    expect(Email.encode(" a@b.com ")).toBe("a@b.com");
-    expect(Email.safeDecode("invalid")).toStrictEqual({
-      ok: false,
-      issues: [{ path: ["address"], code: "standard.invalid", message: "Invalid email" }],
-    });
-
-    const asyncSchema: StandardSchemaV1<string, string> = {
-      "~standard": {
-        version: 1,
-        vendor: "async-validator",
-        validate: async (value) => ({ value: String(value) }),
-      },
-    };
-    const AsyncWrapped = Codec.fromStandard(asyncSchema);
-    expect(() => AsyncWrapped.safeDecode("x")).toThrow(TypeError);
   });
 
   test("brand 在解码端附加编译期名义类型且编码端保持原始外部类型，运行时零额外包装", () => {
@@ -288,6 +253,12 @@ describe("codec kernel", () => {
       literals: [null],
       description: "Optional timestamp",
     });
+    // 相邻 .or() 合并时保留外层已声明的 description 元数据
+    expect(Codec.inspect(string().or("auto").describe("Mode").or(null))).toMatchObject({
+      kind: "or",
+      literals: ["auto", null],
+      description: "Mode",
+    });
 
     const ItemA = Model.define({
       fields: { type: literal("a").alias("item_type"), val: Username },
@@ -306,6 +277,18 @@ describe("codec kernel", () => {
       kind: "taggedUnion",
       discriminator: "type",
       externalKey: "item_type",
+    });
+
+    // Model 与特征 Codec 在 nullable / pipe 组合下保持外层实例引用同一性
+    expect(Codec.inspect(DerivedA.nullable())).toStrictEqual({
+      kind: "or",
+      base: DerivedA,
+      literals: [null],
+    });
+    const trimmed = string().trim();
+    expect(Codec.inspect(trimmed.pipe(int().fromString()))).toMatchObject({
+      kind: "pipe",
+      first: trimmed,
     });
 
     const CustomDecimal = Codec.define<number, string>({
@@ -418,7 +401,7 @@ describe("codec kernel", () => {
       },
     });
 
-    // 保留字冲突在编译期与定义期双重拒绝
+    // 保留字冲突在编译期与定义期双重拒绝，且定义期校验非法参数与非纯对象状态
     const badMethods = { decode: () => ({ n: 2 }) };
     expect(() =>
       Codec.define({
@@ -429,5 +412,18 @@ describe("codec kernel", () => {
         methods: badMethods,
       }),
     ).toThrow(RangeError);
+
+    expect(() => Reflect.apply(Codec.define, undefined, [null])).toThrow(TypeError);
+    expect(() => Reflect.apply(Codec.define, undefined, [{}])).toThrow(TypeError);
+    const nonPlainState = new Date(0);
+    expect(() =>
+      Codec.define({
+        state: nonPlainState,
+        decode: (v) => v,
+        encode: (v) => v,
+        methods: {},
+      }),
+    ).toThrow(TypeError);
+    expect(Object.isFrozen(nonPlainState)).toBe(false);
   });
 });

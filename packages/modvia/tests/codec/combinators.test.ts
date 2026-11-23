@@ -12,7 +12,7 @@ import {
 } from "../../src/codec.ts";
 import { Model } from "../../src/index.ts";
 
-const intFromString = Codec.define<number, string>({
+const customIntCodec = Codec.define<number, string>({
   decode(input, context) {
     if (typeof input !== "string" || !/^-?\d+$/.test(input)) {
       return context.fail("number.integer_string", "Expected an integer string");
@@ -163,7 +163,7 @@ describe("codec combinators", () => {
   test("pipe 正向串联解码并逆向串联编码，支持方法链与顶层调用", () => {
     const trimmedPositiveInt = string()
       .trim()
-      .pipe(intFromString)
+      .pipe(customIntCodec)
       .check((value, context) => {
         if (value <= 0) context.fail("number.positive", "Expected > 0");
       });
@@ -179,7 +179,7 @@ describe("codec combinators", () => {
       issues: [{ code: "number.positive" }],
     });
 
-    const topLevelPiped = Codec.pipe(string().trim(), intFromString);
+    const topLevelPiped = Codec.pipe(string().trim(), customIntCodec);
     expect(topLevelPiped.decode(" 7 ")).toBe(7);
     expect(topLevelPiped.encode(7)).toBe("7");
 
@@ -194,7 +194,7 @@ describe("codec combinators", () => {
 
     expectTypeOf(trimmedPositiveInt).toEqualTypeOf<Codec<number, string>>();
     // @ts-expect-error pipe 不接受带属性修饰的 Field
-    expect(() => string().pipe(intFromString.optional())).toThrow(TypeError);
+    expect(() => string().pipe(customIntCodec.optional())).toThrow(TypeError);
   });
 
   test("Codec.invert 反转编解码方向并保持可逆性", () => {

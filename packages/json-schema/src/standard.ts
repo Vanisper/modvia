@@ -48,7 +48,16 @@ export function withJsonSchema<C extends Codec<unknown, unknown>>(codec: C): Wit
     configurable: false,
     writable: false,
   };
+  let wrapped: unknown;
+  if ("brand" in descriptors) {
+    descriptors.brand = {
+      value: () => wrapped,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    };
+  }
 
-  const clone = Object.create(Object.getPrototypeOf(codec), descriptors) as unknown;
-  return Object.freeze(clone) as WithJsonSchema<C>;
+  wrapped = Object.freeze(Object.create(Object.getPrototypeOf(codec), descriptors));
+  return wrapped as WithJsonSchema<C>;
 }

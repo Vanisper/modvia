@@ -58,13 +58,13 @@ const dto: UserDTO = User.encode(user);
 // }
 ```
 
-- 解码只接受普通对象，默认自动剥离未声明的外部属性；调用 `User.strict()` 可派生遇到未知属性即报 `object.unknown_key` 的严格模型。
+- 解码只接受普通对象，默认自动剥离未声明的外部属性；调用 `User.strict()` 可派生遇到当前层未知属性即报 `object.unknown_key` 的单层严格模型（`strict` 策略在后续 `pick` / `omit` / `partial` / `extend` 派生时自动保留）。
 - `UserData` 的属性推导为只读类型，编解码每次均返回新对象容器。
 - 嵌套模型本身就是标准 `Codec`，可直接作为字段、放入数组或继续调用 `.alias()` / `.optional()` / `.nullable()` / `.describe()`。
 
 ## 2×2 执行矩阵与错误处理
 
-所有 `Codec`、`Field` 与 `Model` 统一提供两组正交执行接口，并各自配备不抛异常的 `safe*` 判别结果变体：
+所有值级 `Codec` 与 `Model` 统一提供两组正交执行接口，并各自配备不抛异常的 `safe*` 判别结果变体（`Field` 纯粹表示对象属性槽位，若需单独执行其底层值规则请读取 `field.codec`）：
 
 - **`parse(unknown)` / `dump(unknown)`（含 `safeParse` / `safeDump`）**：面向未知或动态边界输入（如原始 JSON 响应、未定型的表单草稿或中间件载荷），运行时验明正身并执行正向解析或反向输出。
 - **`decode(Encoded)` / `encode(T)`（含 `safeDecode` / `safeEncode`）**：对称强契约原语，在编译期锁死 `Encoded`（如 SDK 生成的 `DTO`）与业务类型 `T` 并提供字段补全，运行时仍完整执行校验。
@@ -89,7 +89,7 @@ try {
 
 - 解码失败时，`issue.path` 使用外部 DTO 键名与数组下标（如 `[1, "created_at"]`）。
 - 编码失败时，`issue.path` 使用模型业务键名与数组下标（如 `[1, "createdAt"]`）。
-- 所有 `Codec`、`Field` 与 `Model` 均内置 `StandardSchemaV1`（`~standard`），可直接传入支持 Standard Schema 的表单与服务端框架。
+- 所有 `Codec` 与 `Model` 均内置 `StandardSchemaV1`（`~standard`），可直接传入支持 Standard Schema 的表单与服务端框架。
 
 ## 字段映射、哨兵值与数组容器
 
@@ -115,7 +115,7 @@ Product.encode({ ...product, tags: [null, "夏季"] });
 // { product_code: "A-01", stock: "unlimited", labels: [null, "夏季"] }
 ```
 
-- `string()`：通过 `.trim()`、`.minLength(n)`、`.maxLength(n)`、`.length(n)`、`.nonEmpty()`、`.pattern(re)` 不可变链式派生（归并状态后始终先 `trim` 再守卫长度与无状态正则）。
+- `string()`：通过 `.trim()`、`.minLength(n)`、`.maxLength(n)`、`.length(n)`、`.nonEmpty()`、`.pattern(re)` 不可变链式派生（归并状态后始终先 `trim` 再守卫长度与正则；`.pattern()` 自动剥离全局 `g` 标志并拒绝改变锚点语义的粘滞 `y` 标志）。
 - `number()`、`int()` 与 `bigint()`：分别校验有限浮点数、安全整数与原生大整数，统一支持 `.min(n)`、`.max(n)`、`.gt(n)`、`.lt(n)`、`.positive()`、`.nonNegative()`、`.negative()`、`.nonPositive()` 链式派生，定义期立即拦截空区间，并可通过 `.fromString()` 切换为严格收敛的字符串外部表示（与区间方法调用顺序无关）。
 - `boolean()`：校验原生布尔值；调用 `.fromString()` 切换为布尔文本编解码器（`Codec<boolean, string>`），并支持 `.tokens(truthy, falsy)` 与 `.caseSensitive()` 链式派生。
 - `.alias(name)`：指定父对象双向读写该字段时使用的外部键别名；同一模型内的外部键名不能重复。
@@ -178,13 +178,12 @@ const Port = int().check((n, ctx) => {
   }
 });
 
-// 3. 双向管道串联（解码正向执行，编码逆向执行，并自动保留下游自有链式方法）
+// 3. 跨表示双向管道串联（解码正向执行，编码逆向执行，并自动保留下游自有链式方法）
 const PositiveCount = string().trim().pipe(int().fromString()).positive().max(1000);
 
-// 4. 从左到右多 Codec 联合、方向反转与外部 StandardSchemaV1 同步校验器接入
+// 4. 不相交域异构 Codec 联合与方向反转
 const FlexibleTime = Codec.union(isoDateTime(), int());
 const UtcTextFromDate = Codec.invert(isoDateTime());
-const ExternalRule = Codec.fromStandard(thirdPartyStandardSchema);
 ```
 
 ## 领域工厂与 Class 实例
@@ -324,7 +323,7 @@ const Order = Model.define({
 });
 ```
 
-无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`；`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
+无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`；状态化形式要求初始 `state` 为普通对象，`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
 
 ## 日期时间
 
@@ -415,7 +414,6 @@ const NodeModel: Model<NodeData, NodeDTO> = Model.define({
 | `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞                         |
 | `union.no_match`        | `Codec.union` 的所有候选分支均未匹配当前输入                            |
 | `union.invalid_tag`     | `Model.union` 的判别字段值不在已注册的分支标签集合内                    |
-| `standard.invalid`      | `Codec.fromStandard` 包装的外部校验器未提供错误码时的默认标识           |
 | `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段              |
 
 ## 开发与验证

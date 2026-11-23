@@ -17,8 +17,10 @@ interface UrlState {
 }
 
 interface GlobalUrlConstructor {
-  new (input: string): { readonly protocol: string };
+  new (input: string): { readonly protocol: string; readonly hostname: string };
 }
+
+const authorityProtocols = new Set(["http:", "https:", "ws:", "wss:", "ftp:"]);
 
 function normalizeProtocols(rawList: readonly string[]): ReadonlySet<string> {
   if (!Array.isArray(rawList) || rawList.length === 0) {
@@ -40,23 +42,33 @@ function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): strin
     return ctx.fail("type.string", "Expected a string");
   }
   const UrlCtor = (globalThis as { readonly URL?: GlobalUrlConstructor }).URL;
-  if (input.length === 0 || /\s/.test(input) || !UrlCtor) {
+  if (!UrlCtor) {
+    throw new Error("Global URL constructor is not available in this runtime");
+  }
+  if (input.length === 0 || /\s/.test(input)) {
     return ctx.fail("format.url", "Expected a valid URL");
   }
-  let parsed: { readonly protocol: string };
+  let parsed: { readonly protocol: string; readonly hostname: string };
   try {
     parsed = new UrlCtor(input);
   } catch {
     return ctx.fail("format.url", "Expected a valid URL");
   }
+  const protocol = parsed.protocol.toLowerCase();
+  const afterProtocol = input.slice(parsed.protocol.length);
   if (
-    ctx.state.allowedProtocols !== undefined &&
-    !ctx.state.allowedProtocols.has(parsed.protocol.toLowerCase())
+    authorityProtocols.has(protocol) &&
+    (!afterProtocol.startsWith("//") || afterProtocol[2] === "/" || parsed.hostname.length === 0)
   ) {
+    return ctx.fail("format.url", "Expected a valid URL");
+  }
+  if (ctx.state.allowedProtocols !== undefined && !ctx.state.allowedProtocols.has(protocol)) {
     return ctx.fail("format.url_protocol", `URL protocol "${parsed.protocol}" is not allowed`);
   }
   return input;
 }
+
+const uriSchema = Object.freeze({ type: "string", format: "uri" });
 
 const defaultUrlCodec: UrlCodec = defineCodec({
   state: {} as UrlState,
@@ -64,7 +76,8 @@ const defaultUrlCodec: UrlCodec = defineCodec({
   encode: validateUrl,
   meta: {
     format: "uri",
-    encodedSchema: { type: "string", format: "uri" },
+    encodedSchema: uriSchema,
+    decodedSchema: uriSchema,
   },
   methods: {
     protocols: (...allowed: readonly [string, ...string[]]) => ({

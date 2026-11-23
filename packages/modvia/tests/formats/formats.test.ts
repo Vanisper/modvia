@@ -9,7 +9,7 @@ import {
   jsonString,
   url,
   uuid,
-} from "../../src/formats/index.ts";
+} from "../../src/formats.ts";
 import {
   Alias,
   arrayOf,
@@ -43,7 +43,17 @@ describe("modvia/formats", () => {
     const Email = email().trim().lowercase();
     expect(Email.decode("  User.Name+tag@Example.COM ")).toBe("user.name+tag@example.com");
     expect(Email.encode("User@Example.COM")).toBe("user@example.com");
-    for (const invalid of ["plain", "@example.com", "a..b@example.com", ".a@example.com", "a@b"]) {
+    for (const invalid of [
+      "plain",
+      "@example.com",
+      "a..b@example.com",
+      ".a@example.com",
+      "a.@example.com",
+      "a@b",
+      "user@bad-.com",
+      "user@-bad.com",
+      `${"a".repeat(65)}@example.com`,
+    ]) {
       expect(Email.safeDecode(invalid)).toMatchObject({
         ok: false,
         issues: [{ code: "format.email" }],
@@ -62,10 +72,16 @@ describe("modvia/formats", () => {
       ok: false,
       issues: [{ code: "format.url_protocol" }],
     });
-    expect(HttpsOnly.safeDecode("https://example.com/with space")).toMatchObject({
-      ok: false,
-      issues: [{ code: "format.url" }],
-    });
+    for (const badUrl of [
+      "https://example.com/with space",
+      "https:example.com",
+      "https:///only-path",
+    ]) {
+      expect(HttpsOnly.safeDecode(badUrl)).toMatchObject({
+        ok: false,
+        issues: [{ code: "format.url" }],
+      });
+    }
     expect(url().protocols("https", "http").decode("http://modvia.dev")).toBe("http://modvia.dev");
     expect(() => Reflect.apply(url().protocols, undefined, [])).toThrow(RangeError);
 
@@ -167,7 +183,7 @@ describe("modvia/formats", () => {
       '{"event_id":"550e8400-e29b-41d4-a716-446655440000","target_url":"https://modvia.dev"}',
     );
 
-    // jsonOf 包装数组与数值原语时自动保留值域自有方法，且不泄漏介质切换方法 fromString
+    // jsonOf 包装数组与数值原语时保留全部值域特征方法，而介质切换方法仅存在于原生数值态
     const NonEmptyTagsJson = jsonOf(arrayOf(string())).nonEmpty();
     expect(NonEmptyTagsJson.decode('["a"]')).toStrictEqual(["a"]);
     expect(NonEmptyTagsJson.safeDecode("[]")).toMatchObject({
@@ -178,7 +194,32 @@ describe("modvia/formats", () => {
     const PortJson = jsonOf(int()).positive().max(65535);
     expect(PortJson.decode("8080")).toBe(8080);
     expect(PortJson.encode(8080)).toBe("8080");
-    expect("fromString" in PortJson).toBe(false);
+    expect("fromString" in int()).toBe(true);
     expect("fromString" in int().fromString()).toBe(false);
+    expect("fromString" in PortJson).toBe(false);
+
+    // jsonOf 包装带 alias 的模型并挂载 .check 时，解码错误路径仍自动映射为外部键名
+    const CheckedEventJson = jsonOf(EventPayload).check((data, ctx) => {
+      if (!data.note) {
+        ctx.issue({ code: "event.missing_note", message: "Note required", path: ["targetUrl"] });
+      }
+    });
+    expect(
+      CheckedEventJson.safeDecode(
+        '{"event_id":"550e8400-e29b-41d4-a716-446655440000","target_url":"https://modvia.dev"}',
+      ),
+    ).toMatchObject({
+      ok: false,
+      issues: [{ path: ["target_url"], code: "event.missing_note" }],
+    });
+    expect(
+      CheckedEventJson.safeEncode({
+        eventId: "550e8400-e29b-41d4-a716-446655440000",
+        targetUrl: "https://modvia.dev",
+      }),
+    ).toMatchObject({
+      ok: false,
+      issues: [{ path: ["targetUrl"], code: "event.missing_note" }],
+    });
   });
 });

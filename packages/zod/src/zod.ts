@@ -65,6 +65,9 @@ export function zodCodec<S extends $ZodType>(
   }
   assertReversibleZodSchema(schema, new Set());
 
+  const rawDescription = (schema as { readonly description?: unknown }).description;
+  const description = typeof rawDescription === "string" ? rawDescription : undefined;
+
   return Codec.define<output<S>, input<S>>({
     decode(rawInput, context) {
       const result = runZodStep(() => safeParse(schema, rawInput));
@@ -81,6 +84,10 @@ export function zodCodec<S extends $ZodType>(
         return undefined as never;
       }
       return result.data;
+    },
+    meta: {
+      format: "zod",
+      ...(description !== undefined ? { description } : {}),
     },
   });
 }

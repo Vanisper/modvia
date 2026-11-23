@@ -191,37 +191,40 @@ export interface Codec<T, Encoded = T> extends CodecLike<T, Encoded>, StandardSc
   default(this: void, provider: DefaultProvider<T>): Field<T, Encoded, undefined, "defaulted">;
 }
 
-/** 绑定了外部键别名与键缺省规则的对象字段描述符 */
+/** 对象属性槽位最小协变协议，供模型字段表与结构反射协变接收任意具体类型的 Field */
+export interface FieldLike<
+  out T = unknown,
+  out Encoded = T,
+  out Source extends string | undefined = string | undefined,
+  out Presence extends FieldPresence = FieldPresence,
+> {
+  readonly [Symbol.toStringTag]: "modvia.Field";
+  /** 剥离对象槽位元数据后的底层值级规则 */
+  readonly codec: CodecLike<T, Encoded>;
+  /** 外部字段别名，未指定时沿用模型属性名 */
+  readonly source: Source;
+  /** 父对象在编解码时是否允许省略此键 */
+  readonly presence: Presence;
+  /** 当前对象属性槽位专属的静态文档说明文本 */
+  readonly description?: string | undefined;
+}
+
+/** 绑定了外部键别名、缺省规则与属性说明的对象槽位描述符（非独立值级 Codec，底层值规则通过 .codec 读取） */
 export interface Field<
   T,
   Encoded = T,
   Source extends string | undefined = undefined,
   Presence extends FieldPresence = "required",
->
-  extends CodecLike<T, Encoded>, StandardSchemaV1<Encoded, T> {
+> extends FieldLike<T, Encoded, Source, Presence> {
   readonly [Symbol.toStringTag]: "modvia.Field";
-  /** 剥离外部键别名与缺省性后的纯值级 Codec */
+  /** 剥离对象槽位元数据后的纯值级 Codec */
   readonly codec: Codec<T, Encoded>;
   /** 外部字段别名，未指定时沿用模型属性名 */
   readonly source: Source;
   /** 父对象在编解码时是否允许省略此键 */
   readonly presence: Presence;
-  /** 按已知外部契约类型校验单个值并解码 */
-  decode(this: void, input: Encoded): T;
-  /** 按已知业务类型校验单个值并编码 */
-  encode(this: void, value: T): Encoded;
-  /** 按已知外部契约类型安全解码单个值并返回判别结果 */
-  safeDecode(this: void, input: Encoded): SafeResult<T>;
-  /** 按已知业务类型安全编码单个值并返回判别结果 */
-  safeEncode(this: void, value: T): SafeResult<Encoded>;
-  /** 面向未知外部输入校验并解析单个值 */
-  parse(this: void, input: unknown): T;
-  /** 面向未知外部输入安全解析单个值并返回判别结果 */
-  safeParse(this: void, input: unknown): SafeResult<T>;
-  /** 面向未知候选输入校验并输出单个外部值 */
-  dump(this: void, input: unknown): Encoded;
-  /** 面向未知候选输入安全输出单个外部值并返回判别结果 */
-  safeDump(this: void, input: unknown): SafeResult<Encoded>;
+  /** 当前对象属性槽位专属的静态文档说明文本（未声明时为 undefined） */
+  readonly description: string | undefined;
   /** 改绑父对象读写此字段时使用的外部键别名 */
   alias<NextSource extends string>(
     this: void,
@@ -233,20 +236,35 @@ export interface Field<
   required(this: void): Field<T, Encoded, Source, "required">;
   /** 指定父对象解码缺键时的业务默认值（DTO 可选，模型必填） */
   default(this: void, provider: DefaultProvider<T>): Field<T, Encoded, Source, "defaulted">;
-  /** 在保留字段外部名与缺省性的前提下，向值规则追加哨兵字面量 */
+  /** 在保留字段外部名、缺省性与属性说明的前提下，向值规则追加哨兵字面量 */
   or<const Literals extends readonly [FieldLiteral, ...FieldLiteral[]]>(
     this: void,
     ...values: Literals
   ): Field<T | Literals[number], Encoded | Literals[number], Source, Presence>;
-  /** 允许字段值为 null，同时保留外部名与缺省性 */
+  /** 允许字段值为 null，同时保留外部名、缺省性与属性说明 */
   nullable(this: void): Field<T | null, Encoded | null, Source, Presence>;
-  /** 为字段底层规则附加静态文档说明文本，同时保留外部键别名与缺省性 */
+  /** 为当前对象属性槽位设置静态文档说明文本（与 alias / optional / default / or 顺序无关，不克隆底层 codec） */
   describe(this: void, description: string): Field<T, Encoded, Source, Presence>;
 }
 
-export type InferValue<C> = C extends CodecLike<infer Value, infer _Encoded> ? Value : never;
+/** 可作为对象模型字段或供反射/Schema 导出读取的统一协变联合输入（值级 CodecLike 或槽位级 FieldLike） */
+export type CodecOrField<T = unknown, Encoded = unknown> =
+  | CodecLike<T, Encoded>
+  | FieldLike<T, Encoded>;
 
-export type InferEncoded<C> = C extends CodecLike<infer _Value, infer Encoded> ? Encoded : never;
+export type InferValue<C> =
+  C extends CodecLike<infer Value, infer _Encoded>
+    ? Value
+    : C extends FieldLike<infer Value, infer _Encoded>
+      ? Value
+      : never;
+
+export type InferEncoded<C> =
+  C extends CodecLike<infer _Value, infer Encoded>
+    ? Encoded
+    : C extends FieldLike<infer _Value, infer Encoded>
+      ? Encoded
+      : never;
 
 /** 自定义 Codec 可选附带的外部/内部静态结构元数据，供独立 Schema 导出工具读取 */
 export interface CustomCodecMeta {
@@ -254,7 +272,7 @@ export interface CustomCodecMeta {
   readonly description?: string;
   /** 外部编码端（DTO / Encoded）对应的 JSON Schema 描述片段 */
   readonly encodedSchema?: Readonly<Record<string, unknown>>;
-  /** 内部业务端（Data / T）对应的 JSON Schema 描述片段；省略时默认沿用 encodedSchema */
+  /** 内部业务端（Data / T）对应的 JSON Schema 描述片段 */
   readonly decodedSchema?: Readonly<Record<string, unknown>>;
 }
 
@@ -320,7 +338,7 @@ export type CodecDescriptor =
     }>
   | WithDescription<{
       readonly kind: "model";
-      readonly fields: Readonly<Record<string, CodecLike<unknown, unknown>>>;
+      readonly fields: Readonly<Record<string, CodecOrField>>;
       readonly strict: boolean;
     }>
   | WithDescription<{
@@ -344,7 +362,7 @@ export type CodecDescriptor =
     }>;
 
 /** Codec 核心保留成员键集合，自定义链式方法禁止覆盖 */
-export type ReservedCodecKey = keyof Codec<unknown, unknown>;
+export type ReservedCodecKey = keyof Codec<unknown, unknown> | "__proto__" | "constructor";
 
 /** 状态增量更新表达：可直接返回局部属性补丁，或返回基于冻结旧状态计算局部补丁的函数 */
 export type StatePatch<S extends object> =
@@ -373,19 +391,16 @@ export type BoundCodecTrait<T, Encoded, Trait extends CodecTrait> = {
 
 export declare const codecTraitSymbol: unique symbol;
 
-export interface StatefulCodecBase<T, Encoded, Trait extends CodecTrait> extends Codec<T, Encoded> {
+export interface TraitCodecBase<T, Encoded, Trait extends CodecTrait> extends Codec<T, Encoded> {
   readonly [codecTraitSymbol]?: Trait;
   /** 为当前实例附加静态文档说明文本，同时完整保留全部自有链式方法 */
   describe(this: void, description: string): WithCodecTrait<T, Encoded, Trait>;
 }
 
-/** 附着自有链式方法特征的标准双向编解码器（内部状态完全封装） */
-export type WithCodecTrait<T, Encoded, Trait extends CodecTrait> = StatefulCodecBase<
+/** 附着自有链式方法特征的标准双向编解码器（内部状态与管道实现细节完全封装） */
+export type WithCodecTrait<T, Encoded, Trait extends CodecTrait> = TraitCodecBase<
   T,
   Encoded,
   Trait
 > &
   BoundCodecTrait<T, Encoded, NoInfer<Trait>>;
-
-/** StatefulCodec 作为 WithCodecTrait 的语义别名导出 */
-export type StatefulCodec<T, Encoded, Trait extends CodecTrait> = WithCodecTrait<T, Encoded, Trait>;

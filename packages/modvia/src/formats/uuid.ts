@@ -13,12 +13,15 @@ function validateUuid(input: unknown, context: CodecContext): string {
   return input.toLowerCase();
 }
 
+const uuidSchema = Object.freeze({ type: "string", format: "uuid" });
+
 const defaultUuidCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateUuid,
   encode: validateUuid,
   meta: {
     format: "uuid",
-    encodedSchema: { type: "string", format: "uuid" },
+    encodedSchema: uuidSchema,
+    decodedSchema: uuidSchema,
   },
 });
 

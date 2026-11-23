@@ -76,37 +76,57 @@ const dtoList = [
 ];
 
 describe("packaged artifacts (modvia & modvia/codec)", () => {
-  test("主入口与 ./codec 子路径共享同一套分层主体命名空间与编解码原语引用", () => {
+  test("各包入口与主体命名空间精确暴露公开运行时导出集并共享同一原语引用", () => {
     expect(string).toBe(codecEntry.string);
     expect(arrayOf).toBe(codecEntry.arrayOf);
     expect(isoDateTime).toBe(codecEntry.isoDateTime);
     expect(Codec).toBe(codecEntry.Codec);
     expect(Field).toBe(codecEntry.Field);
     expect(ValidationError).toBe(codecEntry.ValidationError);
-    expect("Model" in codecEntry).toBe(false);
-    expect("Alias" in codecEntry).toBe(false);
 
-    // 验证已移除旧扁平顶层导出，确保主体命名空间边界干净唯一
-    for (const legacyKey of [
-      "defineModel",
-      "taggedUnion",
-      "defineCodec",
-      "inspectCodec",
-      "isValidationError",
-      "field",
-      "isField",
-      "pipe",
+    expect(Object.keys(codecEntry).sort()).toStrictEqual([
+      "Codec",
+      "Field",
+      "ValidationError",
+      "arrayOf",
+      "bigint",
+      "boolean",
+      "int",
+      "isoDateTime",
+      "literal",
+      "number",
+      "oneOf",
+      "recordOf",
+      "string",
+      "tupleOf",
+      "unknown",
+    ]);
+    expect(Object.keys(modviaEntry).sort()).toStrictEqual(
+      [...Object.keys(codecEntry), "Alias", "Model"].sort(),
+    );
+    expect(Object.keys(formatsEntry).sort()).toStrictEqual([
+      "email",
+      "ipv4",
+      "ipv6",
+      "isoDate",
+      "isoTime",
+      "jsonOf",
+      "jsonString",
+      "url",
+      "uuid",
+    ]);
+
+    expect(Object.keys(Codec).sort()).toStrictEqual([
+      "define",
+      "inspect",
       "invert",
       "lazy",
-      "unionOf",
-      "fromStandard",
-      "snakeCase",
-      "kebabCase",
-      "defineAlias",
-    ]) {
-      expect(legacyKey in modviaEntry).toBe(false);
-      expect(legacyKey in codecEntry).toBe(false);
-    }
+      "pipe",
+      "union",
+    ]);
+    expect(Object.keys(Field).sort()).toStrictEqual(["is", "of"]);
+    expect(Object.keys(Model).sort()).toStrictEqual(["define", "union"]);
+    expect(Object.keys(Alias).sort()).toStrictEqual(["define", "kebabCase", "snakeCase"]);
 
     const positiveMap = codecEntry.recordOf(
       codecEntry
@@ -155,16 +175,6 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     });
     expect(Cents.min(100).decode("250")).toBe(250);
     expect(Cents.min(100).safeDecode("50").ok).toBe(false);
-
-    // 验证 modvia/formats 已收敛移除旧 *FromString 独立函数，由标量自身 .fromString() 统一承载
-    for (const removedKey of [
-      "intFromString",
-      "numberFromString",
-      "booleanFromString",
-      "bigintFromString",
-    ]) {
-      expect(removedKey in formatsEntry).toBe(false);
-    }
 
     const AccountJson = jsonOf(
       Model.define({

@@ -1,7 +1,16 @@
-/** 剥离正则表达式中的有状态标志（g / y），确保多次重复校验保持无状态幂等 */
+function isRegExpInstance(value: unknown): value is RegExp {
+  return value instanceof RegExp || Object.prototype.toString.call(value) === "[object RegExp]";
+}
+
+/** 剥离正则表达式中的全局有状态标志（g），拒绝改变锚点语义的粘滞标志（y），确保重复校验幂等 */
 export function sanitizeStatelessPattern(pattern: RegExp): RegExp {
-  if (!(pattern instanceof RegExp)) {
+  if (!isRegExpInstance(pattern)) {
     throw new TypeError("pattern must be a RegExp instance");
   }
-  return new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+  if (pattern.flags.includes("y")) {
+    throw new RangeError(
+      'Sticky flag "y" is stateful and not supported in pattern(); use "^" anchor instead',
+    );
+  }
+  return new RegExp(pattern.source, pattern.flags.replace(/g/g, ""));
 }

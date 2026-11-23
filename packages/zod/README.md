@@ -83,4 +83,4 @@ const UuidCodec = zodCodec(zMini.uuid());
 - **隐式有损强转（`z.coerce.*`）**：接收 `unknown` 强转会破坏静态边界与往返收敛，在编译期与定义期同步拦截；布尔字符串等场景请使用显式收敛的 `z.stringbool()`。
 - **吞错回退（`.catch()`）**：静默掩盖校验失败，违反显式错误收集契约，在编译期与定义期抛出 `TypeError`。
 - **异步规则（`z.promise()` / 异步 `refine`）**：Modvia 编解码器保持纯同步执行，定义期或执行期遇到异步节点立即抛出 `TypeError`。
-- **错误码与路径映射**：Zod 校验产生的每条 `$ZodIssue` 均保留完整子路径，并将错误码映射为 `zod.<issue.code>`（如 `zod.invalid_type`、`zod.invalid_format`、`zod.too_small`、`zod.custom`），与父级 `Model` 的外部 DTO 键名路径自动拼接。
+- **错误码、路径与描述透传**：Zod 校验产生的每条 `$ZodIssue` 均保留完整子路径，并将错误码映射为 `zod.<issue.code>`（如 `zod.invalid_type`、`zod.invalid_format`、`zod.too_small`、`zod.custom`），与父级 `Model` 的外部 DTO 键名路径自动拼接；若原 Schema 声明了 `.describe(...)`，`Codec.inspect` 会自动保留其 `description` 说明文本。

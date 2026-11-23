@@ -1,7 +1,6 @@
 export type { CodecHandlers, StatefulCodecHandlers } from "./codec/core/define.ts";
 export * from "./codec/core/errors.ts";
 export type {
-  BoundCodecTrait,
   Brand,
   Branded,
   CodecContext,
@@ -9,27 +8,23 @@ export type {
   CodecIssueInput,
   CodecLike,
   CodecMethodBuilders,
+  CodecOrField,
   CodecTrait,
   CustomCodecMeta,
   DefaultProvider,
-  DisallowReservedCodecKeys,
+  FieldLike,
   FieldLiteral,
   FieldPresence,
   InferEncoded,
   InferValue,
   PathSegment,
-  ReservedCodecKey,
   SafeResult,
   StandardSchemaV1,
-  StatefulCodec,
-  StatefulCodecBase,
   StatefulCodecContext,
   StatePatch,
   ValidationIssue,
   ValueCodecInput,
   WithCodecTrait,
-  brandSymbol,
-  codecTraitSymbol,
 } from "./codec/core/types.ts";
 export * from "./codec/namespace.ts";
 export * from "./codec/operators/containers.ts";
@@ -39,6 +34,6 @@ export * from "./primitives/literal.ts";
 export * from "./primitives/numeric/bigint.ts";
 export * from "./primitives/numeric/int.ts";
 export * from "./primitives/numeric/number.ts";
-export type { OrderedNumericTrait } from "./primitives/numeric/shared.ts";
+export type { OrderedNumericCodec, OrderedNumericTrait } from "./primitives/numeric/shared.ts";
 export * from "./primitives/string.ts";
 export * from "./primitives/unknown.ts";

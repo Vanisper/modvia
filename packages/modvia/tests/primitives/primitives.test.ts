@@ -16,7 +16,7 @@ import { Model } from "../../src/index.ts";
 
 const instant = isoDateTime();
 
-describe("built-in scalars", () => {
+describe("primitive codecs", () => {
   test("string 支持链式 trim、长度、固定长度、nonEmpty 与正则派生，且归并状态后始终先裁剪再守卫长度", () => {
     const slug = string()
       .trim()
@@ -79,6 +79,9 @@ describe("built-in scalars", () => {
     }
     expect(() => string().minLength(5).maxLength(3)).toThrow(RangeError);
     expect(() => string().maxLength(0).nonEmpty()).toThrow(RangeError);
+    expect(() => string().pattern(/abc/y)).toThrow(RangeError);
+    const foreignRegex = runInNewContext("/^[a-z]+$/") as RegExp;
+    expect(string().pattern(foreignRegex).decode("abc")).toBe("abc");
     // @ts-expect-error pattern 必须为 RegExp 实例
     expect(() => string().pattern("^a$")).toThrow(TypeError);
   });
@@ -231,7 +234,9 @@ describe("built-in scalars", () => {
     expect(BoolText.decode("TRUE")).toBe(true);
     expect(BoolText.encode(true)).toBe("true");
 
-    const CustomBool = BoolText.tokens(["YES", "1"], ["NO", "0"]);
+    const mutableTruthy: [string, ...string[]] = ["YES", "1"];
+    const CustomBool = BoolText.tokens(mutableTruthy, ["NO", "0"]);
+    mutableTruthy[0] = "MUTATED";
     expect(CustomBool.decode("yes")).toBe(true);
     expect(CustomBool.decode("0")).toBe(false);
     expect(CustomBool.encode(true)).toBe("YES");
