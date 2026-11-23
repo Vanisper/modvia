@@ -1,17 +1,37 @@
 {
   "name": "@modvia/json-schema",
   "version": "0.0.0",
-  "private": true,
   "description": "Bidirectional JSON Schema & StandardJSONSchemaV1 exporter for Modvia codecs and models.",
+  "keywords": [
+    "codec",
+    "json-schema",
+    "modvia",
+    "openapi",
+    "standard-schema",
+    "typescript"
+  ],
+  "homepage": "https://github.com/Vanisper/modvia/tree/main/packages/json-schema#readme",
+  "bugs": {
+    "url": "https://github.com/Vanisper/modvia/issues"
+  },
   "license": "MIT",
+  "author": "Vanisper",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanisper/modvia.git",
+    "directory": "packages/json-schema"
+  },
   "files": [
     "dist"
   ],
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./dist/index.js",
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",
@@ -26,6 +46,6 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "modvia": "workspace:*"
+    "modvia": "workspace:^"
   }
 }

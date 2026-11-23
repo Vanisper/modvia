@@ -1,17 +1,38 @@
 {
   "name": "@modvia/zod",
   "version": "0.0.0",
-  "private": true,
   "description": "Bidirectional Zod v4 bridge for Modvia codecs and domain models.",
+  "keywords": [
+    "bidirectional",
+    "bridge",
+    "codec",
+    "modvia",
+    "typescript",
+    "validation",
+    "zod"
+  ],
+  "homepage": "https://github.com/Vanisper/modvia/tree/main/packages/zod#readme",
+  "bugs": {
+    "url": "https://github.com/Vanisper/modvia/issues"
+  },
   "license": "MIT",
+  "author": "Vanisper",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vanisper/modvia.git",
+    "directory": "packages/zod"
+  },
   "files": [
     "dist"
   ],
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./dist/index.js",
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",
@@ -27,7 +48,7 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
-    "modvia": "workspace:*",
+    "modvia": "workspace:^",
     "zod": "^4.0.0"
   }
 }

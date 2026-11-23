@@ -5,9 +5,14 @@ export default defineConfig({
     entry: {
       index: "src/index.ts",
     },
+    platform: "neutral",
     dts: {
       generator: "tsgo",
     },
     exports: true,
+    publint: true,
+    attw: {
+      profile: "esm-only",
+    },
   },
 });
