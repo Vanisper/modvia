@@ -70,9 +70,10 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
   factory: ((data: Data) => Out) | undefined,
   state: ModelState,
 ): Model<Data, DTO, Out, Fields> {
+  const fields = [...resolvedFields];
   const sourceByKey = new Map<string, string>();
   const knownSources = state.strict ? new Set<string>() : undefined;
-  for (const { key, source } of resolvedFields) {
+  for (const { key, source } of fields) {
     sourceByKey.set(key, source);
     knownSources?.add(source);
   }
@@ -83,8 +84,8 @@ function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
   const baseCodec = createCodec<Out, DTO>(
     (input, direction, collector) =>
       direction === "decode"
-        ? decodeModelObject(resolvedFields, knownSources, factory, input, collector)
-        : encodeModelObject(resolvedFields, input, collector),
+        ? decodeModelObject(fields, knownSources, factory, input, collector)
+        : encodeModelObject(fields, input, collector),
     {
       decodeSegmentMapper,
       descriptor: {
@@ -271,11 +272,9 @@ function decodeModelObject<Data, Out extends Data>(
   }
 
   const data: Record<string, unknown> = {};
-  const fieldCount = resolvedFields.length;
   let failed = false;
 
-  for (let i = 0; i < fieldCount; i++) {
-    const field = resolvedFields[i]!;
+  for (const field of resolvedFields) {
     const source = field.source;
 
     if (!Object.hasOwn(input, source)) {
@@ -283,13 +282,7 @@ function decodeModelObject<Data, Out extends Data>(
       if (presence === "optional") continue;
       if (presence === "defaulted" && field.resolveDefault !== undefined) {
         if (!failed) {
-          const defaultVal = field.resolveDefault();
-          const key = field.key;
-          if (field.fastKeyWrite && !(key in data)) {
-            data[key] = defaultVal;
-          } else {
-            writeOwnField(data, key, defaultVal);
-          }
+          writeOwnField(data, field.key, field.resolveDefault());
         }
         continue;
       }
@@ -307,19 +300,12 @@ function decodeModelObject<Data, Out extends Data>(
     if (decoded === INVALID) {
       failed = true;
     } else if (!failed) {
-      const key = field.key;
-      if (field.fastKeyWrite && !(key in data)) {
-        data[key] = decoded;
-      } else {
-        writeOwnField(data, key, decoded);
-      }
+      writeOwnField(data, field.key, decoded);
     }
   }
 
   if (knownSources !== undefined) {
-    const rawKeys = Object.keys(input);
-    for (let i = 0; i < rawKeys.length; i++) {
-      const rawKey = rawKeys[i]!;
+    for (const rawKey of Object.keys(input)) {
       if (!knownSources.has(rawKey)) {
         collector.pushSegment(rawKey);
         collector.add("object.unknown_key", `Unknown field: ${rawKey}`);
@@ -343,11 +329,9 @@ function encodeModelObject<DTO>(
   }
 
   const output: Record<string, unknown> = {};
-  const fieldCount = resolvedFields.length;
   let failed = false;
 
-  for (let i = 0; i < fieldCount; i++) {
-    const field = resolvedFields[i]!;
+  for (const field of resolvedFields) {
     const key = field.key;
 
     const fieldValue = readModelField(input, key);
@@ -367,12 +351,7 @@ function encodeModelObject<DTO>(
     if (encoded === INVALID) {
       failed = true;
     } else if (!failed) {
-      const source = field.source;
-      if (field.fastSourceWrite && !(source in output)) {
-        output[source] = encoded;
-      } else {
-        writeOwnField(output, source, encoded);
-      }
+      writeOwnField(output, field.source, encoded);
     }
   }
 

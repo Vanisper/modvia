@@ -153,11 +153,9 @@ export function recordOf(
       }
 
       const output: Record<string, unknown> = {};
-      const keys = Object.keys(input);
       let failed = false;
 
-      for (let i = 0; i < keys.length; i++) {
-        const rawKey = keys[i]!;
+      for (const rawKey of Object.keys(input)) {
         collector.pushSegment(rawKey);
         const convertedKey =
           keyRunner !== undefined ? keyRunner(rawKey, direction, collector) : rawKey;

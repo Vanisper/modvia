@@ -12,13 +12,14 @@ export function oneOf<const Values extends readonly string[]>(
   const values = Object.freeze([...new Set<string>(allowedValues)]);
   const expectedMessage = `Expected one of: ${values.join(", ")}`;
   const valueSet = new Set<string>(values);
+  const isAllowed = (value: string): value is Values[number] => valueSet.has(value);
 
   return createCodec<Values[number], Values[number]>(
     (input, _direction, collector) => {
-      if (typeof input !== "string" || !valueSet.has(input)) {
+      if (typeof input !== "string" || !isAllowed(input)) {
         return collector.add("string.one_of", expectedMessage);
       }
-      return input as Values[number];
+      return input;
     },
     {
       allowedLiterals: values,
@@ -44,20 +45,13 @@ export function literal<const Values extends readonly [FieldLiteral, ...FieldLit
   let runner: InternalRunner<Values[number], Values[number]>;
   if (uniqueValues.length === 1) {
     const single = uniqueValues[0] as Values[number];
-    if (typeof single === "number") {
-      runner = (input, _direction, collector) =>
-        Object.is(input, single) ? single : collector.add("value.literal", expectedMessage);
-    } else {
-      runner = (input, _direction, collector) =>
-        input === single ? single : collector.add("value.literal", expectedMessage);
-    }
+    runner = (input, _direction, collector) =>
+      Object.is(input, single) ? single : collector.add("value.literal", expectedMessage);
   } else {
-    const count = uniqueValues.length;
+    const candidates = [...uniqueValues];
     runner = (input, _direction, collector) => {
-      for (let i = 0; i < count; i++) {
-        if (Object.is(input, uniqueValues[i])) {
-          return uniqueValues[i] as Values[number];
-        }
+      for (const candidate of candidates) {
+        if (Object.is(input, candidate)) return candidate as Values[number];
       }
       return collector.add("value.literal", expectedMessage);
     };

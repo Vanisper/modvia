@@ -111,7 +111,6 @@ export function unionOf<
 
   const promotedBranches = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
   const branchRunners = promotedBranches.map((branch) => getCodecRunner(branch));
-  const branchCount = branchRunners.length;
 
   type UnionValue = InferValue<Branches[number]>;
   type UnionEncoded = InferEncoded<Branches[number]>;
@@ -119,8 +118,8 @@ export function unionOf<
   return createCodec<UnionValue, UnionEncoded>(
     (input, direction, collector) => {
       const mark = collector.mark();
-      for (let i = 0; i < branchCount; i++) {
-        const result = branchRunners[i]!(input, direction, collector);
+      for (const runBranch of branchRunners) {
+        const result = runBranch(input, direction, collector);
         if (result !== INVALID) {
           collector.restore(mark);
           return result as UnionValue | UnionEncoded;

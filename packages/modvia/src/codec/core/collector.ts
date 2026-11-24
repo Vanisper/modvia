@@ -131,8 +131,7 @@ export class InternalCollector implements IssueCollector {
   addRelativeIssues(nestedIssues: readonly ValidationIssue[]): Invalid {
     const path = this.path;
     const hasPrefix = path.length > 0;
-    for (let i = 0; i < nestedIssues.length; i++) {
-      const issue = nestedIssues[i]!;
+    for (const issue of nestedIssues) {
       this.issues.push(
         Object.freeze({
           path: hasPrefix

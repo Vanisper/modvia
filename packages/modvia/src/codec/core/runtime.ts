@@ -763,20 +763,13 @@ function createLiteralExtendedCodec<
   let runner: InternalRunner<T | Literals[number], Encoded | Literals[number]>;
   if (mergedLiterals.length === 1) {
     const single = mergedLiterals[0] as Literals[number];
-    if (typeof single === "number") {
-      runner = (input, direction, collector) =>
-        Object.is(input, single) ? single : baseRunner(input, direction, collector);
-    } else {
-      runner = (input, direction, collector) =>
-        input === single ? single : baseRunner(input, direction, collector);
-    }
+    runner = (input, direction, collector) =>
+      Object.is(input, single) ? single : baseRunner(input, direction, collector);
   } else {
-    const count = mergedLiterals.length;
+    const candidates = [...mergedLiterals];
     runner = (input, direction, collector) => {
-      for (let i = 0; i < count; i++) {
-        if (Object.is(input, mergedLiterals[i])) {
-          return mergedLiterals[i] as Literals[number];
-        }
+      for (const literal of candidates) {
+        if (Object.is(input, literal)) return literal as Literals[number];
       }
       return baseRunner(input, direction, collector);
     };

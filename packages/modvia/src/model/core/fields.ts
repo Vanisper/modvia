@@ -15,8 +15,6 @@ export interface ResolvedField {
   readonly resolveDefault?: () => unknown;
   readonly codec: CodecLike<unknown, unknown>;
   readonly runner: InternalRunner<unknown, unknown>;
-  readonly fastKeyWrite: boolean;
-  readonly fastSourceWrite: boolean;
 }
 
 export const resolvedFieldsSymbol = Symbol.for("modvia.resolvedFields");
@@ -48,8 +46,6 @@ export function resolveFields(fields: FieldRecord): readonly ResolvedField[] {
       runner: getCodecRunner(codec),
       source,
       presence,
-      fastKeyWrite: key !== "__proto__",
-      fastSourceWrite: source !== "__proto__",
       ...(resolveDefault ? { resolveDefault } : {}),
     });
   });
