@@ -2,11 +2,17 @@ import { isPlainObject, writeOwnField } from "../../shared/object.ts";
 import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
   acquireCollector,
+  createPrimaryContext,
   createScopedContext,
+  enterActiveContext,
+  hasActiveContext,
   INVALID,
   isAbortSignal,
+  leaveActiveContext,
+  primaryCollector,
   releaseCollector,
   releaseFailedCollector,
+  suspendActiveContext,
   type InternalCollector,
   type Invalid,
   type IssueCollector,
@@ -633,6 +639,10 @@ function createCheckedCodec<T, Encoded>(
   decodeSegmentMapper?: SegmentMapper,
 ): Codec<T, Encoded> {
   const baseRunner = getCodecRunner(base);
+  const primaryDecodeContext = createPrimaryContext(decodeSegmentMapper);
+  const primaryEncodeContext =
+    decodeSegmentMapper !== undefined ? createPrimaryContext() : primaryDecodeContext;
+
   return createCodec<T, Encoded>(
     (input, direction, collector) => {
       const converted = baseRunner(input, direction, collector);
@@ -640,10 +650,16 @@ function createCheckedCodec<T, Encoded>(
 
       const domainValue = (direction === "decode" ? converted : input) as T;
       const mark = collector.mark();
-      const context = createScopedContext(
-        collector,
-        direction === "decode" ? decodeSegmentMapper : undefined,
-      );
+      const context =
+        collector === primaryCollector
+          ? direction === "decode"
+            ? primaryDecodeContext
+            : primaryEncodeContext
+          : createScopedContext(
+              collector,
+              direction === "decode" ? decodeSegmentMapper : undefined,
+            );
+      const prevToken = enterActiveContext(context);
       try {
         rule(domainValue, context);
         return collector.mark() > mark ? INVALID : converted;
@@ -655,6 +671,8 @@ function createCheckedCodec<T, Encoded>(
           return collector.addRelativeIssues(error.issues);
         }
         throw error;
+      } finally {
+        leaveActiveContext(prevToken);
       }
     },
     { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
@@ -690,6 +708,17 @@ function executeTopLevel(
   direction: CodecDirection,
   collector: InternalCollector,
 ): unknown {
+  if (hasActiveContext()) {
+    const prevToken = suspendActiveContext();
+    try {
+      return runner(input, direction, collector);
+    } catch (error) {
+      releaseCollector(collector);
+      throw error;
+    } finally {
+      leaveActiveContext(prevToken);
+    }
+  }
   try {
     return runner(input, direction, collector);
   } catch (error) {

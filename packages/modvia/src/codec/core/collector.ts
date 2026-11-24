@@ -1,4 +1,10 @@
-import type { CodecContext, CodecIssueInput, PathSegment, ValidationIssue } from "./types.ts";
+import type {
+  CodecContext,
+  CodecIssueInput,
+  PathSegment,
+  StatefulCodecContext,
+  ValidationIssue,
+} from "./types.ts";
 
 export const errorBrand = Symbol.for("modvia.ValidationError");
 const abortBrand = Symbol.for("modvia.CodecAbort");
@@ -7,6 +13,8 @@ export const INVALID = Symbol.for("modvia.invalid");
 export type Invalid = typeof INVALID;
 
 const EMPTY_PATH: readonly PathSegment[] = Object.freeze([]);
+const INACTIVE_CONTEXT_MESSAGE =
+  "Codec context cannot be used outside its active callback execution";
 
 interface AbortSignal {
   readonly [abortBrand]: true;
@@ -14,7 +22,7 @@ interface AbortSignal {
   readonly message: string;
 }
 
-export function failWithAbortSignal(code: string, message: string): never {
+function failWithAbortSignal(code: string, message: string): never {
   const signal: AbortSignal = { [abortBrand]: true, code, message };
   // oxlint-disable-next-line no-throw-literal -- 内部零调用栈开销中断信号，由紧邻执行器捕获转为 Issue
   throw signal;
@@ -30,14 +38,39 @@ export function isAbortSignal(value: unknown): value is AbortSignal {
 
 export type SegmentMapper = (segment: PathSegment) => PathSegment;
 
+let activeContextToken: object | null = null;
+
+export function hasActiveContext(): boolean {
+  return activeContextToken !== null;
+}
+
+export function enterActiveContext(token: object): object | null {
+  const previous = activeContextToken;
+  activeContextToken = token;
+  return previous;
+}
+
+export function leaveActiveContext(previous: object | null): void {
+  activeContextToken = previous;
+}
+
+export function suspendActiveContext(): object | null {
+  const previous = activeContextToken;
+  activeContextToken = null;
+  return previous;
+}
+
+function assertActiveContext(expected: object): void {
+  if (activeContextToken !== expected) {
+    throw new Error(INACTIVE_CONTEXT_MESSAGE);
+  }
+}
+
 function recordContextIssue(
   collector: IssueCollector,
   detail: CodecIssueInput,
   mapFirstSegment?: SegmentMapper,
 ): void {
-  if (!collector.active) {
-    throw new Error("context.issue cannot be called outside an active codec execution");
-  }
   if (
     typeof detail !== "object" ||
     detail === null ||
@@ -63,19 +96,48 @@ export function createScopedContext(
   collector: IssueCollector,
   mapFirstSegment?: SegmentMapper,
 ): CodecContext {
-  if (mapFirstSegment === undefined && collector instanceof InternalCollector) {
-    return collector.defaultContext;
-  }
-  return {
-    fail: failWithAbortSignal,
+  const context: CodecContext = Object.freeze({
+    fail(code: string, message: string): never {
+      assertActiveContext(context);
+      return failWithAbortSignal(code, message);
+    },
     issue(detail: CodecIssueInput): void {
+      assertActiveContext(context);
       recordContextIssue(collector, detail, mapFirstSegment);
     },
-  };
+  });
+  return context;
+}
+
+export function createStatefulScopedContext<S extends object>(
+  collector: IssueCollector,
+  state: Readonly<S>,
+): StatefulCodecContext<S> {
+  const context: StatefulCodecContext<S> = Object.freeze({
+    fail(code: string, message: string): never {
+      assertActiveContext(context);
+      return failWithAbortSignal(code, message);
+    },
+    issue(detail: CodecIssueInput): void {
+      assertActiveContext(context);
+      recordContextIssue(collector, detail);
+    },
+    state,
+  });
+  return context;
+}
+
+export function createPrimaryContext(mapFirstSegment?: SegmentMapper): CodecContext {
+  return createScopedContext(primaryCollector, mapFirstSegment);
+}
+
+export function createPrimaryStatefulContext<S extends object>(
+  state: Readonly<S>,
+): StatefulCodecContext<S> {
+  return createStatefulScopedContext(primaryCollector, state);
 }
 
 export interface IssueCollector {
-  readonly active: boolean;
   pushSegment(segment: PathSegment): void;
   popSegment(): void;
   add(code: string, message: string): Invalid;
@@ -89,18 +151,6 @@ export interface IssueCollector {
 export class InternalCollector implements IssueCollector {
   private readonly path: PathSegment[] = [];
   issues: ValidationIssue[] = [];
-  active: boolean;
-  readonly defaultContext: CodecContext;
-
-  constructor(active = false) {
-    this.active = active;
-    this.defaultContext = Object.freeze({
-      fail: failWithAbortSignal,
-      issue: (detail: CodecIssueInput): void => {
-        recordContextIssue(this, detail);
-      },
-    });
-  }
 
   pushSegment(segment: PathSegment): void {
     this.path.push(segment);
@@ -164,29 +214,26 @@ export class InternalCollector implements IssueCollector {
   reset(): void {
     this.path.length = 0;
     this.issues.length = 0;
-    this.active = false;
   }
 
   takeFrozenIssues(): readonly ValidationIssue[] {
     const captured = Object.freeze(this.issues);
     this.issues = [];
     this.path.length = 0;
-    this.active = false;
     return captured;
   }
 }
 
-export const primaryCollector = new InternalCollector(false);
+export const primaryCollector = new InternalCollector();
 let idleCollector: InternalCollector | null = primaryCollector;
 
 export function acquireCollector(): InternalCollector {
   const collector = idleCollector;
   if (collector !== null) {
     idleCollector = null;
-    collector.active = true;
     return collector;
   }
-  return new InternalCollector(true);
+  return new InternalCollector();
 }
 
 export function releaseCollector(collector: InternalCollector): void {

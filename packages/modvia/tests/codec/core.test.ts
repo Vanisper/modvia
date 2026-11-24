@@ -484,10 +484,13 @@ describe("codec kernel", () => {
     });
     expect(InnerPositive.parse(3)).toBe(3);
 
-    // 编解码执行结束后滞后误调保留的 context.issue 必须立即抛错拒绝，不得污染空闲收集器池
+    // 编解码执行结束后、同次调用兄弟字段/工厂阶段或重入子调用内误调非当前激活 context 均立即抛错拒绝
     let leakedCheckCtx: Parameters<Parameters<typeof InnerPositive.check>[0]>[1] | undefined;
     let leakedStatefulCtx:
-      | { issue: (detail: { code: string; message: string }) => void }
+      | {
+          issue: (detail: { code: string; message: string }) => void;
+          fail: (code: string, message: string) => never;
+        }
       | undefined;
     const CheckedInner = InnerPositive.check((_val, ctx) => {
       leakedCheckCtx = ctx;
@@ -508,8 +511,78 @@ describe("codec kernel", () => {
     expect(() => leakedStatefulCtx?.issue({ code: "stale.stateful", message: "late" })).toThrow(
       Error,
     );
+    expect(() => leakedStatefulCtx?.fail("stale.fail", "late")).toThrow(Error);
 
-    // 即使经历后续成功解析，失败结果中也绝不混入滞后调用的幽灵错误
+    // 同一次顶层 Model.parse 内：字段 first 执行完毕后，兄弟字段 second 与 withFactory 均不得调用 first 泄露的 context
+    const SiblingMisuseModel = Model.define({
+      fields: {
+        first: StatefulCaptor,
+        second: Codec.define({
+          decode(input): string {
+            if (input === "misuse-issue") {
+              leakedStatefulCtx?.issue({ code: "sibling.ghost", message: "cross-field" });
+            }
+            if (input === "misuse-fail") {
+              leakedStatefulCtx?.fail("sibling.fail", "cross-field");
+            }
+            return String(input);
+          },
+          encode: (input) => String(input),
+        }),
+      },
+    }).withFactory((data) => {
+      if (data.second === "misuse-factory") {
+        leakedStatefulCtx?.issue({ code: "factory.ghost", message: "in-factory" });
+      }
+      return data;
+    });
+
+    expect(() => SiblingMisuseModel.safeParse({ first: "a", second: "misuse-issue" })).toThrow(
+      Error,
+    );
+    expect(() => SiblingMisuseModel.safeParse({ first: "a", second: "misuse-fail" })).toThrow(
+      Error,
+    );
+    expect(() => SiblingMisuseModel.safeParse({ first: "a", second: "misuse-factory" })).toThrow(
+      Error,
+    );
+    expect(SiblingMisuseModel.parse({ first: "a", second: "clean" })).toEqual({
+      first: "a",
+      second: "clean",
+    });
+
+    // 重入子调用执行期间外层 context 挂起不可被内层篡用，子调用退出后外层自身 context 自动恢复可用
+    let suspendedOuterCtx:
+      | { issue: (detail: { code: string; message: string }) => void }
+      | undefined;
+    const ReentrantChild = Codec.define({
+      decode(input): string {
+        if (input === "steal-outer") {
+          suspendedOuterCtx?.issue({ code: "stolen.outer", message: "from-child" });
+        }
+        return String(input);
+      },
+      encode: (input) => String(input),
+    });
+    const ReentrantParent = Codec.define({
+      decode(input, ctx): string {
+        suspendedOuterCtx = ctx;
+        const childVal = ReentrantChild.parse(input);
+        if (childVal === "flag-after-child") {
+          ctx.issue({ code: "parent.after_child", message: "resumed cleanly" });
+        }
+        return childVal;
+      },
+      encode: (input) => String(input),
+    });
+
+    expect(() => ReentrantParent.safeParse("steal-outer")).toThrow(Error);
+    expect(ReentrantParent.safeParse("flag-after-child")).toEqual({
+      ok: false,
+      issues: [{ path: [], code: "parent.after_child", message: "resumed cleanly" }],
+    });
+
+    // 即使经历上述所有拦截，后续解析结果中也绝不混入任何幽灵错误
     expect(StatefulCaptor.parse("clean")).toBe("clean");
     expect(InnerPositive.safeParse(0)).toEqual({
       ok: false,
