@@ -17,4 +17,11 @@ export default defineConfig({
       profile: "esm-only",
     },
   },
+  test: {
+    server: {
+      deps: {
+        external: [/\/dist\//],
+      },
+    },
+  },
 });

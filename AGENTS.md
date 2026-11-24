@@ -16,6 +16,7 @@
 ## 操作事实
 
 - `vp run ready` 顺序为 构建 → 检查 → 测试：构建阶段同步执行 `publint` 与 `attw` 包出口体检，产物测试通过包出口消费 `dist`（含 `modvia`、`modvia/codec`、`modvia/formats`、`@modvia/json-schema` 与 `@modvia/zod`），顺序是依赖不是风格。
+- `vp run bench` 构建产物后以原生 Node ESM 运行基准套件（`packages/modvia/benchmarks` 与 `packages/zod/benchmarks`）；`*.bench.ts` 与常规单测隔离执行，但纳入 `vp check` 静态与类型守卫。
 - 提交遵循 Conventional Commits：type/scope 用英文，subject 跟随仓库语言。
 
 <!--VITE PLUS START-->

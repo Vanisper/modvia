@@ -9,6 +9,7 @@ import {
   oneOf,
   string,
   unknown,
+  ValidationError,
   type InferEncoded,
   type InferValue,
 } from "../../src/codec.ts";
@@ -299,6 +300,17 @@ describe("primitive codecs", () => {
       ok: false,
       issues: [{ code: "type.datetime" }],
     });
+    for (const fakeDate of [Object.create(Date.prototype) as Date, new Proxy(new Date(0), {})]) {
+      expect(instant.safeDump(fakeDate)).toMatchObject({
+        ok: false,
+        issues: [{ code: "type.datetime" }],
+      });
+      expect(instant.safeEncode(fakeDate)).toMatchObject({
+        ok: false,
+        issues: [{ code: "type.datetime" }],
+      });
+      expect(() => instant.dump(fakeDate)).toThrow(ValidationError);
+    }
   });
 
   test("isoDateTime 先校验输入日历日期与偏移，再截断亚毫秒精度", () => {

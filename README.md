@@ -53,6 +53,7 @@ const dto = User.encode(user);
 ```sh
 vp install --frozen-lockfile
 vp run ready
+vp run bench
 ```
 
 `vp run ready` 按依赖顺序执行：
@@ -60,5 +61,7 @@ vp run ready
 1. 工作区构建（生成 `dist` 与类型声明，并通过 `publint` 与 `attw` 校验包出口契约）；
 2. 格式、静态检查与分层依赖守卫；
 3. 单元与产物集成测试（`tests/artifact.test.ts` 直接通过 `modvia`、`modvia/codec`、`modvia/formats`、`@modvia/json-schema` 与 `@modvia/zod` 包出口验证构建产物）。
+
+`vp run bench` 先构建各包产物，再通过原生 Node ESM 执行核心热路径基准测试（`packages/modvia/benchmarks`）与跨库对比基准测试（`packages/zod/benchmarks`）。
 
 核心实现位于 `packages/modvia`，生态导出与桥接位于 `packages/json-schema` 与 `packages/zod`。

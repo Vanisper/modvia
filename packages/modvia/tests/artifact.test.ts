@@ -22,7 +22,7 @@ import * as codecEntry from "modvia/codec";
 import * as formatsEntry from "modvia/formats";
 import { email, jsonOf, uuid } from "modvia/formats";
 
-// 通过包出口消费打包产物（modvia → dist/index.mjs，modvia/codec → dist/codec.mjs），
+// 通过包出口消费打包产物（modvia → dist/index.js，modvia/codec → dist/codec.js），
 // 必须在工作区构建之后运行（vp run ready 已按 构建 → 检查 → 测试 排序）。
 
 const Department = Model.define({

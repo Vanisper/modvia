@@ -1,4 +1,4 @@
-import { createCodec } from "../codec/core/runtime.ts";
+import { createCodec, type InternalRunner } from "../codec/core/runtime.ts";
 import type { Codec, FieldLiteral } from "../codec/core/types.ts";
 import { deduplicateLiterals, formatLiteral, isPrimitiveLiteral } from "../shared/value.ts";
 
@@ -42,16 +42,23 @@ export function literal<const Values extends readonly [FieldLiteral, ...FieldLit
   const uniqueValues = Object.freeze(deduplicateLiterals([], allowedValues));
   const expectedMessage = `Expected literal: ${uniqueValues.map(formatLiteral).join(", ")}`;
 
-  return createCodec<Values[number], Values[number]>(
-    (input, _direction, collector) => {
-      for (const candidate of uniqueValues) {
+  let runner: InternalRunner<Values[number], Values[number]>;
+  if (uniqueValues.length === 1) {
+    const single = uniqueValues[0] as Values[number];
+    runner = (input, _direction, collector) =>
+      Object.is(input, single) ? single : collector.add("value.literal", expectedMessage);
+  } else {
+    const candidates = [...uniqueValues];
+    runner = (input, _direction, collector) => {
+      for (const candidate of candidates) {
         if (Object.is(input, candidate)) return candidate as Values[number];
       }
       return collector.add("value.literal", expectedMessage);
-    },
-    {
-      allowedLiterals: uniqueValues,
-      descriptor: { kind: "literal", values: uniqueValues },
-    },
-  );
+    };
+  }
+
+  return createCodec<Values[number], Values[number]>(runner, {
+    allowedLiterals: uniqueValues,
+    descriptor: { kind: "literal", values: uniqueValues },
+  });
 }

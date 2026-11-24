@@ -1,6 +1,5 @@
 import {
   assertNonNegativeSafeInt,
-  checkLengthBounds,
   validateLengthBounds,
   type LengthBounds,
 } from "../../scalars/bounds/length.ts";
@@ -10,7 +9,7 @@ import {
   assertValueCodec,
   createCodec,
   createStatefulCodec,
-  executeCodec,
+  getCodecRunner,
   promoteToCodec,
   type InternalRunner,
 } from "../core/runtime.ts";
@@ -58,37 +57,36 @@ export type TupleEncoded<Items extends readonly CodecLike<unknown, unknown>[]> =
 export function arrayOf<T, Encoded>(codec: ValueCodecInput<T, Encoded>): ArrayCodec<T, Encoded[]> {
   assertValueCodec(codec, "arrayOf");
   const itemCodec = promoteToCodec(codec);
+  const itemRunner = getCodecRunner(itemCodec);
 
   return createStatefulCodec({
     state: {} as LengthBounds,
     validate: validateLengthBounds,
     createRunner(state): InternalRunner<T[], Encoded[]> {
+      const { minLength, maxLength } = state;
       return (input, direction, collector) => {
         if (!Array.isArray(input)) {
           return collector.add("type.array", "Expected an array");
         }
-        const violation = checkLengthBounds(input.length, state);
-        if (violation === "min_length") {
-          return collector.add("array.min_length", `Expected at least ${state.minLength} items`);
+        const len = input.length;
+        if (minLength !== undefined && len < minLength) {
+          return collector.add("array.min_length", `Expected at least ${minLength} items`);
         }
-        if (violation === "max_length") {
-          return collector.add("array.max_length", `Expected at most ${state.maxLength} items`);
+        if (maxLength !== undefined && len > maxLength) {
+          return collector.add("array.max_length", `Expected at most ${maxLength} items`);
         }
 
         const output: (T | Encoded)[] = [];
         let failed = false;
 
-        for (let index = 0; index < input.length; index++) {
+        for (let index = 0; index < len; index++) {
           collector.pushSegment(index);
-          try {
-            const converted = executeCodec(itemCodec, input[index], direction, collector);
-            if (converted === INVALID) {
-              failed = true;
-            } else if (!failed) {
-              output.push(converted);
-            }
-          } finally {
-            collector.popSegment();
+          const converted = itemRunner(input[index], direction, collector);
+          collector.popSegment();
+          if (converted === INVALID) {
+            failed = true;
+          } else if (!failed) {
+            output.push(converted);
           }
         }
 
@@ -145,6 +143,8 @@ export function recordOf(
 
   const keyCodec = keyInput !== undefined ? promoteToCodec(keyInput) : undefined;
   const valueCodec = promoteToCodec(valueInput);
+  const keyRunner = keyCodec !== undefined ? getCodecRunner(keyCodec) : undefined;
+  const valueRunner = getCodecRunner(valueCodec);
 
   return createCodec<Record<string, unknown>, Record<string, unknown>>(
     (input, direction, collector) => {
@@ -155,32 +155,31 @@ export function recordOf(
       const output: Record<string, unknown> = {};
       let failed = false;
 
-      for (const [rawKey, rawValue] of Object.entries(input)) {
+      for (const rawKey of Object.keys(input)) {
         collector.pushSegment(rawKey);
-        try {
-          const convertedKey =
-            keyCodec !== undefined ? executeCodec(keyCodec, rawKey, direction, collector) : rawKey;
-          const convertedValue = executeCodec(valueCodec, rawValue, direction, collector);
+        const convertedKey =
+          keyRunner !== undefined ? keyRunner(rawKey, direction, collector) : rawKey;
+        const convertedValue = valueRunner(input[rawKey], direction, collector);
 
-          if (convertedKey === INVALID || convertedValue === INVALID) {
-            failed = true;
-            continue;
-          }
-
-          if (Object.hasOwn(output, convertedKey)) {
-            collector.add(
-              "record.duplicate_key",
-              `Duplicate record key after conversion: ${convertedKey}`,
-            );
-            failed = true;
-            continue;
-          }
-
-          if (!failed) {
-            writeOwnField(output, convertedKey, convertedValue);
-          }
-        } finally {
+        if (convertedKey === INVALID || convertedValue === INVALID) {
           collector.popSegment();
+          failed = true;
+          continue;
+        }
+
+        if (Object.hasOwn(output, convertedKey)) {
+          collector.add(
+            "record.duplicate_key",
+            `Duplicate record key after conversion: ${convertedKey}`,
+          );
+          collector.popSegment();
+          failed = true;
+          continue;
+        }
+
+        collector.popSegment();
+        if (!failed) {
+          writeOwnField(output, convertedKey, convertedValue);
         }
       }
 
@@ -205,6 +204,8 @@ export function tupleOf<const Items extends readonly ValueCodecInput<unknown, un
   }
 
   const promotedItems = Object.freeze(items.map((item) => promoteToCodec(item)));
+  const itemRunners = promotedItems.map((item) => getCodecRunner(item));
+  const expectedLength = itemRunners.length;
 
   type DecodedTuple = TupleValues<Items>;
   type EncodedTuple = TupleEncoded<Items>;
@@ -214,28 +215,24 @@ export function tupleOf<const Items extends readonly ValueCodecInput<unknown, un
       if (!Array.isArray(input)) {
         return collector.add("type.array", "Expected an array");
       }
-      if (input.length !== promotedItems.length) {
+      if (input.length !== expectedLength) {
         return collector.add(
           "tuple.length",
-          `Expected tuple of length ${promotedItems.length}, got ${input.length}`,
+          `Expected tuple of length ${expectedLength}, got ${input.length}`,
         );
       }
 
       const output: unknown[] = [];
       let failed = false;
 
-      for (let index = 0; index < promotedItems.length; index++) {
-        const itemCodec = promotedItems[index] as Codec<unknown, unknown>;
+      for (let index = 0; index < expectedLength; index++) {
         collector.pushSegment(index);
-        try {
-          const converted = executeCodec(itemCodec, input[index], direction, collector);
-          if (converted === INVALID) {
-            failed = true;
-          } else if (!failed) {
-            output.push(converted);
-          }
-        } finally {
-          collector.popSegment();
+        const converted = itemRunners[index]!(input[index], direction, collector);
+        collector.popSegment();
+        if (converted === INVALID) {
+          failed = true;
+        } else if (!failed) {
+          output.push(converted);
         }
       }
 

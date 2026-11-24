@@ -1,4 +1,8 @@
 export function writeOwnField(target: object, key: string, value: unknown): void {
+  if (key !== "__proto__" && !(key in target)) {
+    (target as Record<string, unknown>)[key] = value;
+    return;
+  }
   Object.defineProperty(target, key, {
     value,
     enumerable: true,
@@ -12,9 +16,12 @@ export function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (!isObject(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === null || isObjectPrototype(prototype);
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  if (prototype === Object.prototype || prototype === null) {
+    return !Array.isArray(value);
+  }
+  return !Array.isArray(value) && isObjectPrototype(prototype);
 }
 
 export function isObjectPrototype(prototype: object): boolean {

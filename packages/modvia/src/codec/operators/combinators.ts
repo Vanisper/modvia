@@ -3,8 +3,9 @@ import {
   assertValueCodec,
   createCodec,
   createPipedCodec,
-  executeCodec,
+  getCodecRunner,
   promoteToCodec,
+  type InternalRunner,
 } from "../core/runtime.ts";
 import type {
   Codec,
@@ -44,9 +45,10 @@ export function pipe<Mid, Encoded, Out>(
 export function invert<T, Encoded>(codec: ValueCodecInput<T, Encoded>): Codec<Encoded, T> {
   assertValueCodec(codec, "invert");
   const innerCodec = promoteToCodec(codec);
+  const innerRunner = getCodecRunner(innerCodec);
   return createCodec<Encoded, T>(
     (input, direction, collector) =>
-      executeCodec(innerCodec, input, direction === "decode" ? "encode" : "decode", collector),
+      innerRunner(input, direction === "decode" ? "encode" : "decode", collector),
     {
       descriptor: {
         kind: "invert",
@@ -62,18 +64,23 @@ export function lazy<T, Encoded = T>(getter: () => ValueCodecInput<T, Encoded>):
     throw new TypeError("lazy requires a function returning a Codec");
   }
 
-  let cached: Codec<T, Encoded> | undefined;
+  let cachedCodec: Codec<T, Encoded> | undefined;
+  let cachedRunner: InternalRunner<T, Encoded> | undefined;
   const resolveTarget = (): Codec<T, Encoded> => {
-    if (cached === undefined) {
+    if (cachedCodec === undefined) {
       const target = getter();
       assertValueCodec(target, "lazy");
-      cached = promoteToCodec(target);
+      cachedCodec = promoteToCodec(target);
+      cachedRunner = getCodecRunner(cachedCodec);
     }
-    return cached;
+    return cachedCodec;
   };
 
   return createCodec<T, Encoded>(
-    (input, direction, collector) => executeCodec(resolveTarget(), input, direction, collector),
+    (input, direction, collector) => {
+      if (cachedRunner === undefined) resolveTarget();
+      return cachedRunner!(input, direction, collector);
+    },
     {
       descriptor: {
         kind: "lazy",
@@ -103,6 +110,7 @@ export function unionOf<
   }
 
   const promotedBranches = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
+  const branchRunners = promotedBranches.map((branch) => getCodecRunner(branch));
 
   type UnionValue = InferValue<Branches[number]>;
   type UnionEncoded = InferEncoded<Branches[number]>;
@@ -110,8 +118,8 @@ export function unionOf<
   return createCodec<UnionValue, UnionEncoded>(
     (input, direction, collector) => {
       const mark = collector.mark();
-      for (const branch of promotedBranches) {
-        const result = executeCodec(branch, input, direction, collector);
+      for (const runBranch of branchRunners) {
+        const result = runBranch(input, direction, collector);
         if (result !== INVALID) {
           collector.restore(mark);
           return result as UnionValue | UnionEncoded;

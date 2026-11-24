@@ -1,9 +1,10 @@
 import { INVALID } from "../../codec/core/collector.ts";
 import {
   createCodec,
-  executeCodec,
+  getCodecRunner,
   getStaticLiterals,
   promoteToCodec,
+  type InternalRunner,
 } from "../../codec/core/runtime.ts";
 import type { Codec, FieldLiteral, InferEncoded, InferValue } from "../../codec/core/types.ts";
 import { isObject, isPlainObject } from "../../shared/object.ts";
@@ -40,7 +41,7 @@ export function taggedUnion<
   }
 
   let wireSource: string | undefined;
-  const branchByTag = new Map<FieldLiteral, TaggedModelLike<Discriminator>>();
+  const branchRunnerByTag = new Map<FieldLiteral, InternalRunner<unknown, unknown>>();
 
   for (const branch of branches) {
     const resolvedFields = Reflect.get(branch, resolvedFieldsSymbol) as
@@ -73,21 +74,22 @@ export function taggedUnion<
       throw new TypeError(`Discriminator field "${discriminator}" must use literal() or oneOf()`);
     }
 
+    const branchRunner = getCodecRunner(branch);
     for (const tag of tags) {
       if (tag === undefined) {
         throw new TypeError(`Discriminator field "${discriminator}" cannot use undefined as a tag`);
       }
-      if (branchByTag.has(tag)) {
+      if (branchRunnerByTag.has(tag)) {
         throw new RangeError(
           `Duplicate discriminator tag ${formatLiteral(tag)} for "${discriminator}"`,
         );
       }
-      branchByTag.set(tag, branch);
+      branchRunnerByTag.set(tag, branchRunner);
     }
   }
 
   const externalKey = wireSource as string;
-  const expectedTagsText = [...branchByTag.keys()].map(formatLiteral).join(", ");
+  const expectedTagsText = [...branchRunnerByTag.keys()].map(formatLiteral).join(", ");
 
   type UnionModel = InferValue<Branches[number]>;
   type UnionDTO = InferEncoded<Branches[number]>;
@@ -108,8 +110,8 @@ export function taggedUnion<
         }
 
         const rawTag = input[externalKey];
-        const branch = branchByTag.get(rawTag as FieldLiteral);
-        if (!branch) {
+        const branchRunner = branchRunnerByTag.get(rawTag as FieldLiteral);
+        if (!branchRunner) {
           collector.pushSegment(externalKey);
           collector.add(
             "union.invalid_tag",
@@ -118,7 +120,7 @@ export function taggedUnion<
           collector.popSegment();
           return INVALID;
         }
-        return executeCodec(branch, input, "decode", collector) as UnionModel;
+        return branchRunner(input, "decode", collector) as UnionModel | typeof INVALID;
       }
 
       if (!isObject(input)) {
@@ -132,8 +134,8 @@ export function taggedUnion<
         return INVALID;
       }
 
-      const branch = branchByTag.get(modelTag as FieldLiteral);
-      if (!branch) {
+      const branchRunner = branchRunnerByTag.get(modelTag as FieldLiteral);
+      if (!branchRunner) {
         collector.pushSegment(discriminator);
         collector.add(
           "union.invalid_tag",
@@ -142,7 +144,7 @@ export function taggedUnion<
         collector.popSegment();
         return INVALID;
       }
-      return executeCodec(branch, input, "encode", collector) as UnionDTO;
+      return branchRunner(input, "encode", collector) as UnionDTO | typeof INVALID;
     },
     {
       descriptor: {

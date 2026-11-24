@@ -1,6 +1,6 @@
 import { createCodec } from "../codec/core/runtime.ts";
 import type { Codec } from "../codec/core/types.ts";
-import { formatDateToUtcIso, parseIsoDateTimeString } from "../scalars/temporal.ts";
+import { formatDateToUtcIso, parseIsoDateTimeEpochMs } from "../scalars/temporal.ts";
 
 const defaultIsoDateTimeCodec: Codec<Date, string> = createCodec<Date, string>(
   (input, direction, collector) => {
@@ -8,13 +8,14 @@ const defaultIsoDateTimeCodec: Codec<Date, string> = createCodec<Date, string>(
       if (typeof input !== "string") {
         return collector.add("type.datetime", "Expected an ISO date-time");
       }
-      const parsed = parseIsoDateTimeString(input);
-      if (!parsed.ok) {
-        return parsed.reason === "out_of_range"
-          ? collector.add("datetime.out_of_range", "Date-time exceeds the native Date range")
-          : collector.add("datetime.invalid", "Invalid ISO date-time");
+      const epochMs = parseIsoDateTimeEpochMs(input);
+      if (Number.isNaN(epochMs)) {
+        return collector.add("datetime.invalid", "Invalid ISO date-time");
       }
-      return parsed.date;
+      if (!Number.isFinite(epochMs)) {
+        return collector.add("datetime.out_of_range", "Date-time exceeds the native Date range");
+      }
+      return new Date(epochMs);
     }
 
     const formatted = formatDateToUtcIso(input);

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "ready": "vp run -r build && vp check && vp run -r test",
+    "bench": "vp run -r build && vp run -r --no-cache bench",
     "prepare": "vp config"
   },
   "devDependencies": {

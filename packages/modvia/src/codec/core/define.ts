@@ -1,4 +1,14 @@
-import { createScopedContext, INVALID, isAbortSignal } from "./collector.ts";
+import {
+  createPrimaryContext,
+  createPrimaryStatefulContext,
+  createScopedContext,
+  createStatefulScopedContext,
+  enterActiveContext,
+  INVALID,
+  isAbortSignal,
+  leaveActiveContext,
+  primaryCollector,
+} from "./collector.ts";
 import { ValidationError } from "./errors.ts";
 import {
   createCodec,
@@ -120,9 +130,13 @@ function buildHandlerRunner<T, Encoded>(
   decodeFn: (input: unknown, context: CodecContext) => T,
   encodeFn: (input: unknown, context: CodecContext) => Encoded,
 ): InternalRunner<T, Encoded> {
+  const primaryContext = createPrimaryContext();
+
   return (input, direction, collector) => {
     const mark = collector.mark();
-    const context = createScopedContext(collector);
+    const context =
+      collector === primaryCollector ? primaryContext : createScopedContext(collector);
+    const prevToken = enterActiveContext(context);
     try {
       const output = direction === "decode" ? decodeFn(input, context) : encodeFn(input, context);
       return collector.mark() > mark ? INVALID : output;
@@ -134,6 +148,8 @@ function buildHandlerRunner<T, Encoded>(
         return collector.addRelativeIssues(error.issues);
       }
       throw error;
+    } finally {
+      leaveActiveContext(prevToken);
     }
   };
 }
@@ -143,14 +159,15 @@ function buildStatefulHandlerRunner<T, Encoded, S extends object>(
   decodeFn: (input: unknown, context: StatefulCodecContext<S>) => T,
   encodeFn: (input: unknown, context: StatefulCodecContext<S>) => Encoded,
 ): InternalRunner<T, Encoded> {
+  const primaryStatefulContext = createPrimaryStatefulContext(state);
+
   return (input, direction, collector) => {
     const mark = collector.mark();
-    const baseContext = createScopedContext(collector);
-    const statefulContext: StatefulCodecContext<S> = Object.freeze({
-      fail: baseContext.fail,
-      issue: baseContext.issue,
-      state,
-    });
+    const statefulContext =
+      collector === primaryCollector
+        ? primaryStatefulContext
+        : createStatefulScopedContext(collector, state);
+    const prevToken = enterActiveContext(statefulContext);
     try {
       const output =
         direction === "decode"
@@ -165,6 +182,8 @@ function buildStatefulHandlerRunner<T, Encoded, S extends object>(
         return collector.addRelativeIssues(error.issues);
       }
       throw error;
+    } finally {
+      leaveActiveContext(prevToken);
     }
   };
 }

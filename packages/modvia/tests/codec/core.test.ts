@@ -426,4 +426,188 @@ describe("codec kernel", () => {
     ).toThrow(TypeError);
     expect(Object.isFrozen(nonPlainState)).toBe(false);
   });
+
+  test("收集器池在嵌套重入调用与未捕获异常恢复后保持路径与错误完全隔离", () => {
+    const InnerPositive = Codec.define({
+      state: { min: 1 },
+      decode(input, ctx): number {
+        if (typeof input !== "number" || input < ctx.state.min) {
+          ctx.issue({ code: "inner.min", message: "too small" });
+        }
+        return Number(input);
+      },
+      encode(input): number {
+        return Number(input);
+      },
+      methods: {},
+    });
+
+    const ReentrantOuter = Codec.define({
+      state: { bonus: 10 },
+      decode(input, ctx): number {
+        // 在外层收集器尚处于活跃状态时重入触发独立的顶层 safeParse（失败与成功各一次）
+        const rejected = InnerPositive.safeParse(0);
+        expect(rejected.ok).toBe(false);
+        const accepted = InnerPositive.parse(5);
+        if (typeof input !== "number") {
+          ctx.issue({ path: ["payload"], code: "outer.type", message: "expected number" });
+          return 0;
+        }
+        if (input === -999) {
+          throw new Error("fatal-custom-bug");
+        }
+        return input + accepted + ctx.state.bonus;
+      },
+      encode(input): number {
+        return Number(input) - 15;
+      },
+      methods: {},
+    });
+
+    const Container = arrayOf(ReentrantOuter);
+
+    expect(Container.parse([2])).toEqual([17]);
+    expect(Container.safeParse(["bad"])).toEqual({
+      ok: false,
+      issues: [{ path: [0, "payload"], code: "outer.type", message: "expected number" }],
+    });
+
+    // 深层自定义异常中断后，后续调用不得继承残留路径段或脏问题列表
+    expect(() => Container.parse(["bad-before-crash", -999])).toThrow("fatal-custom-bug");
+    expect(() => Container.safeParse(["bad-before-crash", -999])).toThrow("fatal-custom-bug");
+    expect(() => Container["~standard"].validate(["bad-before-crash", -999])).toThrow(
+      "fatal-custom-bug",
+    );
+    expect(Container.safeParse(["after-crash"])).toEqual({
+      ok: false,
+      issues: [{ path: [0, "payload"], code: "outer.type", message: "expected number" }],
+    });
+    expect(InnerPositive.parse(3)).toBe(3);
+
+    // 编解码执行结束后、同次调用兄弟字段/工厂阶段或重入子调用内误调非当前激活 context 均立即抛错拒绝
+    let leakedCheckCtx: Parameters<Parameters<typeof InnerPositive.check>[0]>[1] | undefined;
+    let leakedStatefulCtx:
+      | {
+          issue: (detail: { code: string; message: string }) => void;
+          fail: (code: string, message: string) => never;
+        }
+      | undefined;
+    const CheckedInner = InnerPositive.check((_val, ctx) => {
+      leakedCheckCtx = ctx;
+    });
+    const StatefulCaptor = Codec.define({
+      state: { tag: "v1" },
+      decode(input, ctx): string {
+        leakedStatefulCtx = ctx;
+        return String(input);
+      },
+      encode: (input) => String(input),
+      methods: {},
+    });
+
+    expect(CheckedInner.parse(5)).toBe(5);
+    expect(StatefulCaptor.parse("ok")).toBe("ok");
+    expect(() => leakedCheckCtx?.issue({ code: "stale.check", message: "late" })).toThrow(Error);
+    expect(() => leakedStatefulCtx?.issue({ code: "stale.stateful", message: "late" })).toThrow(
+      Error,
+    );
+    expect(() => leakedStatefulCtx?.fail("stale.fail", "late")).toThrow(Error);
+
+    // 同一次顶层 Model.parse 内：字段 first 执行完毕后，兄弟字段 second 与 withFactory 均不得调用 first 泄露的 context
+    const SiblingMisuseModel = Model.define({
+      fields: {
+        first: StatefulCaptor,
+        second: Codec.define({
+          decode(input): string {
+            if (input === "misuse-issue") {
+              leakedStatefulCtx?.issue({ code: "sibling.ghost", message: "cross-field" });
+            }
+            if (input === "misuse-fail") {
+              leakedStatefulCtx?.fail("sibling.fail", "cross-field");
+            }
+            return String(input);
+          },
+          encode: (input) => String(input),
+        }),
+      },
+    }).withFactory((data) => {
+      if (data.second === "misuse-factory") {
+        leakedStatefulCtx?.issue({ code: "factory.ghost", message: "in-factory" });
+      }
+      return data;
+    });
+
+    expect(() => SiblingMisuseModel.safeParse({ first: "a", second: "misuse-issue" })).toThrow(
+      Error,
+    );
+    expect(() => SiblingMisuseModel.safeParse({ first: "a", second: "misuse-fail" })).toThrow(
+      Error,
+    );
+    expect(() => SiblingMisuseModel.safeParse({ first: "a", second: "misuse-factory" })).toThrow(
+      Error,
+    );
+    expect(SiblingMisuseModel.parse({ first: "a", second: "clean" })).toEqual({
+      first: "a",
+      second: "clean",
+    });
+
+    // 重入子调用执行期间外层 context 挂起不可被内层篡用，子调用退出后外层自身 context 自动恢复可用
+    let suspendedOuterCtx:
+      | { issue: (detail: { code: string; message: string }) => void }
+      | undefined;
+    const ReentrantChild = Codec.define({
+      decode(input): string {
+        if (input === "steal-outer") {
+          suspendedOuterCtx?.issue({ code: "stolen.outer", message: "from-child" });
+        }
+        return String(input);
+      },
+      encode: (input) => String(input),
+    });
+    const ReentrantParent = Codec.define({
+      decode(input, ctx): string {
+        suspendedOuterCtx = ctx;
+        const childVal = ReentrantChild.parse(input);
+        if (childVal === "flag-after-child") {
+          ctx.issue({ code: "parent.after_child", message: "resumed cleanly" });
+        }
+        return childVal;
+      },
+      encode: (input) => String(input),
+    });
+
+    expect(() => ReentrantParent.safeParse("steal-outer")).toThrow(Error);
+    expect(ReentrantParent.safeParse("flag-after-child")).toEqual({
+      ok: false,
+      issues: [{ path: [], code: "parent.after_child", message: "resumed cleanly" }],
+    });
+
+    // 即使经历上述所有拦截，后续解析结果中也绝不混入任何幽灵错误
+    expect(StatefulCaptor.parse("clean")).toBe("clean");
+    expect(InnerPositive.safeParse(0)).toEqual({
+      ok: false,
+      issues: [{ path: [], code: "inner.min", message: "too small" }],
+    });
+
+    // 跨模块副本通过全局 Symbol.for 协议共享 runner 与 INVALID 哨兵时，失败信号正常识别
+    const foreignCodec = {
+      [Symbol.toStringTag]: "modvia.Codec" as const,
+      decode: () => 0,
+      encode: () => 0,
+    };
+    Object.defineProperty(foreignCodec, Symbol.for("modvia.codecRunner"), {
+      value(
+        _input: unknown,
+        _dir: "decode" | "encode",
+        collector: { add: (code: string, message: string) => unknown },
+      ) {
+        collector.add("foreign.invalid", "failed across copy");
+        return Symbol.for("modvia.invalid");
+      },
+    });
+    expect(arrayOf(foreignCodec).safeParse([1])).toEqual({
+      ok: false,
+      issues: [{ path: [0], code: "foreign.invalid", message: "failed across copy" }],
+    });
+  });
 });

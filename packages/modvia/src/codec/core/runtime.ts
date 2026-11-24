@@ -1,10 +1,19 @@
 import { isPlainObject, writeOwnField } from "../../shared/object.ts";
 import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
-  createCollector,
+  acquireCollector,
+  createPrimaryContext,
   createScopedContext,
+  enterActiveContext,
+  hasActiveContext,
   INVALID,
   isAbortSignal,
+  leaveActiveContext,
+  primaryCollector,
+  releaseCollector,
+  releaseFailedCollector,
+  suspendActiveContext,
+  type InternalCollector,
   type Invalid,
   type IssueCollector,
   type SegmentMapper,
@@ -38,6 +47,10 @@ export type InternalRunner<T, Encoded> = (
   direction: CodecDirection,
   collector: IssueCollector,
 ) => (T | Encoded) | Invalid;
+
+interface RunnerCarrier<T = unknown, Encoded = unknown> {
+  readonly [runnerSymbol]?: InternalRunner<T, Encoded>;
+}
 
 const runnerSymbol = Symbol.for("modvia.codecRunner");
 const literalStateSymbol = Symbol.for("modvia.literalState");
@@ -77,28 +90,25 @@ function instantiateCodec<T, Encoded, Extra extends object = Record<never, never
 ): Codec<T, Encoded> & Extra {
   const literalState = metadata?.literalState;
   const decodeSegmentMapper = metadata?.decodeSegmentMapper;
-  const safeParse = (input: unknown): SafeResult<T> => runSafe<T>(runner, input, "decode");
+  const unknownRunner = runner as InternalRunner<unknown, unknown>;
+
+  const parse = (input: unknown): T => runThrowing<T>(unknownRunner, input, "decode");
+  const dump = (input: unknown): Encoded => runThrowing<Encoded>(unknownRunner, input, "encode");
+  const safeParse = (input: unknown): SafeResult<T> => runSafe<T>(unknownRunner, input, "decode");
   const safeDump = (input: unknown): SafeResult<Encoded> =>
-    runSafe<Encoded>(runner, input, "encode");
-
-  const parse = (input: unknown): T => {
-    const result = safeParse(input);
-    if (!result.ok) throw new ValidationError(result.issues);
-    return result.value;
-  };
-
-  const dump = (input: unknown): Encoded => {
-    const result = safeDump(input);
-    if (!result.ok) throw new ValidationError(result.issues);
-    return result.value;
-  };
+    runSafe<Encoded>(unknownRunner, input, "encode");
 
   const standardProps: StandardSchemaV1.Props<Encoded, T> = Object.freeze({
     version: 1,
     vendor: "modvia",
     validate(value: unknown): StandardSchemaV1.Result<T> {
-      const result = safeParse(value);
-      return result.ok ? { value: result.value } : { issues: result.issues };
+      const collector = acquireCollector();
+      const output = executeTopLevel(unknownRunner, value, "decode", collector);
+      if (output === INVALID) {
+        return { issues: releaseFailedCollector(collector) };
+      }
+      releaseCollector(collector);
+      return { value: output as T };
     },
   });
 
@@ -126,13 +136,7 @@ function instantiateCodec<T, Encoded, Extra extends object = Record<never, never
     if (typeof message !== "string") {
       throw new TypeError("refine requires an error message string");
     }
-    return createCheckedCodec(
-      codec,
-      (value, context) => {
-        if (!predicate(value)) context.fail(code, message);
-      },
-      decodeSegmentMapper,
-    );
+    return createRefinedCodec(codec, predicate, code, message, decodeSegmentMapper);
   }
 
   const codec: Codec<T, Encoded> & Extra = {
@@ -223,7 +227,7 @@ export function extendCodec<T, Encoded, Extra extends object>(
   extra: Extra,
   extraSymbols?: ReadonlyArray<readonly [symbol, unknown]>,
 ): Codec<T, Encoded> & Extra {
-  const runner = Reflect.get(base, runnerSymbol) as InternalRunner<T, Encoded>;
+  const runner = (base as RunnerCarrier<T, Encoded>)[runnerSymbol]!;
   const literalState = Reflect.get(base, literalStateSymbol) as LiteralState | undefined;
   const allowedLiterals = Reflect.get(base, allowedLiteralsSymbol) as
     | readonly FieldLiteral[]
@@ -365,34 +369,12 @@ export function getCodecDescriptor(value: CodecOrField): CodecDescriptor {
   return defaultCustomDescriptor;
 }
 
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: "decode",
-  collector: IssueCollector,
-): T | Invalid;
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: "encode",
-  collector: IssueCollector,
-): Encoded | Invalid;
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: CodecDirection,
-  collector: IssueCollector,
-): (T | Encoded) | Invalid;
-export function executeCodec<T, Encoded>(
+function executeForeignCodec<T, Encoded>(
   codec: CodecLike<T, Encoded>,
   input: unknown,
   direction: CodecDirection,
   collector: IssueCollector,
 ): (T | Encoded) | Invalid {
-  const runner = Reflect.get(codec, runnerSymbol) as InternalRunner<T, Encoded> | undefined;
-  if (typeof runner === "function") {
-    return runner(input, direction, collector);
-  }
   try {
     return direction === "decode" ? codec.decode(input) : codec.encode(input);
   } catch (error) {
@@ -406,11 +388,17 @@ export function executeCodec<T, Encoded>(
   }
 }
 
+export function getCodecRunner<T, Encoded>(
+  codec: CodecLike<T, Encoded>,
+): InternalRunner<T, Encoded> {
+  const direct = (codec as RunnerCarrier<T, Encoded>)[runnerSymbol];
+  if (typeof direct === "function") return direct;
+  return (input, direction, collector) => executeForeignCodec(codec, input, direction, collector);
+}
+
 export function promoteToCodec<T, Encoded>(codec: CodecLike<T, Encoded>): Codec<T, Encoded> {
   if (isStandardCodec(codec)) return codec;
-  return createCodec<T, Encoded>((input, direction, collector) =>
-    executeCodec(codec, input, direction, collector),
-  );
+  return createCodec<T, Encoded>(getCodecRunner(codec));
 }
 
 export function isStandardCodec<T, Encoded>(
@@ -422,7 +410,7 @@ export function isStandardCodec(value: unknown): value is Codec<unknown, unknown
     typeof value === "object" &&
     value !== null &&
     (value as Partial<Codec<unknown, unknown>>)[Symbol.toStringTag] === "modvia.Codec" &&
-    typeof Reflect.get(value, runnerSymbol) === "function"
+    typeof (value as RunnerCarrier)[runnerSymbol] === "function"
   );
 }
 
@@ -431,7 +419,7 @@ export function isFieldDescriptor(
 ): value is FieldLike<unknown, unknown, string | undefined, FieldPresence> {
   if (typeof value !== "object" || value === null) return false;
   try {
-    if (Reflect.get(value, fieldBrand) === true) return true;
+    if ((value as { readonly [fieldBrand]?: unknown })[fieldBrand] === true) return true;
     const candidate = value as Partial<Field<unknown, unknown, string | undefined, FieldPresence>>;
     return (
       candidate[Symbol.toStringTag] === "modvia.Field" &&
@@ -470,7 +458,7 @@ export function assertValueCodec(
 
 export function getDefaultResolver(value: unknown): (() => unknown) | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const resolver = Reflect.get(value, defaultResolverSymbol);
+  const resolver = (value as { readonly [defaultResolverSymbol]?: unknown })[defaultResolverSymbol];
   return typeof resolver === "function" ? (resolver as () => unknown) : undefined;
 }
 
@@ -563,15 +551,18 @@ function buildPipedInstance<Mid, Encoded, Out>(
       ? (segment) => firstMapper(secondMapper(segment))
       : (secondMapper ?? firstMapper);
 
+  const firstRunner = getCodecRunner(firstCodec);
+  const secondRunner = getCodecRunner(secondCodec);
+
   const runner: InternalRunner<Out, Encoded> = (input, direction, collector) => {
     if (direction === "decode") {
-      const mid = executeCodec(firstCodec, input, "decode", collector);
+      const mid = firstRunner(input, "decode", collector);
       if (mid === INVALID) return INVALID;
-      return executeCodec(secondCodec, mid, "decode", collector);
+      return secondRunner(mid, "decode", collector) as Out | Invalid;
     }
-    const mid = executeCodec(secondCodec, input, "encode", collector);
+    const mid = secondRunner(input, "encode", collector);
     if (mid === INVALID) return INVALID;
-    return executeCodec(firstCodec, mid, "encode", collector);
+    return firstRunner(mid, "encode", collector) as Encoded | Invalid;
   };
 
   const metadata: CodecMetadata = {
@@ -623,22 +614,52 @@ export function getStaticLiterals(
   return inner ? deduplicateLiterals(state.literals, inner) : undefined;
 }
 
+function createRefinedCodec<T, Encoded>(
+  base: Codec<T, Encoded>,
+  predicate: (value: T) => boolean,
+  code: string,
+  message: string,
+  decodeSegmentMapper?: SegmentMapper,
+): Codec<T, Encoded> {
+  const baseRunner = getCodecRunner(base);
+  return createCodec<T, Encoded>(
+    (input, direction, collector) => {
+      const converted = baseRunner(input, direction, collector);
+      if (converted === INVALID) return INVALID;
+      const domainValue = (direction === "decode" ? converted : input) as T;
+      return predicate(domainValue) ? converted : collector.add(code, message);
+    },
+    { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
+  );
+}
+
 function createCheckedCodec<T, Encoded>(
   base: Codec<T, Encoded>,
   rule: (value: T, context: CodecContext) => void,
   decodeSegmentMapper?: SegmentMapper,
 ): Codec<T, Encoded> {
+  const baseRunner = getCodecRunner(base);
+  const primaryDecodeContext = createPrimaryContext(decodeSegmentMapper);
+  const primaryEncodeContext =
+    decodeSegmentMapper !== undefined ? createPrimaryContext() : primaryDecodeContext;
+
   return createCodec<T, Encoded>(
     (input, direction, collector) => {
-      const converted = executeCodec(base, input, direction, collector);
+      const converted = baseRunner(input, direction, collector);
       if (converted === INVALID) return INVALID;
 
       const domainValue = (direction === "decode" ? converted : input) as T;
       const mark = collector.mark();
-      const context = createScopedContext(
-        collector,
-        direction === "decode" ? decodeSegmentMapper : undefined,
-      );
+      const context =
+        collector === primaryCollector
+          ? direction === "decode"
+            ? primaryDecodeContext
+            : primaryEncodeContext
+          : createScopedContext(
+              collector,
+              direction === "decode" ? decodeSegmentMapper : undefined,
+            );
+      const prevToken = enterActiveContext(context);
       try {
         rule(domainValue, context);
         return collector.mark() > mark ? INVALID : converted;
@@ -650,6 +671,8 @@ function createCheckedCodec<T, Encoded>(
           return collector.addRelativeIssues(error.issues);
         }
         throw error;
+      } finally {
+        leaveActiveContext(prevToken);
       }
     },
     { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
@@ -661,34 +684,74 @@ function createNormalizedCodec<T, Encoded>(
   fn: (value: T) => T,
   decodeSegmentMapper?: SegmentMapper,
 ): Codec<T, Encoded> {
+  const baseRunner = getCodecRunner(base);
   return createCodec<T, Encoded>(
     (input, direction, collector) => {
       if (direction === "decode") {
-        const decoded = executeCodec(base, input, "decode", collector);
-        return decoded === INVALID ? INVALID : fn(decoded);
+        const decoded = baseRunner(input, "decode", collector);
+        return decoded === INVALID ? INVALID : fn(decoded as T);
       }
 
-      const firstPass = executeCodec(base, input, "encode", collector);
+      const firstPass = baseRunner(input, "encode", collector);
       if (firstPass === INVALID) return INVALID;
       const normalized = fn(input as T);
       if (Object.is(normalized, input)) return firstPass;
-      return executeCodec(base, normalized, "encode", collector);
+      return baseRunner(normalized, "encode", collector);
     },
     { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
   );
 }
 
+function executeTopLevel(
+  runner: InternalRunner<unknown, unknown>,
+  input: unknown,
+  direction: CodecDirection,
+  collector: InternalCollector,
+): unknown {
+  if (hasActiveContext()) {
+    const prevToken = suspendActiveContext();
+    try {
+      return runner(input, direction, collector);
+    } catch (error) {
+      releaseCollector(collector);
+      throw error;
+    } finally {
+      leaveActiveContext(prevToken);
+    }
+  }
+  try {
+    return runner(input, direction, collector);
+  } catch (error) {
+    releaseCollector(collector);
+    throw error;
+  }
+}
+
+function runThrowing<Result>(
+  runner: InternalRunner<unknown, unknown>,
+  input: unknown,
+  direction: CodecDirection,
+): Result {
+  const collector = acquireCollector();
+  const output = executeTopLevel(runner, input, direction, collector);
+  if (output === INVALID) {
+    throw new ValidationError(releaseFailedCollector(collector));
+  }
+  releaseCollector(collector);
+  return output as Result;
+}
+
 function runSafe<Result>(
-  runner: (input: unknown, direction: CodecDirection, collector: IssueCollector) => unknown,
+  runner: InternalRunner<unknown, unknown>,
   input: unknown,
   direction: CodecDirection,
 ): SafeResult<Result> {
-  const collector = createCollector();
-  const output = runner(input, direction, collector);
+  const collector = acquireCollector();
+  const output = executeTopLevel(runner, input, direction, collector);
   if (output === INVALID) {
-    const frozenIssues = Object.freeze(collector.issues);
-    return Object.freeze({ ok: false, issues: frozenIssues });
+    return Object.freeze({ ok: false, issues: releaseFailedCollector(collector) });
   }
+  releaseCollector(collector);
   return Object.freeze({ ok: true, value: output as Result });
 }
 
@@ -702,6 +765,7 @@ function createLiteralExtendedCodec<
   existingState?: LiteralState,
 ): Codec<T | Literals[number], Encoded | Literals[number]> {
   const base = (existingState?.base ?? current) as Codec<T, Encoded>;
+  const baseRunner = getCodecRunner(base);
   const existingDescription = existingState ? getCodecDescriptor(current).description : undefined;
   const mergedLiterals = deduplicateLiterals(existingState?.literals ?? [], addedLiterals);
   const literalState: LiteralState = {
@@ -709,23 +773,30 @@ function createLiteralExtendedCodec<
     literals: mergedLiterals,
   };
 
-  return createCodec<T | Literals[number], Encoded | Literals[number]>(
-    (input, direction, collector) => {
-      for (const literal of mergedLiterals) {
+  let runner: InternalRunner<T | Literals[number], Encoded | Literals[number]>;
+  if (mergedLiterals.length === 1) {
+    const single = mergedLiterals[0] as Literals[number];
+    runner = (input, direction, collector) =>
+      Object.is(input, single) ? single : baseRunner(input, direction, collector);
+  } else {
+    const candidates = [...mergedLiterals];
+    runner = (input, direction, collector) => {
+      for (const literal of candidates) {
         if (Object.is(input, literal)) return literal as Literals[number];
       }
-      return executeCodec(base, input, direction, collector);
+      return baseRunner(input, direction, collector);
+    };
+  }
+
+  return createCodec<T | Literals[number], Encoded | Literals[number]>(runner, {
+    literalState,
+    descriptor: {
+      kind: "or",
+      base: literalState.base,
+      literals: mergedLiterals,
+      ...(existingDescription !== undefined ? { description: existingDescription } : {}),
     },
-    {
-      literalState,
-      descriptor: {
-        kind: "or",
-        base: literalState.base,
-        literals: mergedLiterals,
-        ...(existingDescription !== undefined ? { description: existingDescription } : {}),
-      },
-    },
-  );
+  });
 }
 
 function toDefaultResolver<T>(provider: unknown): () => T {
