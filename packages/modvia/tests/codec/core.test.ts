@@ -473,10 +473,68 @@ describe("codec kernel", () => {
     });
 
     // 深层自定义异常中断后，后续调用不得继承残留路径段或脏问题列表
-    expect(() => Container.parse([-999])).toThrow("fatal-custom-bug");
+    expect(() => Container.parse(["bad-before-crash", -999])).toThrow("fatal-custom-bug");
+    expect(() => Container.safeParse(["bad-before-crash", -999])).toThrow("fatal-custom-bug");
+    expect(() => Container["~standard"].validate(["bad-before-crash", -999])).toThrow(
+      "fatal-custom-bug",
+    );
     expect(Container.safeParse(["after-crash"])).toEqual({
       ok: false,
       issues: [{ path: [0, "payload"], code: "outer.type", message: "expected number" }],
+    });
+    expect(InnerPositive.parse(3)).toBe(3);
+
+    // 编解码执行结束后滞后误调保留的 context.issue 必须立即抛错拒绝，不得污染空闲收集器池
+    let leakedCheckCtx: Parameters<Parameters<typeof InnerPositive.check>[0]>[1] | undefined;
+    let leakedStatefulCtx:
+      | { issue: (detail: { code: string; message: string }) => void }
+      | undefined;
+    const CheckedInner = InnerPositive.check((_val, ctx) => {
+      leakedCheckCtx = ctx;
+    });
+    const StatefulCaptor = Codec.define({
+      state: { tag: "v1" },
+      decode(input, ctx): string {
+        leakedStatefulCtx = ctx;
+        return String(input);
+      },
+      encode: (input) => String(input),
+      methods: {},
+    });
+
+    expect(CheckedInner.parse(5)).toBe(5);
+    expect(StatefulCaptor.parse("ok")).toBe("ok");
+    expect(() => leakedCheckCtx?.issue({ code: "stale.check", message: "late" })).toThrow(Error);
+    expect(() => leakedStatefulCtx?.issue({ code: "stale.stateful", message: "late" })).toThrow(
+      Error,
+    );
+
+    // 即使经历后续成功解析，失败结果中也绝不混入滞后调用的幽灵错误
+    expect(StatefulCaptor.parse("clean")).toBe("clean");
+    expect(InnerPositive.safeParse(0)).toEqual({
+      ok: false,
+      issues: [{ path: [], code: "inner.min", message: "too small" }],
+    });
+
+    // 跨模块副本通过全局 Symbol.for 协议共享 runner 与 INVALID 哨兵时，失败信号正常识别
+    const foreignCodec = {
+      [Symbol.toStringTag]: "modvia.Codec" as const,
+      decode: () => 0,
+      encode: () => 0,
+    };
+    Object.defineProperty(foreignCodec, Symbol.for("modvia.codecRunner"), {
+      value(
+        _input: unknown,
+        _dir: "decode" | "encode",
+        collector: { add: (code: string, message: string) => unknown },
+      ) {
+        collector.add("foreign.invalid", "failed across copy");
+        return Symbol.for("modvia.invalid");
+      },
+    });
+    expect(arrayOf(foreignCodec).safeParse([1])).toEqual({
+      ok: false,
+      issues: [{ path: [0], code: "foreign.invalid", message: "failed across copy" }],
     });
   });
 });

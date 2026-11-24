@@ -18,7 +18,7 @@ export interface ResolvedField {
 }
 
 export const resolvedFieldsSymbol = Symbol.for("modvia.resolvedFields");
-export const missingField = Symbol("modvia.missingField");
+export const missingField = Symbol.for("modvia.missingField");
 
 const EMPTY_ARGS: readonly never[] = Object.freeze([]);
 

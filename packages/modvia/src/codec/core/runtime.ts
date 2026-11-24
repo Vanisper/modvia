@@ -5,8 +5,9 @@ import {
   createScopedContext,
   INVALID,
   isAbortSignal,
-  releaseCleanCollector,
+  releaseCollector,
   releaseFailedCollector,
+  type InternalCollector,
   type Invalid,
   type IssueCollector,
   type SegmentMapper,
@@ -96,11 +97,11 @@ function instantiateCodec<T, Encoded, Extra extends object = Record<never, never
     vendor: "modvia",
     validate(value: unknown): StandardSchemaV1.Result<T> {
       const collector = acquireCollector();
-      const output = unknownRunner(value, "decode", collector);
+      const output = executeTopLevel(unknownRunner, value, "decode", collector);
       if (output === INVALID) {
         return { issues: releaseFailedCollector(collector) };
       }
-      releaseCleanCollector(collector);
+      releaseCollector(collector);
       return { value: output as T };
     },
   });
@@ -387,37 +388,6 @@ export function getCodecRunner<T, Encoded>(
   const direct = (codec as RunnerCarrier<T, Encoded>)[runnerSymbol];
   if (typeof direct === "function") return direct;
   return (input, direction, collector) => executeForeignCodec(codec, input, direction, collector);
-}
-
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: "decode",
-  collector: IssueCollector,
-): T | Invalid;
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: "encode",
-  collector: IssueCollector,
-): Encoded | Invalid;
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: CodecDirection,
-  collector: IssueCollector,
-): (T | Encoded) | Invalid;
-export function executeCodec<T, Encoded>(
-  codec: CodecLike<T, Encoded>,
-  input: unknown,
-  direction: CodecDirection,
-  collector: IssueCollector,
-): (T | Encoded) | Invalid {
-  const runner = (codec as RunnerCarrier<T, Encoded>)[runnerSymbol];
-  if (typeof runner === "function") {
-    return runner(input, direction, collector);
-  }
-  return executeForeignCodec(codec, input, direction, collector);
 }
 
 export function promoteToCodec<T, Encoded>(codec: CodecLike<T, Encoded>): Codec<T, Encoded> {
@@ -714,17 +684,31 @@ function createNormalizedCodec<T, Encoded>(
   );
 }
 
+function executeTopLevel(
+  runner: InternalRunner<unknown, unknown>,
+  input: unknown,
+  direction: CodecDirection,
+  collector: InternalCollector,
+): unknown {
+  try {
+    return runner(input, direction, collector);
+  } catch (error) {
+    releaseCollector(collector);
+    throw error;
+  }
+}
+
 function runThrowing<Result>(
   runner: InternalRunner<unknown, unknown>,
   input: unknown,
   direction: CodecDirection,
 ): Result {
   const collector = acquireCollector();
-  const output = runner(input, direction, collector);
+  const output = executeTopLevel(runner, input, direction, collector);
   if (output === INVALID) {
     throw new ValidationError(releaseFailedCollector(collector));
   }
-  releaseCleanCollector(collector);
+  releaseCollector(collector);
   return output as Result;
 }
 
@@ -734,11 +718,11 @@ function runSafe<Result>(
   direction: CodecDirection,
 ): SafeResult<Result> {
   const collector = acquireCollector();
-  const output = runner(input, direction, collector);
+  const output = executeTopLevel(runner, input, direction, collector);
   if (output === INVALID) {
     return Object.freeze({ ok: false, issues: releaseFailedCollector(collector) });
   }
-  releaseCleanCollector(collector);
+  releaseCollector(collector);
   return Object.freeze({ ok: true, value: output as Result });
 }
 

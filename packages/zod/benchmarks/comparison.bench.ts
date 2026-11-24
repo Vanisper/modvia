@@ -32,13 +32,13 @@ const ZodUserDtoSchema = z.object({
   created_at: ZodIsoDateCodec,
 });
 
-const BridgedSymmetricItem = zodCodec(
-  z.object({
-    sku: z.string().min(1),
-    quantity: z.int().min(1).max(999),
-    unit_price_cents: z.int().min(0),
-  }),
-);
+const ZodOrderItem = z.object({
+  sku: z.string().min(1),
+  quantity: z.int().min(1).max(999),
+  unit_price_cents: z.int().min(0),
+});
+
+const BridgedSymmetricItem = zodCodec(ZodOrderItem);
 
 const ModviaOrderItem = Model.define({
   fields: {
@@ -49,13 +49,7 @@ const ModviaOrderItem = Model.define({
 });
 
 const ModviaOrderList = arrayOf(ModviaOrderItem);
-const ZodOrderList = z.array(
-  z.object({
-    sku: z.string().min(1),
-    quantity: z.int().min(1).max(999),
-    unit_price_cents: z.int().min(0),
-  }),
-);
+const ZodOrderList = z.array(ZodOrderItem);
 
 const sampleUserDto = {
   id: "usr_01J9Z7K8Q2",
@@ -113,13 +107,13 @@ describe("Modvia vs Zod v4 跨库基准对比", () => {
         bench("Modvia Model.parse (含 snakeCase -> camelCase)", () => {
           sink = ModviaUser.parse(sampleUserDto);
         }),
-        bench("Zod v4 z.object + z.codec decode", () => {
+        bench("Zod v4 z.object + z.codec decode (无键名映射)", () => {
           sink = ZodUserDtoSchema.decode(sampleUserDto);
         }),
         bench("Modvia Model.encode (含 camelCase -> snakeCase)", () => {
           sink = ModviaUser.encode(sampleModviaUser);
         }),
-        bench("Zod v4 z.object + z.codec encode", () => {
+        bench("Zod v4 z.object + z.codec encode (无键名映射)", () => {
           sink = ZodUserDtoSchema.encode(sampleZodUser);
         }),
         BENCH_RUN,
@@ -128,7 +122,7 @@ describe("Modvia vs Zod v4 跨库基准对比", () => {
     },
   );
 
-  test("100 元素对象数组解码与 @modvia/zod 桥接开销", { timeout: 30_000 }, async ({ bench }) => {
+  test("100 元素对象数组解码", { timeout: 30_000 }, async ({ bench }) => {
     await bench.compare(
       bench("Modvia arrayOf(Model) parse (100 items)", () => {
         sink = ModviaOrderList.parse(validItems100);
@@ -136,8 +130,22 @@ describe("Modvia vs Zod v4 跨库基准对比", () => {
       bench("Zod v4 z.array(z.object) parse (100 items)", () => {
         sink = ZodOrderList.parse(validItems100);
       }),
-      bench("@modvia/zod zodCodec single item parse", () => {
-        sink = BridgedSymmetricItem.parse(validItems100[0]);
+      BENCH_RUN,
+    );
+    expect(sink).toBeDefined();
+  });
+
+  test("单对象解码与 @modvia/zod 桥接开销", { timeout: 30_000 }, async ({ bench }) => {
+    const singleItem = validItems100[0];
+    await bench.compare(
+      bench("Modvia Model.parse (single item)", () => {
+        sink = ModviaOrderItem.parse(singleItem);
+      }),
+      bench("Zod v4 z.object.parse (single item)", () => {
+        sink = ZodOrderItem.parse(singleItem);
+      }),
+      bench("@modvia/zod zodCodec.parse (single item)", () => {
+        sink = BridgedSymmetricItem.parse(singleItem);
       }),
       BENCH_RUN,
     );
@@ -157,16 +165,22 @@ describe("Modvia vs Zod v4 跨库基准对比", () => {
     expect(sink).toBeDefined();
   });
 
-  test("100 元素数组校验失败收集（200 条结构化错误）", { timeout: 30_000 }, async ({ bench }) => {
-    await bench.compare(
-      bench("Modvia safeParse (200 issues)", () => {
-        sink = ModviaOrderList.safeParse(invalidItems100);
-      }),
-      bench("Zod v4 safeParse (200 issues)", () => {
-        sink = ZodOrderList.safeParse(invalidItems100);
-      }),
-      BENCH_RUN,
-    );
-    expect(sink).toBeDefined();
-  });
+  test(
+    "100 元素数组校验失败收集（200 条结构化错误物化）",
+    { timeout: 30_000 },
+    async ({ bench }) => {
+      await bench.compare(
+        bench("Modvia safeParse (200 issues)", () => {
+          const res = ModviaOrderList.safeParse(invalidItems100);
+          sink = res.ok ? res.value : res.issues;
+        }),
+        bench("Zod v4 safeParse (200 issues)", () => {
+          const res = ZodOrderList.safeParse(invalidItems100);
+          sink = res.success ? res.data : res.error.issues;
+        }),
+        BENCH_RUN,
+      );
+      expect(sink).toBeDefined();
+    },
+  );
 });

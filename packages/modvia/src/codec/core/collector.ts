@@ -3,7 +3,7 @@ import type { CodecContext, CodecIssueInput, PathSegment, ValidationIssue } from
 export const errorBrand = Symbol.for("modvia.ValidationError");
 const abortBrand = Symbol.for("modvia.CodecAbort");
 
-export const INVALID = Symbol("modvia.invalid");
+export const INVALID = Symbol.for("modvia.invalid");
 export type Invalid = typeof INVALID;
 
 const EMPTY_PATH: readonly PathSegment[] = Object.freeze([]);
@@ -35,6 +35,9 @@ function recordContextIssue(
   detail: CodecIssueInput,
   mapFirstSegment?: SegmentMapper,
 ): void {
+  if (!collector.active) {
+    throw new Error("context.issue cannot be called outside an active codec execution");
+  }
   if (
     typeof detail !== "object" ||
     detail === null ||
@@ -72,6 +75,7 @@ export function createScopedContext(
 }
 
 export interface IssueCollector {
+  readonly active: boolean;
   pushSegment(segment: PathSegment): void;
   popSegment(): void;
   add(code: string, message: string): Invalid;
@@ -85,9 +89,11 @@ export interface IssueCollector {
 export class InternalCollector implements IssueCollector {
   private readonly path: PathSegment[] = [];
   issues: ValidationIssue[] = [];
+  active: boolean;
   readonly defaultContext: CodecContext;
 
-  constructor() {
+  constructor(active = false) {
+    this.active = active;
     this.defaultContext = Object.freeze({
       fail: failWithAbortSignal,
       issue: (detail: CodecIssueInput): void => {
@@ -155,32 +161,36 @@ export class InternalCollector implements IssueCollector {
     this.issues.length = index;
   }
 
-  resetClean(): void {
+  reset(): void {
     this.path.length = 0;
+    this.issues.length = 0;
+    this.active = false;
   }
 
   takeFrozenIssues(): readonly ValidationIssue[] {
     const captured = Object.freeze(this.issues);
     this.issues = [];
     this.path.length = 0;
+    this.active = false;
     return captured;
   }
 }
 
-export const primaryCollector = new InternalCollector();
+export const primaryCollector = new InternalCollector(false);
 let idleCollector: InternalCollector | null = primaryCollector;
 
 export function acquireCollector(): InternalCollector {
   const collector = idleCollector;
   if (collector !== null) {
     idleCollector = null;
+    collector.active = true;
     return collector;
   }
-  return new InternalCollector();
+  return new InternalCollector(true);
 }
 
-export function releaseCleanCollector(collector: InternalCollector): void {
-  collector.resetClean();
+export function releaseCollector(collector: InternalCollector): void {
+  collector.reset();
   idleCollector = collector;
 }
 
@@ -188,8 +198,4 @@ export function releaseFailedCollector(collector: InternalCollector): readonly V
   const frozenIssues = collector.takeFrozenIssues();
   idleCollector = collector;
   return frozenIssues;
-}
-
-export function createCollector(): IssueCollector {
-  return new InternalCollector();
 }

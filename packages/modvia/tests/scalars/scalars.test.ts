@@ -74,11 +74,20 @@ describe("pure scalar atoms (zero Codec coupling)", () => {
     expect(checkIsoTimeString("23:59:59.5")).toBe("ok");
     expect(checkIsoTimeString("24:00:00")).toBe("invalid_clock");
     expect(Object.is(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.000Z"), 0)).toBe(true);
+    expect(Object.is(parseIsoDateTimeEpochMs("1970-01-01T00:00:00-00:00"), 0)).toBe(true);
     expect(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.5Z")).toBe(500);
     expect(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.05Z")).toBe(50);
     expect(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.005999Z")).toBe(5);
+    expect(Number.isFinite(parseIsoDateTimeEpochMs("+000000-02-29T00:00:00Z"))).toBe(true);
+    expect(Number.isFinite(parseIsoDateTimeEpochMs("-000004-02-29T00:00:00Z"))).toBe(true);
+    expect(Number.isFinite(parseIsoDateTimeEpochMs("-000400-02-29T00:00:00Z"))).toBe(true);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("-000100-02-29T00:00:00Z"))).toBe(true);
     expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00."))).toBe(true);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.Z"))).toBe(true);
     expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.12xZ"))).toBe(true);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.123xZ"))).toBe(true);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("1970-01-01T00:00:00.1234x+08:00"))).toBe(true);
+    expect(Number.isNaN(parseIsoDateTimeEpochMs("2016-12-31T23:59:60Z"))).toBe(true);
     expect(parseIsoDateTimeEpochMs("+999999-01-01T00:00:00Z")).toBe(Number.POSITIVE_INFINITY);
 
     expect(isValidIpv4("192.168.1.1")).toBe(true);

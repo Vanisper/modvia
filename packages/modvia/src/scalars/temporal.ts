@@ -18,16 +18,6 @@ export function isValidClockTime(hour: number, minute: number, second: number): 
   return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
 }
 
-export function isValidUtcOffset(zone: string): boolean {
-  if (zone === "Z") return true;
-  if (zone.length !== 6) return false;
-  const sign = zone.charCodeAt(0);
-  if ((sign !== 43 && sign !== 45) || zone.charCodeAt(3) !== 58) return false;
-  const hours = readTwoDigits(zone, 1);
-  const minutes = readTwoDigits(zone, 4);
-  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
-}
-
 export type IsoDateCheckResult = "ok" | "invalid_syntax" | "invalid_calendar";
 
 export function checkIsoDateString(input: string): IsoDateCheckResult {
@@ -187,28 +177,8 @@ export function parseIsoDateTimeEpochMs(input: string): number {
   return epochMs === 0 ? 0 : epochMs;
 }
 
-export type ParseIsoDateTimeResult =
-  | { readonly ok: true; readonly date: Date }
-  | { readonly ok: false; readonly reason: "invalid" | "out_of_range" };
-
-export function parseIsoDateTimeString(input: string): ParseIsoDateTimeResult {
-  const epochMs = parseIsoDateTimeEpochMs(input);
-  if (Number.isNaN(epochMs)) {
-    return { ok: false, reason: "invalid" };
-  }
-  if (!Number.isFinite(epochMs)) {
-    return { ok: false, reason: "out_of_range" };
-  }
-  return { ok: true, date: new Date(epochMs) };
-}
-
 export function formatDateToUtcIso(input: unknown): string | null {
   if (typeof input !== "object" || input === null) return null;
-  if (input instanceof Date) {
-    return Number.isNaN(Date.prototype.getTime.call(input))
-      ? null
-      : Date.prototype.toISOString.call(input);
-  }
   try {
     return Number.isNaN(Date.prototype.getTime.call(input))
       ? null
