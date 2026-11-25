@@ -51,7 +51,8 @@ const defaultEmailCodec: EmailCodec = defineCodec({
   state: { trim: false, lowercase: false } as EmailState,
   decode: validateEmail,
   encode: validateEmail,
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "email",
     encodedSchema: emailSchema,
     decodedSchema: emailSchema,

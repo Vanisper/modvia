@@ -1,12 +1,6 @@
-import { INVALID } from "../core/collector.ts";
-import {
-  assertValueCodec,
-  createCodec,
-  createPipedCodec,
-  getCodecRunner,
-  promoteToCodec,
-  type InternalRunner,
-} from "../core/runtime.ts";
+import { assertValueCodec, createCodec, promoteToCodec } from "../core/codec.ts";
+import { kernelOf } from "../core/internals.ts";
+import { invertKernel, lazyKernel, unionKernel } from "../core/kernel.ts";
 import type {
   Codec,
   CodecTrait,
@@ -17,13 +11,13 @@ import type {
 } from "../core/types.ts";
 
 /**
- * 将上游 Codec 与下游状态化 Codec 首尾串联为双向管道，保留下游自有链式方法
+ * 将上游 Codec 接入下游带自有方法 Codec 的上游槽，保留下游全部值域方法
  *
  * @description 解码按 first → second 正向执行，编码按 second → first 逆向执行
  */
 export function pipe<Mid, Encoded, Out, SecondEncoded extends Mid, Trait extends CodecTrait>(
   first: ValueCodecInput<Mid, Encoded>,
-  second: WithCodecTrait<Out, SecondEncoded, Trait>,
+  second: WithCodecTrait<Out, SecondEncoded, Trait, object>,
 ): WithCodecTrait<Out, Encoded, Trait>;
 /**
  * 将两个值级 Codec 首尾串联为双向管道
@@ -34,28 +28,22 @@ export function pipe<Mid, Encoded, Out>(
   first: ValueCodecInput<Mid, Encoded>,
   second: ValueCodecInput<Out, Mid>,
 ): Codec<Out, Encoded>;
-export function pipe<Mid, Encoded, Out>(
-  first: ValueCodecInput<Mid, Encoded>,
-  second: ValueCodecInput<Out, Mid>,
-): Codec<Out, Encoded> {
-  return createPipedCodec(first, second);
+export function pipe(
+  first: ValueCodecInput<unknown, unknown>,
+  second: ValueCodecInput<unknown, unknown>,
+): Codec<unknown, unknown> {
+  assertValueCodec(first, "pipe");
+  return promoteToCodec(first).pipe(second) as unknown as Codec<unknown, unknown>;
 }
 
 /** 交换 Codec 的解码与编码方向 */
 export function invert<T, Encoded>(codec: ValueCodecInput<T, Encoded>): Codec<Encoded, T> {
   assertValueCodec(codec, "invert");
-  const innerCodec = promoteToCodec(codec);
-  const innerRunner = getCodecRunner(innerCodec);
-  return createCodec<Encoded, T>(
-    (input, direction, collector) =>
-      innerRunner(input, direction === "decode" ? "encode" : "decode", collector),
-    {
-      descriptor: {
-        kind: "invert",
-        inner: innerCodec as Codec<unknown, unknown>,
-      },
-    },
-  );
+  const inner = promoteToCodec(codec);
+  return createCodec(invertKernel(kernelOf(inner)), {
+    kind: "invert",
+    inner: inner as Codec<unknown, unknown>,
+  });
 }
 
 /** 惰性求值引用的 Codec，用于声明自引用递归结构 */
@@ -63,30 +51,18 @@ export function lazy<T, Encoded = T>(getter: () => ValueCodecInput<T, Encoded>):
   if (typeof getter !== "function") {
     throw new TypeError("lazy requires a function returning a Codec");
   }
-
-  let cachedCodec: Codec<T, Encoded> | undefined;
-  let cachedRunner: InternalRunner<T, Encoded> | undefined;
-  const resolveTarget = (): Codec<T, Encoded> => {
-    if (cachedCodec === undefined) {
-      const target = getter();
-      assertValueCodec(target, "lazy");
-      cachedCodec = promoteToCodec(target);
-      cachedRunner = getCodecRunner(cachedCodec);
+  let target: Codec<T, Encoded> | undefined;
+  const resolve = (): Codec<T, Encoded> => {
+    if (target === undefined) {
+      const resolved = getter();
+      assertValueCodec(resolved, "lazy");
+      target = promoteToCodec(resolved);
     }
-    return cachedCodec;
+    return target;
   };
-
-  return createCodec<T, Encoded>(
-    (input, direction, collector) => {
-      if (cachedRunner === undefined) resolveTarget();
-      return cachedRunner!(input, direction, collector);
-    },
-    {
-      descriptor: {
-        kind: "lazy",
-        resolve: () => resolveTarget() as Codec<unknown, unknown>,
-      },
-    },
+  return createCodec(
+    lazyKernel(() => kernelOf(resolve())),
+    { kind: "lazy", resolve: resolve as () => Codec<unknown, unknown> },
   );
 }
 
@@ -108,31 +84,9 @@ export function unionOf<
   for (const branch of branches) {
     assertValueCodec(branch, "unionOf");
   }
-
-  const promotedBranches = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
-  const branchRunners = promotedBranches.map((branch) => getCodecRunner(branch));
-
-  type UnionValue = InferValue<Branches[number]>;
-  type UnionEncoded = InferEncoded<Branches[number]>;
-
-  return createCodec<UnionValue, UnionEncoded>(
-    (input, direction, collector) => {
-      const mark = collector.mark();
-      for (const runBranch of branchRunners) {
-        const result = runBranch(input, direction, collector);
-        if (result !== INVALID) {
-          collector.restore(mark);
-          return result as UnionValue | UnionEncoded;
-        }
-        collector.restore(mark);
-      }
-      return collector.add("union.no_match", "Input did not match any union branch");
-    },
-    {
-      descriptor: {
-        kind: "union",
-        branches: promotedBranches,
-      },
-    },
-  );
+  const promoted = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
+  return createCodec(unionKernel(promoted.map((branch) => kernelOf(branch))), {
+    kind: "union",
+    branches: promoted,
+  }) as unknown as Codec<InferValue<Branches[number]>, InferEncoded<Branches[number]>>;
 }

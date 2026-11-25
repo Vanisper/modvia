@@ -18,7 +18,8 @@ const uuidSchema = Object.freeze({ type: "string", format: "uuid" });
 const defaultUuidCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateUuid,
   encode: validateUuid,
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "uuid",
     encodedSchema: uuidSchema,
     decodedSchema: uuidSchema,

@@ -1,43 +1,27 @@
-import {
-  INVALID,
-  isAbortSignal,
-  openContext,
-  openStatefulContext,
-  type ContextScope,
-  type IssueCollector,
-} from "./collector.ts";
-import { ValidationError } from "./errors.ts";
-import {
-  createCodec,
-  createField,
-  createStatefulCodec,
-  getCodecDescriptor,
-  getDefaultResolver,
-  isFieldDescriptor,
-  isStandardCodec,
-  promoteToCodec,
-  type InternalRunner,
-} from "./runtime.ts";
+import { isPlainObject } from "../../shared/object.ts";
+import { createCodec } from "./codec.ts";
+import { handlerKernel } from "./context.ts";
+import { createFamily } from "./trait.ts";
 import type {
   Codec,
-  CodecContext,
   CodecDescriptor,
-  CodecLike,
   CodecMethodBuilders,
-  CodecOrField,
-  CustomCodecMeta,
+  DecodeContext,
   DisallowReservedCodecKeys,
-  Field,
-  FieldLike,
-  FieldPresence,
-  StatefulCodecContext,
+  EncodeContext,
+  Failed,
   WithCodecTrait,
 } from "./types.ts";
 
+const EMPTY_STATE: Readonly<Record<never, never>> = Object.freeze({});
+
 export interface CodecHandlers<T, Encoded> {
-  decode(this: void, input: unknown, context: CodecContext): T;
-  encode(this: void, input: unknown, context: CodecContext): Encoded;
-  readonly meta?: CustomCodecMeta;
+  /** 校验 unknown 外部输入并解码为业务值（可直接返回 context.run 产生的 Failed 以退出失败路径） */
+  decode(this: void, input: unknown, context: DecodeContext): T | Failed;
+  /** 校验 unknown 候选业务值并编码为外部表示（可直接返回 context.run 产生的 Failed 以退出失败路径） */
+  encode(this: void, input: unknown, context: EncodeContext): Encoded | Failed;
+  /** 只读结构描述符（缺省为不透明 custom 节点），供 Schema 导出等反射工具读取 */
+  readonly descriptor?: CodecDescriptor;
 }
 
 export interface StatefulCodecHandlers<
@@ -51,11 +35,13 @@ export interface StatefulCodecHandlers<
   /** 可选的状态不变量校验器，在初始构造与每次自有方法派生时同步执行 */
   validate?(this: void, state: Readonly<NoInfer<S>>): void;
   /** 基于 context.state 只读状态将外部输入解码为业务值 */
-  decode(this: void, input: unknown, context: StatefulCodecContext<NoInfer<S>>): T;
+  decode(this: void, input: unknown, context: DecodeContext<NoInfer<S>>): T | Failed;
   /** 基于 context.state 只读状态将业务值编码为外部表示 */
-  encode(this: void, input: unknown, context: StatefulCodecContext<NoInfer<S>>): Encoded;
-  /** 静态或随状态动态计算的只读结构元数据，供 Schema 导出工具读取 */
-  readonly meta?: CustomCodecMeta | ((this: void, state: Readonly<NoInfer<S>>) => CustomCodecMeta);
+  encode(this: void, input: unknown, context: EncodeContext<NoInfer<S>>): Encoded | Failed;
+  /** 静态或随状态动态计算的只读结构描述符 */
+  readonly descriptor?:
+    | CodecDescriptor
+    | ((this: void, state: Readonly<NoInfer<S>>) => CodecDescriptor);
   /** 自有链式方法定义表：参数即对外方法签名，返回局部状态补丁或 (prev) => patch 函数 */
   readonly methods: M & DisallowReservedCodecKeys<M>;
 }
@@ -69,11 +55,11 @@ export function defineCodec<
 >(handlers: StatefulCodecHandlers<T, Encoded, S, M>): WithCodecTrait<T, Encoded, M>;
 /** 通过一对双向转换函数创建标准 Codec，正反两端均须对 unknown 输入做校验并可通过 context 报告问题 */
 export function defineCodec<T, Encoded = T>(handlers: CodecHandlers<T, Encoded>): Codec<T, Encoded>;
-export function defineCodec<T, Encoded = T>(
+export function defineCodec(
   handlers:
-    | CodecHandlers<T, Encoded>
-    | StatefulCodecHandlers<T, Encoded, object, CodecMethodBuilders<object>>,
-): Codec<T, Encoded> {
+    | CodecHandlers<unknown, unknown>
+    | StatefulCodecHandlers<unknown, unknown, object, CodecMethodBuilders<object>>,
+): Codec<unknown, unknown> {
   if (typeof handlers !== "object" || handlers === null) {
     throw new TypeError("Codec.define requires a handlers object");
   }
@@ -82,152 +68,45 @@ export function defineCodec<T, Encoded = T>(
   }
 
   if ("state" in handlers || "methods" in handlers) {
-    const stateful = handlers as StatefulCodecHandlers<
-      T,
-      Encoded,
-      object,
-      CodecMethodBuilders<object>
+    const stateful = handlers as Partial<
+      StatefulCodecHandlers<unknown, unknown, object, CodecMethodBuilders<object>>
     >;
     if (stateful.validate !== undefined && typeof stateful.validate !== "function") {
       throw new TypeError("Codec.define validate must be a function");
     }
-    return createStatefulCodec({
-      state: stateful.state,
+    if (!isPlainObject(stateful.methods)) {
+      throw new TypeError("Codec methods must be a plain object");
+    }
+    assertDescriptorOption(stateful.descriptor, true);
+    const create = createFamily({
+      state: stateful.state as object,
       validate: stateful.validate,
-      createRunner: (state) => buildStatefulHandlerRunner(state, stateful.decode, stateful.encode),
-      createDescriptor: (state, explicitDescription) => {
-        const resolvedMeta =
-          typeof stateful.meta === "function" ? stateful.meta(state) : stateful.meta;
-        return buildCustomDescriptor(resolvedMeta, explicitDescription);
-      },
+      decode: handlers.decode,
+      encode: handlers.encode,
+      descriptor: stateful.descriptor,
       methods: stateful.methods,
     });
+    return create() as unknown as Codec<unknown, unknown>;
   }
 
-  return createCodec<T, Encoded>(buildHandlerRunner(handlers.decode, handlers.encode), {
-    descriptor: buildCustomDescriptor(handlers.meta),
-  });
-}
-
-function buildCustomDescriptor(
-  meta?: CustomCodecMeta,
-  explicitDescription?: string,
-): CodecDescriptor {
-  const description = explicitDescription ?? meta?.description;
-  return {
-    kind: "custom",
-    ...(meta?.format !== undefined ? { format: meta.format } : {}),
-    ...(description !== undefined ? { description } : {}),
-    ...(meta?.encodedSchema !== undefined ? { encodedSchema: meta.encodedSchema } : {}),
-    ...(meta?.decodedSchema !== undefined ? { decodedSchema: meta.decodedSchema } : {}),
-  };
-}
-
-function buildHandlerRunner<T, Encoded>(
-  decodeFn: (input: unknown, context: CodecContext) => T,
-  encodeFn: (input: unknown, context: CodecContext) => Encoded,
-): InternalRunner<T, Encoded> {
-  return (input, direction, collector) =>
-    runHandler(openContext(collector), collector, (context) =>
-      direction === "decode" ? decodeFn(input, context) : encodeFn(input, context),
-    );
-}
-
-function buildStatefulHandlerRunner<T, Encoded, S extends object>(
-  state: Readonly<S>,
-  decodeFn: (input: unknown, context: StatefulCodecContext<S>) => T,
-  encodeFn: (input: unknown, context: StatefulCodecContext<S>) => Encoded,
-): InternalRunner<T, Encoded> {
-  return (input, direction, collector) =>
-    runHandler(openStatefulContext(collector, state), collector, (context) =>
-      direction === "decode" ? decodeFn(input, context) : encodeFn(input, context),
-    );
-}
-
-/** 在回调作用域内执行用户 handler：中断信号与嵌套 ValidationError 转为问题，回调结束即关闭 context */
-function runHandler<Context, Output>(
-  scope: ContextScope<Context>,
-  collector: IssueCollector,
-  invoke: (context: Context) => Output,
-): Output | typeof INVALID {
-  const mark = collector.mark();
-  try {
-    const output = invoke(scope.context);
-    return collector.mark() > mark ? INVALID : output;
-  } catch (error) {
-    if (isAbortSignal(error)) {
-      return collector.add(error.code, error.message);
-    }
-    if (ValidationError.is(error)) {
-      return collector.addRelativeIssues(error.issues);
-    }
-    throw error;
-  } finally {
-    scope.close();
-  }
-}
-
-/** 读取任意 Codec、Field、Model 或自定义 CodecLike 的只读结构描述符（Field 自动叠加槽位级 description） */
-export function inspectCodec(codec: CodecOrField): CodecDescriptor {
-  if (isFieldDescriptor(codec)) {
-    return getCodecDescriptor(codec);
-  }
-  if (
-    typeof codec !== "object" ||
-    codec === null ||
-    typeof codec.decode !== "function" ||
-    typeof codec.encode !== "function"
-  ) {
-    throw new TypeError("inspectCodec requires a valid Codec, Field, or CodecLike object");
-  }
-  return getCodecDescriptor(codec);
-}
-
-/** 包装已有字段并保留外部键名、缺省性与属性说明 */
-export function field<
-  T,
-  Encoded,
-  Source extends string | undefined,
-  Presence extends FieldPresence = "required",
->(input: FieldLike<T, Encoded, Source, Presence>): Field<T, Encoded, Source, Presence>;
-/** 将任意 Codec 或自定义 CodecLike 转为字段描述符 */
-export function field<T, Encoded>(input: CodecLike<T, Encoded>): Field<T, Encoded>;
-export function field<T, Encoded>(
-  input: CodecOrField<T, Encoded>,
-): Field<T, Encoded, string | undefined, FieldPresence> {
-  if (!isField(input)) {
-    if (
-      typeof input !== "object" ||
-      input === null ||
-      typeof input.decode !== "function" ||
-      typeof input.encode !== "function"
-    ) {
-      throw new TypeError("Field.of requires a valid Codec, Field, or CodecLike object");
-    }
-    return createField(promoteToCodec(input), undefined, "required");
-  }
-  const { source, presence, description } = input;
-  const inner = isStandardCodec(input.codec) ? input.codec : promoteToCodec(input.codec);
-  const normalizedPresence: FieldPresence =
-    presence === "optional" ? "optional" : presence === "defaulted" ? "defaulted" : "required";
-  return createField(
-    inner,
-    typeof source === "string" ? source : undefined,
-    normalizedPresence,
-    normalizedPresence === "defaulted" ? getDefaultResolver(input) : undefined,
-    typeof description === "string" ? description : undefined,
+  assertDescriptorOption(handlers.descriptor, false);
+  return createCodec(
+    handlerKernel(handlers.decode, handlers.encode, EMPTY_STATE),
+    handlers.descriptor ?? { kind: "custom" },
   );
 }
 
-/** 判断目标值是否为带外部键名与缺省性元数据的 Field 描述符 */
-export function isField<T, Encoded>(
-  value: CodecOrField<T, Encoded>,
-): value is FieldLike<T, Encoded, string | undefined, FieldPresence>;
-export function isField(
-  value: unknown,
-): value is FieldLike<unknown, unknown, string | undefined, FieldPresence>;
-export function isField(
-  value: unknown,
-): value is FieldLike<unknown, unknown, string | undefined, FieldPresence> {
-  return isFieldDescriptor(value);
+function assertDescriptorOption(descriptor: unknown, allowFunction: boolean): void {
+  if (descriptor === undefined || (allowFunction && typeof descriptor === "function")) return;
+  if (
+    typeof descriptor !== "object" ||
+    descriptor === null ||
+    typeof (descriptor as { readonly kind?: unknown }).kind !== "string"
+  ) {
+    throw new TypeError(
+      allowFunction
+        ? "Codec.define descriptor must be a CodecDescriptor or (state) => descriptor"
+        : "Codec.define descriptor must be a CodecDescriptor object",
+    );
+  }
 }

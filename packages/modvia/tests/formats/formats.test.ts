@@ -83,7 +83,7 @@ describe("modvia/formats", () => {
       });
     }
     expect(url().protocols("https", "http").decode("http://modvia.dev")).toBe("http://modvia.dev");
-    expect(() => Reflect.apply(url().protocols, undefined, [])).toThrow(RangeError);
+    expect(() => url().protocols(...([] as unknown as ["https"]))).toThrow(RangeError);
 
     const v4 = ipv4();
     expect(v4.decode("192.168.0.1")).toBe("192.168.0.1");

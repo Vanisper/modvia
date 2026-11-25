@@ -1,20 +1,10 @@
-import { INVALID } from "../../codec/core/collector.ts";
-import {
-  createCodec,
-  getCodecRunner,
-  getStaticLiterals,
-  promoteToCodec,
-  type InternalRunner,
-} from "../../codec/core/runtime.ts";
+import { createCodec, promoteToCodec } from "../../codec/core/codec.ts";
+import { staticLiterals } from "../../codec/core/descriptor.ts";
+import { descriptorOf, kernelOf, type Kernel } from "../../codec/core/internals.ts";
 import type { Codec, FieldLiteral, InferEncoded, InferValue } from "../../codec/core/types.ts";
 import { isObject, isPlainObject } from "../../shared/object.ts";
 import { formatLiteral } from "../../shared/value.ts";
-import {
-  missingField,
-  readModelField,
-  resolvedFieldsSymbol,
-  type ResolvedField,
-} from "../core/fields.ts";
+import { missingField, readModelField, resolveFields } from "../core/fields.ts";
 import type { TaggedModelLike } from "../core/types.ts";
 
 /**
@@ -40,119 +30,101 @@ export function taggedUnion<
     throw new RangeError("taggedUnion requires at least two branch models");
   }
 
-  let wireSource: string | undefined;
-  const branchRunnerByTag = new Map<FieldLiteral, InternalRunner<unknown, unknown>>();
+  let externalKey: string | undefined;
+  const branchByTag = new Map<FieldLiteral, Kernel>();
 
   for (const branch of branches) {
-    const resolvedFields = Reflect.get(branch, resolvedFieldsSymbol) as
-      | readonly ResolvedField[]
-      | undefined;
-    if (!Array.isArray(resolvedFields)) {
-      throw new TypeError("taggedUnion branches must be models created with defineModel");
+    const descriptor = descriptorOf(branch);
+    if (descriptor.kind !== "model") {
+      throw new TypeError("taggedUnion branches must be models created with Model.define");
     }
-
-    const discField = resolvedFields.find((field) => field.key === discriminator);
-    if (!discField) {
+    const tagField = resolveFields(descriptor.fields).find((field) => field.key === discriminator);
+    if (tagField === undefined) {
       throw new RangeError(`Branch model is missing discriminator field "${discriminator}"`);
     }
-    if (discField.presence !== "required") {
+    if (tagField.presence !== "required") {
       throw new RangeError(
         `Discriminator field "${discriminator}" must be required in every branch`,
       );
     }
-
-    if (wireSource === undefined) {
-      wireSource = discField.source;
-    } else if (discField.source !== wireSource) {
+    if (externalKey === undefined) {
+      externalKey = tagField.source;
+    } else if (tagField.source !== externalKey) {
       throw new RangeError(
-        `Discriminator "${discriminator}" has inconsistent external sources: "${wireSource}" and "${discField.source}"`,
+        `Discriminator "${discriminator}" has inconsistent external sources: "${externalKey}" and "${tagField.source}"`,
       );
     }
 
-    const tags = getStaticLiterals(discField.codec);
-    if (!tags || tags.length === 0) {
+    const tags = staticLiterals(tagField.codec);
+    if (tags === undefined || tags.length === 0) {
       throw new TypeError(`Discriminator field "${discriminator}" must use literal() or oneOf()`);
     }
-
-    const branchRunner = getCodecRunner(branch);
     for (const tag of tags) {
       if (tag === undefined) {
         throw new TypeError(`Discriminator field "${discriminator}" cannot use undefined as a tag`);
       }
-      if (branchRunnerByTag.has(tag)) {
+      if (branchByTag.has(tag)) {
         throw new RangeError(
           `Duplicate discriminator tag ${formatLiteral(tag)} for "${discriminator}"`,
         );
       }
-      branchRunnerByTag.set(tag, branchRunner);
+      branchByTag.set(tag, kernelOf(branch));
     }
   }
 
-  const externalKey = wireSource as string;
-  const expectedTagsText = [...branchRunnerByTag.keys()].map(formatLiteral).join(", ");
+  const wireKey = externalKey as string;
+  const expectedTags = [...branchByTag.keys()].map(formatLiteral).join(", ");
 
-  type UnionModel = InferValue<Branches[number]>;
-  type UnionDTO = InferEncoded<Branches[number]>;
-
-  const promotedBranches = Object.freeze(branches.map((branch) => promoteToCodec(branch)));
-
-  return createCodec<UnionModel, UnionDTO>(
-    (input, direction, collector) => {
-      if (direction === "decode") {
-        if (!isPlainObject(input)) {
-          return collector.add("type.object", "Expected a plain object");
-        }
-        if (!Object.hasOwn(input, externalKey)) {
-          collector.pushSegment(externalKey);
-          collector.add("field.required", `Missing required field: ${externalKey}`);
-          collector.popSegment();
-          return INVALID;
-        }
-
-        const rawTag = input[externalKey];
-        const branchRunner = branchRunnerByTag.get(rawTag as FieldLiteral);
-        if (!branchRunner) {
-          collector.pushSegment(externalKey);
-          collector.add(
-            "union.invalid_tag",
-            `Expected discriminator "${externalKey}" to be one of: ${expectedTagsText}`,
-          );
-          collector.popSegment();
-          return INVALID;
-        }
-        return branchRunner(input, "decode", collector) as UnionModel | typeof INVALID;
+  const kernel: Kernel = {
+    decode(input, collector) {
+      if (!isPlainObject(input)) {
+        return collector.add("type.object", "Expected a plain object");
       }
-
+      if (!Object.hasOwn(input, wireKey)) {
+        return collector.addAtSegment(
+          wireKey,
+          "field.required",
+          `Missing required field: ${wireKey}`,
+        );
+      }
+      const branch = branchByTag.get(input[wireKey] as FieldLiteral);
+      if (branch === undefined) {
+        return collector.addAtSegment(
+          wireKey,
+          "union.invalid_tag",
+          `Expected discriminator "${wireKey}" to be one of: ${expectedTags}`,
+        );
+      }
+      return branch.decode(input, collector);
+    },
+    encode(input, collector) {
       if (!isObject(input)) {
         return collector.add("type.object", "Expected a model object");
       }
-      const modelTag = readModelField(input, discriminator);
-      if (modelTag === missingField) {
-        collector.pushSegment(discriminator);
-        collector.add("field.required", `Missing model field: ${discriminator}`);
-        collector.popSegment();
-        return INVALID;
-      }
-
-      const branchRunner = branchRunnerByTag.get(modelTag as FieldLiteral);
-      if (!branchRunner) {
-        collector.pushSegment(discriminator);
-        collector.add(
-          "union.invalid_tag",
-          `Expected discriminator "${discriminator}" to be one of: ${expectedTagsText}`,
+      const tag = readModelField(input, discriminator);
+      if (tag === missingField) {
+        return collector.addAtSegment(
+          discriminator,
+          "field.required",
+          `Missing model field: ${discriminator}`,
         );
-        collector.popSegment();
-        return INVALID;
       }
-      return branchRunner(input, "encode", collector) as UnionDTO | typeof INVALID;
+      const branch = branchByTag.get(tag as FieldLiteral);
+      if (branch === undefined) {
+        return collector.addAtSegment(
+          discriminator,
+          "union.invalid_tag",
+          `Expected discriminator "${discriminator}" to be one of: ${expectedTags}`,
+        );
+      }
+      return branch.encode(input, collector);
     },
-    {
-      descriptor: {
-        kind: "taggedUnion",
-        discriminator,
-        externalKey,
-        branches: promotedBranches,
-      },
-    },
-  );
+  };
+
+  return createCodec(kernel, {
+    kind: "taggedUnion",
+    discriminator,
+    externalKey: wireKey,
+    branches: Object.freeze(branches.map((branch) => promoteToCodec(branch))),
+  }) as unknown as Codec<InferValue<Branches[number]>, InferEncoded<Branches[number]>>;
 }

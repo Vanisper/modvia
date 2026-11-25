@@ -37,17 +37,12 @@ describe("field binding", () => {
     expect(rebound.source).toBe("new_key");
     expect(rebound.presence).toBe("required");
     expect(rebound.codec).toBe(base);
+    // 槽位数据为自有可枚举属性（FieldLike 纯数据协议），修饰方法位于原型
     expect(Object.keys(rebound).sort()).toStrictEqual([
-      "alias",
       "codec",
-      "default",
-      "describe",
       "description",
-      "nullable",
-      "optional",
-      "or",
+      "fallback",
       "presence",
-      "required",
       "source",
     ]);
     expect(rebound.codec.parse(5)).toBe(5);
@@ -97,33 +92,14 @@ describe("field binding", () => {
     expectTypeOf<InferData<typeof both>>().toEqualTypeOf<{ readonly sku?: string | undefined }>();
   });
 
-  test("对象展开拷贝保留字段元数据，无标识自定义 CodecLike 的同名属性不参与字段声明", () => {
+  test("展开拷贝与跨副本纯数据 FieldLike 按公开协议识别，无标识自定义 CodecLike 的同名属性不参与字段声明", () => {
     const copy = { ...string().optional().alias("external") };
-    const {
-      codec,
-      source,
-      presence,
-      description,
-      alias,
-      or,
-      nullable,
-      optional,
-      required,
-      default: withDefault,
-      describe: describeField,
-    } = string().alias("ignored").optional();
+    const { codec, source, presence, description } = string().alias("ignored").optional();
     const tagged = {
       codec,
       source,
       presence,
       description,
-      alias,
-      or,
-      nullable,
-      optional,
-      required,
-      default: withDefault,
-      describe: describeField,
       [Symbol.toStringTag]: "modvia.Field",
     } as const;
     const plain = {

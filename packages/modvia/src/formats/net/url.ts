@@ -74,7 +74,8 @@ const defaultUrlCodec: UrlCodec = defineCodec({
   state: {} as UrlState,
   decode: validateUrl,
   encode: validateUrl,
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "uri",
     encodedSchema: uriSchema,
     decodedSchema: uriSchema,

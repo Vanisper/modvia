@@ -66,13 +66,19 @@ packages/modvia/src/
 ├── codec/                        # 纯粹双向编解码引擎与算子层（严禁导入 primitives / formats / model）
 │   ├── namespace.ts              # [公开] Codec 与 Field 类型-值合并命名空间
 │   ├── core/                     # 编解码内核（严禁导入 operators）
-│   │   ├── types.ts              # [公开] Codec / Field / FieldLike / WithCodecTrait、CodecDescriptor、StandardSchemaV1
-│   │   ├── errors.ts             # [公开] ValidationError（含静态 ValidationError.is）
-│   │   ├── define.ts             # [内部定义] defineCodec、inspectCodec、field 与 isField
-│   │   ├── collector.ts          # [内部] 零异常栈开销 IssueCollector 与中断信号
-│   │   └── runtime.ts            # [内部] Codec/Field/Trait/Pipe 实例构造与执行调度器
+│   │   ├── types.ts              # [公开] StandardCodec / Codec / Field / FieldLike / WithCodecTrait、CodecDescriptor、StandardSchemaV1
+│   │   ├── errors.ts             # [公开] ValidationError（含跨上下文 ValidationError.is）
+│   │   ├── collector.ts          # [内部] 逐次独占 IssueCollector 与私有 INVALID 哨兵
+│   │   ├── internals.ts          # [内部] 模块私有 WeakMap 注册表（Kernel / Descriptor）与外部 CodecLike 适配
+│   │   ├── context.ts            # [内部] 回调期作用域 context（fail / issue / run / failed）与异常收敛
+│   │   ├── kernel.ts             # [内部] 成对执行内核代数（pipe / invert / refine / check / normalize / literal / lazy / union）
+│   │   ├── descriptor.ts         # [内部] Codec.inspect 与描述符推导（refined 归并、静态字面量与路径首段映射）
+│   │   ├── field.ts              # [内部] FieldImpl 槽位描述符与 FieldLike 纯数据识别
+│   │   ├── codec.ts              # [内部] CodecImpl 基类、Codec.extendStandard、toField 与 assertValueCodec
+│   │   ├── trait.ts              # [内部] TraitCodec 上游槽与 createFamily 族原型构造器
+│   │   └── define.ts             # [内部定义] Codec.define（无状态直构 CodecImpl，状态化直构 TraitCodec 族）
 │   └── operators/                # 值容器与组合算子
-│       ├── containers.ts         # [公开] arrayOf、recordOf、tupleOf
+│       ├── containers.ts         # [公开] arrayOf、recordOf、tupleOf（基于 context.run 组合）
 │       └── combinators.ts        # [内部定义] pipe、invert、lazy、unionOf（由 Codec.* 暴露）
 ├── primitives/                   # 原始标量编解码器层（消费 scalars + codec，严禁导入 formats / model）
 │   ├── string.ts                 # [公开] string（StringCodec / StringTrait）

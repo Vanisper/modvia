@@ -336,6 +336,10 @@ function buildDescriptorSchema(
         additionalProperties: descriptor.strict ? false : context.additionalProperties,
       };
     }
+    case "refined": {
+      // 精化步骤为不透明运行时约束，Schema 按内层结构诚实导出
+      return convertNode(descriptor.inner, side, context);
+    }
     case "pipe": {
       return side === "dto"
         ? convertNode(descriptor.first, "dto", context)

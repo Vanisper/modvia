@@ -9,9 +9,12 @@ export type {
   CodecLike,
   CodecMethodBuilders,
   CodecOrField,
+  CodecRefinement,
   CodecTrait,
-  CustomCodecMeta,
+  DecodeContext,
   DefaultProvider,
+  EncodeContext,
+  Failed,
   FieldLike,
   FieldLiteral,
   FieldPresence,
@@ -19,6 +22,7 @@ export type {
   InferValue,
   PathSegment,
   SafeResult,
+  StandardCodec,
   StandardSchemaV1,
   StatefulCodecContext,
   StatePatch,
@@ -34,6 +38,10 @@ export * from "./primitives/literal.ts";
 export * from "./primitives/numeric/bigint.ts";
 export * from "./primitives/numeric/int.ts";
 export * from "./primitives/numeric/number.ts";
-export type { OrderedNumericCodec, OrderedNumericTrait } from "./primitives/numeric/shared.ts";
+export type {
+  OrderedNumericCodec,
+  OrderedNumericRoot,
+  OrderedNumericTrait,
+} from "./primitives/numeric/shared.ts";
 export * from "./primitives/string.ts";
 export * from "./primitives/unknown.ts";

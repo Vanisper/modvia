@@ -153,7 +153,7 @@ describe("codec kernel", () => {
     const base = number();
     expect(base.or("auto", "inherit").decode("inherit")).toBe("inherit");
     for (const args of [[], [{}], [[]], [string()], [1n], [Symbol()]]) {
-      expect(() => Reflect.apply(base.or, undefined, args)).toThrow(TypeError);
+      expect(() => base.or(...(args as unknown as [string]))).toThrow(TypeError);
     }
   });
 
@@ -232,7 +232,14 @@ describe("codec kernel", () => {
       .refine((s) => !s.startsWith("_"), "user.leading_underscore", "No leading underscore")
       .brand<"Username">();
 
-    expect(Codec.inspect(Username)).toStrictEqual({
+    // 精化节点诚实标注运行时约束：inner 保留内层结构与说明，相邻精化步骤扁平合并
+    const UsernameDescriptor = Codec.inspect(Username);
+    expect(UsernameDescriptor).toMatchObject({
+      kind: "refined",
+      refinements: [{ kind: "normalize" }, { kind: "refine", code: "user.leading_underscore" }],
+    });
+    if (UsernameDescriptor.kind !== "refined") throw new Error("Expected refined descriptor");
+    expect(Codec.inspect(UsernameDescriptor.inner)).toStrictEqual({
       kind: "string",
       trim: true,
       minLength: 3,
@@ -285,16 +292,18 @@ describe("codec kernel", () => {
       base: DerivedA,
       literals: [null],
     });
+    // 接入带自有方法 Codec 的上游槽：整体描述为 pipe，上游链保持原实例引用
     const trimmed = string().trim();
-    expect(Codec.inspect(trimmed.pipe(int().fromString()))).toMatchObject({
-      kind: "pipe",
-      first: trimmed,
-    });
+    const trimmedPort = Codec.inspect(trimmed.pipe(int().fromString()));
+    if (trimmedPort.kind !== "pipe") throw new Error("Expected pipe descriptor");
+    expect(Codec.inspect(trimmedPort.first)).toMatchObject({ kind: "pipe", first: trimmed });
+    expect(Codec.inspect(trimmedPort.second)).toStrictEqual({ kind: "integer" });
 
     const CustomDecimal = Codec.define<number, string>({
       decode: (v) => Number(v),
       encode: (v) => String(v),
-      meta: {
+      descriptor: {
+        kind: "custom",
         format: "decimal",
         description: "Base-10 decimal string",
         encodedSchema: { type: "string", format: "decimal" },
@@ -344,7 +353,8 @@ describe("codec kernel", () => {
         }
         return input.toFixed(ctx.state.scale);
       },
-      meta: (state) => ({
+      descriptor: (state) => ({
+        kind: "custom",
         format: "decimal",
         encodedSchema: { type: "string" },
         decodedSchema: {

@@ -21,7 +21,8 @@ const isoDateSchema = Object.freeze({ type: "string", format: "date" });
 const defaultIsoDateCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateIsoDate,
   encode: validateIsoDate,
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "date",
     encodedSchema: isoDateSchema,
     decodedSchema: isoDateSchema,

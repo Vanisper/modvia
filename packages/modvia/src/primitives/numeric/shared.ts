@@ -1,6 +1,10 @@
-import type { Invalid, IssueCollector } from "../../codec/core/collector.ts";
-import { createStatefulCodec, type InternalRunner } from "../../codec/core/runtime.ts";
-import type { CodecDescriptor, TraitCodecBase, WithCodecTrait } from "../../codec/core/types.ts";
+import { compact } from "../../codec/core/descriptor.ts";
+import { createFamily } from "../../codec/core/trait.ts";
+import type {
+  CodecDescriptor,
+  StatefulCodecContext,
+  WithCodecTrait,
+} from "../../codec/core/types.ts";
 import { checkOrderedBounds, type OrderedBounds } from "../../scalars/bounds/ordered.ts";
 
 /** 有序数值编解码器通用的区间与正负号链式方法特征 */
@@ -23,204 +27,120 @@ export interface OrderedNumericTrait<N extends number | bigint> {
   nonPositive(): unknown;
 }
 
-interface NativeOrderedNumericCodec<N extends number | bigint> extends TraitCodecBase<
-  N,
-  N,
-  OrderedNumericTrait<N>
-> {
-  /** 切换外部编码表示为十进制数值字符串（string ↔ N），保留全部已声明区间约束 */
-  fromString(this: void): WithCodecTrait<N, string, OrderedNumericTrait<N>>;
-  /** 为当前实例附加静态文档说明文本，同时完整保留区间与字符串切换方法 */
-  describe(this: void, description: string): NativeOrderedNumericCodec<N>;
-  /** 限制闭区间最小下界（value >= min） */
-  min(this: void, min: N): NativeOrderedNumericCodec<N>;
-  /** 限制闭区间最大上界（value <= max） */
-  max(this: void, max: N): NativeOrderedNumericCodec<N>;
-  /** 限制开区间严格下界（value > bound） */
-  gt(this: void, bound: N): NativeOrderedNumericCodec<N>;
-  /** 限制开区间严格上界（value < bound） */
-  lt(this: void, bound: N): NativeOrderedNumericCodec<N>;
-  /** 要求严格正值（value > 0） */
-  positive(this: void): NativeOrderedNumericCodec<N>;
-  /** 要求非负值（value >= 0） */
-  nonNegative(this: void): NativeOrderedNumericCodec<N>;
-  /** 要求严格负值（value < 0） */
-  negative(this: void): NativeOrderedNumericCodec<N>;
-  /** 要求非正值（value <= 0） */
-  nonPositive(this: void): NativeOrderedNumericCodec<N>;
+/** 原生介质根实例专属的派生方法 */
+export interface OrderedNumericRoot<N extends number | bigint> {
+  /** 切换外部编码表示为十进制数值字符串（string ↔ N），保留全部已声明及后续追加的区间约束 */
+  fromString(): OrderedNumericCodec<N, string>;
 }
 
-/** 有序数值双向编解码器，默认以原生类型编码，经 .fromString() 切换后以 string 编码 */
+/** 有序数值双向编解码器：原生介质根实例可经 .fromString() 接入十进制文本上游，此后外部表示为 string */
 export type OrderedNumericCodec<N extends number | bigint, Encoded = N> = [Encoded] extends [N]
-  ? NativeOrderedNumericCodec<N>
+  ? WithCodecTrait<N, N, OrderedNumericTrait<N>, OrderedNumericRoot<N>>
   : WithCodecTrait<N, Encoded, OrderedNumericTrait<N>>;
 
-export interface OrderedScalarAdapter<N extends number | bigint> {
+/** 有序数值领域：原生类型守卫、区间代数与十进制文本介质规则 */
+export interface OrderedNumericDomain<N extends number | bigint> {
+  readonly kind: "number" | "integer" | "bigint";
   readonly zero: N;
   readonly noun: string;
-  readonly errorDomain: "number" | "bigint";
-  readonly nativeTypeCode: string;
-  readonly nativeTypeMessage: string;
-  readonly stringFormatCode: string;
-  readonly stringFormatMessage: string;
-  readonly stringWireFormat: string;
-  readonly stringEncodedSchema: Readonly<Record<string, unknown>>;
+  readonly constraintDomain: "number" | "bigint";
+  readonly typeCode: string;
+  readonly typeMessage: string;
   readonly isNative: (value: unknown) => value is N;
   readonly assertBound: (value: N, label: string) => void;
   readonly validateBounds: (bounds: Readonly<OrderedBounds<N>>) => void;
-  readonly parseFromString: (input: string) => N | null;
-  readonly formatToString: (value: N) => string;
-  readonly buildNativeDescriptor: (
-    bounds: Readonly<OrderedBounds<N>>,
-    description?: string,
-  ) => CodecDescriptor;
-  readonly buildDecodedJsonSchema?: (
-    bounds: Readonly<OrderedBounds<N>>,
-  ) => Readonly<Record<string, unknown>>;
-}
-
-export function createOrderedScalarCodec<N extends number | bigint, ResultCodec>(
-  adapter: OrderedScalarAdapter<N>,
-): ResultCodec {
-  const methods = {
-    min: (min: N) => {
-      adapter.assertBound(min, "min");
-      return { lower: { value: min, exclusive: false } };
-    },
-    max: (max: N) => {
-      adapter.assertBound(max, "max");
-      return { upper: { value: max, exclusive: false } };
-    },
-    gt: (bound: N) => {
-      adapter.assertBound(bound, "gt");
-      return { lower: { value: bound, exclusive: true } };
-    },
-    lt: (bound: N) => {
-      adapter.assertBound(bound, "lt");
-      return { upper: { value: bound, exclusive: true } };
-    },
-    positive: () => ({ lower: { value: adapter.zero, exclusive: true } }),
-    nonNegative: () => ({ lower: { value: adapter.zero, exclusive: false } }),
-    negative: () => ({ upper: { value: adapter.zero, exclusive: true } }),
-    nonPositive: () => ({ upper: { value: adapter.zero, exclusive: false } }),
+  readonly text: {
+    readonly format: string;
+    readonly issueCode: string;
+    readonly issueMessage: string;
+    readonly encodedSchema: Readonly<Record<string, unknown>>;
+    readonly parse: (input: string) => N | null;
+    readonly stringify: (value: N) => string;
   };
-
-  const buildStringCodec = (bounds: Readonly<OrderedBounds<N>>, description?: string) =>
-    createStatefulCodec({
-      state: { ...bounds } as OrderedBounds<N>,
-      description,
-      validate: adapter.validateBounds,
-      createRunner(state): InternalRunner<N, string> {
-        return (input, direction, collector) => {
-          if (direction === "decode") {
-            if (typeof input !== "string") {
-              return collector.add("type.string", "Expected a string");
-            }
-            const parsed = adapter.parseFromString(input);
-            if (parsed === null) {
-              return collector.add(adapter.stringFormatCode, adapter.stringFormatMessage);
-            }
-            const violation = checkOrderedBounds(parsed, state);
-            if (violation !== undefined) {
-              return reportBoundViolation(violation, state, adapter, collector);
-            }
-            return parsed;
-          }
-
-          if (!adapter.isNative(input)) {
-            return collector.add(adapter.nativeTypeCode, adapter.nativeTypeMessage);
-          }
-          const violation = checkOrderedBounds(input, state);
-          if (violation !== undefined) {
-            return reportBoundViolation(violation, state, adapter, collector);
-          }
-          return adapter.formatToString(input);
-        };
-      },
-      createDescriptor(state, desc) {
-        const decodedSchema = adapter.buildDecodedJsonSchema?.(state);
-        return {
-          kind: "custom",
-          format: adapter.stringWireFormat,
-          encodedSchema: adapter.stringEncodedSchema,
-          ...(decodedSchema !== undefined ? { decodedSchema } : {}),
-          ...(desc !== undefined ? { description: desc } : {}),
-        };
-      },
-      methods,
-    });
-
-  return createStatefulCodec({
-    state: {} as OrderedBounds<N>,
-    validate: adapter.validateBounds,
-    createRunner(state): InternalRunner<N, N> {
-      return (input, _direction, collector) => {
-        if (!adapter.isNative(input)) {
-          return collector.add(adapter.nativeTypeCode, adapter.nativeTypeMessage);
-        }
-        const violation = checkOrderedBounds(input, state);
-        if (violation !== undefined) {
-          return reportBoundViolation(violation, state, adapter, collector);
-        }
-        return input;
-      };
-    },
-    createDescriptor(state, description) {
-      return adapter.buildNativeDescriptor(state, description);
-    },
-    methods,
-    extraMethods: (state, description) => ({
-      fromString: () => buildStringCodec(state, description),
-    }),
-  }) as unknown as ResultCodec;
 }
 
-function reportBoundViolation<N extends number | bigint>(
-  violation: "min" | "max" | "gt" | "lt",
-  state: Readonly<OrderedBounds<N>>,
-  adapter: OrderedScalarAdapter<N>,
-  collector: IssueCollector,
-): Invalid {
-  switch (violation) {
-    case "min":
-      return collector.add(
-        `${adapter.errorDomain}.min`,
-        `Expected ${adapter.noun} >= ${state.lower?.value}`,
-      );
-    case "gt":
-      return collector.add(
-        `${adapter.errorDomain}.gt`,
-        `Expected ${adapter.noun} > ${state.lower?.value}`,
-      );
-    case "max":
-      return collector.add(
-        `${adapter.errorDomain}.max`,
-        `Expected ${adapter.noun} <= ${state.upper?.value}`,
-      );
-    case "lt":
-      return collector.add(
-        `${adapter.errorDomain}.lt`,
-        `Expected ${adapter.noun} < ${state.upper?.value}`,
-      );
+const violationSymbols = { min: ">=", gt: ">", max: "<=", lt: "<" } as const;
+
+/** 构造有序数值族：原生介质根实例 + 十进制文本上游（.fromString() 即把文本 Codec 接入上游槽） */
+export function createOrderedNumericCodec<N extends number | bigint>(
+  domain: OrderedNumericDomain<N>,
+): OrderedNumericCodec<N> {
+  const typeFail = (context: StatefulCodecContext<object>): never =>
+    context.fail(domain.typeCode, domain.typeMessage);
+
+  const decimalText = createFamily({
+    state: {},
+    decode(input, context) {
+      if (typeof input !== "string") return context.fail("type.string", "Expected a string");
+      const parsed = domain.text.parse(input);
+      return parsed === null
+        ? context.fail(domain.text.issueCode, domain.text.issueMessage)
+        : parsed;
+    },
+    encode: (input, context) =>
+      domain.isNative(input) ? domain.text.stringify(input) : typeFail(context),
+    descriptor: {
+      kind: "custom",
+      format: domain.text.format,
+      encodedSchema: domain.text.encodedSchema,
+    },
+  })();
+
+  function convertNative(input: unknown, context: StatefulCodecContext<OrderedBounds<N>>): N {
+    if (!domain.isNative(input)) return typeFail(context);
+    const bounds = context.state;
+    const violation = checkOrderedBounds(input, bounds);
+    if (violation === undefined) return input;
+    const bound = violation === "min" || violation === "gt" ? bounds.lower : bounds.upper;
+    return context.fail(
+      `${domain.constraintDomain}.${violation}`,
+      `Expected ${domain.noun} ${violationSymbols[violation]} ${String(bound?.value)}`,
+    );
   }
+
+  return createFamily<OrderedBounds<N>>({
+    state: {},
+    validate: domain.validateBounds,
+    decode: convertNative,
+    encode: convertNative,
+    descriptor: (bounds) => orderedDescriptor(domain.kind, bounds),
+    methods: {
+      min: (min: N) => {
+        domain.assertBound(min, "min");
+        return { lower: { value: min, exclusive: false } };
+      },
+      max: (max: N) => {
+        domain.assertBound(max, "max");
+        return { upper: { value: max, exclusive: false } };
+      },
+      gt: (bound: N) => {
+        domain.assertBound(bound, "gt");
+        return { lower: { value: bound, exclusive: true } };
+      },
+      lt: (bound: N) => {
+        domain.assertBound(bound, "lt");
+        return { upper: { value: bound, exclusive: true } };
+      },
+      positive: () => ({ lower: { value: domain.zero, exclusive: true } }),
+      nonNegative: () => ({ lower: { value: domain.zero, exclusive: false } }),
+      negative: () => ({ upper: { value: domain.zero, exclusive: true } }),
+      nonPositive: () => ({ upper: { value: domain.zero, exclusive: false } }),
+    },
+    derive: {
+      fromString: (self) => decimalText.pipe(self),
+    },
+  })() as unknown as OrderedNumericCodec<N>;
 }
 
-export function buildNumericJsonBounds(
-  type: "number" | "integer",
-  bounds: Readonly<OrderedBounds<number>>,
-): Readonly<Record<string, unknown>> {
-  const { lower, upper } = bounds;
-  return {
-    type,
-    ...(lower !== undefined
-      ? lower.exclusive
-        ? { exclusiveMinimum: lower.value }
-        : { minimum: lower.value }
-      : {}),
-    ...(upper !== undefined
-      ? upper.exclusive
-        ? { exclusiveMaximum: upper.value }
-        : { maximum: upper.value }
-      : {}),
-  };
+function orderedDescriptor<N extends number | bigint>(
+  kind: OrderedNumericDomain<N>["kind"],
+  { lower, upper }: Readonly<OrderedBounds<N>>,
+): CodecDescriptor {
+  return compact({
+    kind,
+    min: lower?.exclusive === false ? lower.value : undefined,
+    exclusiveMin: lower?.exclusive === true ? lower.value : undefined,
+    max: upper?.exclusive === false ? upper.value : undefined,
+    exclusiveMax: upper?.exclusive === true ? upper.value : undefined,
+  }) as CodecDescriptor;
 }

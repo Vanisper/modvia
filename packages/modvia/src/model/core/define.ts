@@ -1,28 +1,143 @@
-import { INVALID, type Invalid, type IssueCollector } from "../../codec/core/collector.ts";
 import {
-  createCodec,
-  createField,
-  extendCodec,
-  getDefaultResolver,
-  isFieldDescriptor,
-  isStandardCodec,
-  promoteToCodec,
-} from "../../codec/core/runtime.ts";
-import type { CodecOrField, PathSegment } from "../../codec/core/types.ts";
+  CodecImpl,
+  rebuildWithDescription,
+  rebuildWithStandard,
+  toField,
+  type StandardExtension,
+} from "../../codec/core/codec.ts";
+import { INVALID, type IssueCollector } from "../../codec/core/collector.ts";
+import { compact } from "../../codec/core/descriptor.ts";
+import type { Kernel } from "../../codec/core/internals.ts";
+import type { CodecOrField } from "../../codec/core/types.ts";
 import { isObject, isPlainObject, writeOwnField } from "../../shared/object.ts";
 import type { Alias, AliasKind, ApplyAlias } from "./alias.ts";
-import {
-  missingField,
-  readModelField,
-  resolvedFieldsSymbol,
-  resolveFields,
-  type ResolvedField,
-} from "./fields.ts";
-import type { FieldRecord, MergeFields, Model, ModelOf, PartialFields } from "./types.ts";
+import { missingField, readModelField, resolveFields, type ResolvedField } from "./fields.ts";
+import type { FieldRecord, Model, ModelOf } from "./types.ts";
 
-interface ModelState {
+/** 模型的完整不可变状态：字段表（已绑定别名）、单层严格边界、实例工厂与说明 */
+interface ModelSpec {
+  readonly fields: FieldRecord;
   readonly strict: boolean;
-  readonly description?: string;
+  readonly factory?: ((data: unknown) => unknown) | undefined;
+  readonly description?: string | undefined;
+  /** Standard Schema 扩展属性：只属于当前实例，任何派生都不继承 */
+  readonly standard?: StandardExtension | undefined;
+}
+
+/**
+ * 领域模型实现
+ *
+ * @description 结构派生（pick / omit / partial / extend）基于字段表重建并重置工厂与说明；
+ * 同阶派生（strict / describe / withFactory）只改写 spec 中对应槽位
+ */
+class ModelImpl extends CodecImpl {
+  readonly fields: FieldRecord;
+  readonly #spec: ModelSpec;
+
+  constructor(spec: ModelSpec) {
+    super(
+      modelKernel(resolveFields(spec.fields), spec),
+      compact({
+        kind: "model" as const,
+        fields: spec.fields,
+        strict: spec.strict,
+        description: spec.description,
+      }),
+      spec.standard,
+    );
+    this.fields = spec.fields;
+    this.#spec = spec;
+  }
+
+  pick(...keys: readonly string[]): ModelImpl {
+    const picked: Record<string, CodecOrField> = {};
+    for (const key of this.#knownKeys(keys)) {
+      writeOwnField(picked, key, this.fields[key]);
+    }
+    return this.#derive(picked);
+  }
+
+  omit(...keys: readonly string[]): ModelImpl {
+    const excluded = new Set(this.#knownKeys(keys));
+    return this.#derive(this.#mapFields((key, entry) => (excluded.has(key) ? undefined : entry)));
+  }
+
+  partial(...keys: readonly string[]): ModelImpl {
+    const selected = keys.length === 0 ? undefined : new Set(this.#knownKeys(keys));
+    return this.#derive(
+      this.#mapFields((key, entry) =>
+        selected === undefined || selected.has(key) ? toField(entry).optional() : entry,
+      ),
+    );
+  }
+
+  extend(extraFields: FieldRecord): ModelImpl {
+    if (!isPlainObject(extraFields)) {
+      throw new TypeError("extend requires a plain fields object");
+    }
+    const merged = this.#mapFields((_key, entry) => entry);
+    for (const [key, entry] of Object.entries(extraFields)) {
+      writeOwnField(merged, key, entry);
+    }
+    return this.#derive(merged);
+  }
+
+  strict(): ModelImpl {
+    return this.#spec.strict ? this : instantiateModel({ ...this.#derivable(), strict: true });
+  }
+
+  withFactory(factory: (data: unknown) => unknown): ModelImpl {
+    if (typeof factory !== "function") {
+      throw new TypeError("withFactory requires a factory function");
+    }
+    return instantiateModel({ ...this.#derivable(), factory });
+  }
+
+  override [rebuildWithDescription](description: string): ModelImpl {
+    return instantiateModel({ ...this.#derivable(), description });
+  }
+
+  override [rebuildWithStandard](standard: StandardExtension): ModelImpl {
+    return instantiateModel({ ...this.#spec, standard });
+  }
+
+  /** 同阶派生沿用的 spec：Standard Schema 扩展只属于当前实例，不随派生传播 */
+  #derivable(): ModelSpec {
+    const { standard: _instanceOnly, ...spec } = this.#spec;
+    return spec;
+  }
+
+  #knownKeys(keys: readonly unknown[]): string[] {
+    return keys.map((rawKey) => {
+      const key = String(rawKey);
+      if (!Object.hasOwn(this.fields, key)) {
+        throw new RangeError(`Unknown model field: ${key}`);
+      }
+      return key;
+    });
+  }
+
+  #mapFields(
+    select: (key: string, entry: CodecOrField) => CodecOrField | undefined,
+  ): Record<string, CodecOrField> {
+    const output: Record<string, CodecOrField> = {};
+    for (const [key, entry] of Object.entries(this.fields)) {
+      const next = select(key, entry);
+      if (next !== undefined) writeOwnField(output, key, next);
+    }
+    return output;
+  }
+
+  /** 结构派生：沿用单层严格边界，重置工厂与说明 */
+  #derive(fields: Record<string, CodecOrField>): ModelImpl {
+    return instantiateModel({ fields: Object.freeze(fields), strict: this.#spec.strict });
+  }
+}
+
+function instantiateModel(spec: ModelSpec): ModelImpl {
+  const model = new ModelImpl(spec);
+  Object.freeze(model);
+  return model;
 }
 
 /** 声明对象字段契约并应用统一字段外部键别名策略（显式 .alias() 优先于模型级 alias） */
@@ -34,239 +149,49 @@ export function defineModel<const Fields extends FieldRecord, Kind extends Alias
 export function defineModel<const Fields extends FieldRecord>(options: {
   readonly fields: Fields;
 }): ModelOf<Fields>;
-export function defineModel<const Fields extends FieldRecord>(options: {
-  readonly fields: Fields;
+export function defineModel(options: {
+  readonly fields: FieldRecord;
   readonly alias?: Alias<AliasKind>;
-}): ModelOf<Fields> {
+}): Model<unknown, unknown> {
   if (!isPlainObject(options) || !isPlainObject(options.fields)) {
     throw new TypeError("Model.define requires an options object with a plain fields table");
   }
-  if (options.alias !== undefined) {
-    if (
-      typeof options.alias !== "object" ||
-      options.alias === null ||
-      typeof options.alias.mapKey !== "function"
-    ) {
-      throw new TypeError("Model.define alias must be a valid Alias strategy");
-    }
+  const { alias } = options;
+  if (
+    alias !== undefined &&
+    (typeof alias !== "object" || alias === null || typeof alias.mapKey !== "function")
+  ) {
+    throw new TypeError("Model.define alias must be a valid Alias strategy");
   }
-  const ownFields = snapshotOwnFields(options.fields, options.alias);
-  const resolvedFields = resolveFields(ownFields);
-  return createModel(ownFields, resolvedFields, undefined, { strict: false });
+  const fields: Record<string, CodecOrField> = {};
+  for (const [key, entry] of Object.entries(options.fields)) {
+    writeOwnField(fields, key, alias === undefined ? entry : bindAlias(key, entry, alias));
+  }
+  return instantiateModel({ fields: Object.freeze(fields), strict: false }) as never;
 }
 
-function deriveModelFromFields<Fields extends FieldRecord>(
-  rawFields: Fields,
-  strict: boolean,
-): ModelOf<Fields> {
-  const ownFields = snapshotOwnFields(rawFields);
-  const resolvedFields = resolveFields(ownFields);
-  return createModel(ownFields, resolvedFields, undefined, { strict }) as ModelOf<Fields>;
+/** 为未显式声明外部键的字段按模型级策略绑定别名 */
+function bindAlias(key: string, entry: CodecOrField, alias: Alias<AliasKind>): CodecOrField {
+  const field = toField(entry);
+  return field.source !== undefined ? entry : field.alias(alias.mapKey(key));
 }
 
-function createModel<Fields extends FieldRecord, Data, DTO, Out extends Data>(
-  ownFields: Readonly<Fields>,
-  resolvedFields: readonly ResolvedField[],
-  factory: ((data: Data) => Out) | undefined,
-  state: ModelState,
-): Model<Data, DTO, Out, Fields> {
-  const fields = [...resolvedFields];
-  const sourceByKey = new Map<string, string>();
-  const knownSources = state.strict ? new Set<string>() : undefined;
-  for (const { key, source } of fields) {
-    sourceByKey.set(key, source);
-    knownSources?.add(source);
-  }
-
-  const decodeSegmentMapper = (segment: PathSegment): PathSegment =>
-    typeof segment === "string" ? (sourceByKey.get(segment) ?? segment) : segment;
-
-  const baseCodec = createCodec<Out, DTO>(
-    (input, direction, collector) =>
-      direction === "decode"
-        ? decodeModelObject(fields, knownSources, factory, input, collector)
-        : encodeModelObject(fields, input, collector),
-    {
-      decodeSegmentMapper,
-      descriptor: {
-        kind: "model",
-        fields: ownFields,
-        strict: state.strict,
-        ...(state.description !== undefined ? { description: state.description } : {}),
-      },
-    },
-  );
-
-  function partial(): ModelOf<PartialFields<Fields>>;
-  function partial<const Key extends Exclude<keyof Fields, symbol>>(
-    ...keys: readonly [Key, ...Key[]]
-  ): ModelOf<PartialFields<Fields, Key>>;
-  function partial(
-    ...keys: readonly Exclude<keyof Fields, symbol>[]
-  ): ModelOf<PartialFields<Fields>> {
-    const selected =
-      keys.length === 0
-        ? undefined
-        : new Set(
-            keys.map((rawKey) => {
-              const key = String(rawKey);
-              if (!Object.hasOwn(ownFields, key)) {
-                throw new RangeError(`Unknown model field: ${key}`);
-              }
-              return key;
-            }),
-          );
-
-    const nextFields: Record<string, CodecOrField> = {};
-    for (const [key, entry] of Object.entries(ownFields)) {
-      const shouldOptionalize = selected === undefined || selected.has(key);
-      writeOwnField(nextFields, key, shouldOptionalize ? toOptionalField(entry) : entry);
-    }
-    return deriveModelFromFields(nextFields, state.strict) as unknown as ModelOf<
-      PartialFields<Fields>
-    >;
-  }
-
-  const model: Model<Data, DTO, Out, Fields> = extendCodec(
-    baseCodec,
-    {
-      fields: ownFields,
-      pick<const Key extends Exclude<keyof Fields, symbol>>(
-        ...keys: readonly Key[]
-      ): ModelOf<Pick<Fields, Key>> {
-        const picked: Record<string, CodecOrField> = {};
-        for (const rawKey of keys) {
-          const key = String(rawKey);
-          if (!Object.hasOwn(ownFields, key)) {
-            throw new RangeError(`Unknown model field: ${key}`);
-          }
-          writeOwnField(picked, key, ownFields[key]);
-        }
-        return deriveModelFromFields(picked, state.strict) as unknown as ModelOf<Pick<Fields, Key>>;
-      },
-      omit<const Key extends Exclude<keyof Fields, symbol>>(
-        ...keys: readonly Key[]
-      ): ModelOf<Omit<Fields, Key>> {
-        const excluded = new Set<string>();
-        for (const rawKey of keys) {
-          const key = String(rawKey);
-          if (!Object.hasOwn(ownFields, key)) {
-            throw new RangeError(`Unknown model field: ${key}`);
-          }
-          excluded.add(key);
-        }
-        const remaining: Record<string, CodecOrField> = {};
-        for (const [key, entry] of Object.entries(ownFields)) {
-          if (!excluded.has(key)) {
-            writeOwnField(remaining, key, entry);
-          }
-        }
-        return deriveModelFromFields(remaining, state.strict) as unknown as ModelOf<
-          Omit<Fields, Key>
-        >;
-      },
-      partial,
-      extend<const Extra extends FieldRecord>(
-        extraFields: Extra,
-      ): ModelOf<MergeFields<Fields, Extra>> {
-        if (!isPlainObject(extraFields)) {
-          throw new TypeError("extend requires a plain fields object");
-        }
-        const merged: Record<string, CodecOrField> = {};
-        for (const [key, entry] of Object.entries(ownFields)) {
-          writeOwnField(merged, key, entry);
-        }
-        for (const [key, entry] of Object.entries(extraFields)) {
-          writeOwnField(merged, key, entry);
-        }
-        return deriveModelFromFields(merged, state.strict) as unknown as ModelOf<
-          MergeFields<Fields, Extra>
-        >;
-      },
-      strict(): Model<Data, DTO, Out, Fields> {
-        if (state.strict) return model;
-        return createModel(ownFields, resolvedFields, factory, { ...state, strict: true });
-      },
-      describe(description: string): Model<Data, DTO, Out, Fields> {
-        if (typeof description !== "string") {
-          throw new TypeError("Description must be a string");
-        }
-        return createModel(ownFields, resolvedFields, factory, { ...state, description });
-      },
-      withFactory<Next extends Data>(
-        nextFactory: (data: Data) => Next,
-      ): Model<Data, DTO, Next, Fields> {
-        if (typeof nextFactory !== "function") {
-          throw new TypeError("withFactory requires a factory function");
-        }
-        return createModel<Fields, Data, DTO, Next>(ownFields, resolvedFields, nextFactory, state);
-      },
-    },
-    [[resolvedFieldsSymbol, resolvedFields]],
-  );
-
-  return model;
+/** 模型执行内核：解码按外部键读取普通对象，编码按业务键读取自有属性或原型 getter */
+function modelKernel(fields: readonly ResolvedField[], spec: ModelSpec): Kernel {
+  const knownSources = spec.strict ? new Set(fields.map((field) => field.source)) : undefined;
+  return {
+    decode: (input, collector) => decodeModel(fields, knownSources, spec.factory, input, collector),
+    encode: (input, collector) => encodeModel(fields, input, collector),
+  };
 }
 
-function snapshotOwnFields<Fields extends FieldRecord>(
-  fields: Fields,
-  aliasStrategy?: Alias<AliasKind>,
-): Readonly<Fields> {
-  const copy: Record<string, CodecOrField> = {};
-  for (const [key, entry] of Object.entries(fields)) {
-    const resolvedEntry =
-      aliasStrategy !== undefined ? applyAliasToEntry(key, entry, aliasStrategy) : entry;
-    writeOwnField(copy, key, resolvedEntry);
-  }
-  return Object.freeze(copy) as unknown as Readonly<Fields>;
-}
-
-function applyAliasToEntry(
-  key: string,
-  entry: CodecOrField,
-  aliasStrategy: Alias<AliasKind>,
-): CodecOrField {
-  if (isFieldDescriptor(entry)) {
-    if (typeof entry.source === "string") return entry;
-    const inner = isStandardCodec(entry.codec) ? entry.codec : promoteToCodec(entry.codec);
-    const normalizedPresence =
-      entry.presence === "optional"
-        ? "optional"
-        : entry.presence === "defaulted"
-          ? "defaulted"
-          : "required";
-    return createField(
-      inner,
-      aliasStrategy.mapKey(key),
-      normalizedPresence,
-      normalizedPresence === "defaulted" ? getDefaultResolver(entry) : undefined,
-      typeof entry.description === "string" ? entry.description : undefined,
-    );
-  }
-  return promoteToCodec(entry).alias(aliasStrategy.mapKey(key));
-}
-
-function toOptionalField(entry: CodecOrField): CodecOrField {
-  if (isFieldDescriptor(entry)) {
-    const inner = isStandardCodec(entry.codec) ? entry.codec : promoteToCodec(entry.codec);
-    return createField(
-      inner,
-      typeof entry.source === "string" ? entry.source : undefined,
-      "optional",
-      undefined,
-      typeof entry.description === "string" ? entry.description : undefined,
-    );
-  }
-  return createField(promoteToCodec(entry), undefined, "optional");
-}
-
-function decodeModelObject<Data, Out extends Data>(
-  resolvedFields: readonly ResolvedField[],
+function decodeModel(
+  fields: readonly ResolvedField[],
   knownSources: ReadonlySet<string> | undefined,
-  factory: ((data: Data) => Out) | undefined,
+  factory: ((data: unknown) => unknown) | undefined,
   input: unknown,
   collector: IssueCollector,
-): Out | Invalid {
+): unknown {
   if (!isPlainObject(input)) {
     return collector.add("type.object", "Expected a plain object");
   }
@@ -274,56 +199,43 @@ function decodeModelObject<Data, Out extends Data>(
   const data: Record<string, unknown> = {};
   let failed = false;
 
-  for (const field of resolvedFields) {
-    const source = field.source;
-
+  for (const field of fields) {
+    const { source } = field;
     if (!Object.hasOwn(input, source)) {
-      const presence = field.presence;
-      if (presence === "optional") continue;
-      if (presence === "defaulted" && field.resolveDefault !== undefined) {
-        if (!failed) {
-          writeOwnField(data, field.key, field.resolveDefault());
-        }
+      if (field.presence === "optional") continue;
+      if (field.fallback !== undefined) {
+        if (!failed) writeOwnField(data, field.key, field.fallback());
         continue;
       }
-      collector.pushSegment(source);
-      collector.add("field.required", `Missing required field: ${source}`);
-      collector.popSegment();
+      collector.addAtSegment(source, "field.required", `Missing required field: ${source}`);
       failed = true;
       continue;
     }
-
     collector.pushSegment(source);
-    const decoded = field.runner(input[source], "decode", collector);
+    const decoded = field.kernel.decode(input[source], collector);
     collector.popSegment();
-
-    if (decoded === INVALID) {
-      failed = true;
-    } else if (!failed) {
-      writeOwnField(data, field.key, decoded);
-    }
+    if (decoded === INVALID) failed = true;
+    else if (!failed) writeOwnField(data, field.key, decoded);
   }
 
   if (knownSources !== undefined) {
     for (const rawKey of Object.keys(input)) {
       if (!knownSources.has(rawKey)) {
-        collector.pushSegment(rawKey);
-        collector.add("object.unknown_key", `Unknown field: ${rawKey}`);
-        collector.popSegment();
+        collector.addAtSegment(rawKey, "object.unknown_key", `Unknown field: ${rawKey}`);
         failed = true;
       }
     }
   }
 
   if (failed) return INVALID;
-  return factory !== undefined ? factory(data as Data) : (data as Out);
+  return factory !== undefined ? factory(data) : data;
 }
 
-function encodeModelObject<DTO>(
-  resolvedFields: readonly ResolvedField[],
+function encodeModel(
+  fields: readonly ResolvedField[],
   input: unknown,
   collector: IssueCollector,
-): DTO | Invalid {
+): unknown {
   if (!isObject(input)) {
     return collector.add("type.object", "Expected a model object");
   }
@@ -331,29 +243,21 @@ function encodeModelObject<DTO>(
   const output: Record<string, unknown> = {};
   let failed = false;
 
-  for (const field of resolvedFields) {
-    const key = field.key;
-
-    const fieldValue = readModelField(input, key);
-    if (fieldValue === missingField) {
+  for (const field of fields) {
+    const { key } = field;
+    const value = readModelField(input, key);
+    if (value === missingField) {
       if (field.presence === "optional") continue;
-      collector.pushSegment(key);
-      collector.add("field.required", `Missing model field: ${key}`);
-      collector.popSegment();
+      collector.addAtSegment(key, "field.required", `Missing model field: ${key}`);
       failed = true;
       continue;
     }
-
     collector.pushSegment(key);
-    const encoded = field.runner(fieldValue, "encode", collector);
+    const encoded = field.kernel.encode(value, collector);
     collector.popSegment();
-
-    if (encoded === INVALID) {
-      failed = true;
-    } else if (!failed) {
-      writeOwnField(output, field.source, encoded);
-    }
+    if (encoded === INVALID) failed = true;
+    else if (!failed) writeOwnField(output, field.source, encoded);
   }
 
-  return failed ? INVALID : (output as DTO);
+  return failed ? INVALID : output;
 }

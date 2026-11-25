@@ -118,6 +118,7 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
 
     expect(Object.keys(Codec).sort()).toStrictEqual([
       "define",
+      "extendStandard",
       "inspect",
       "invert",
       "lazy",

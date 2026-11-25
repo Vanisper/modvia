@@ -1,5 +1,7 @@
-import { errorBrand } from "./collector.ts";
 import type { ValidationIssue } from "./types.ts";
+
+/** 公开的跨上下文识别协议：ValidationError.is 依赖全局注册符号，允许跨 realm / 副本识别 */
+const errorBrand = Symbol.for("modvia.ValidationError");
 
 export class ValidationError extends Error {
   override readonly name = "ValidationError";

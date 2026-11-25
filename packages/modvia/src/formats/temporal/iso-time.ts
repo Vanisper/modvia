@@ -21,7 +21,8 @@ const isoTimeSchema = Object.freeze({ type: "string", format: "time" });
 const defaultIsoTimeCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateIsoTime,
   encode: validateIsoTime,
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "time",
     encodedSchema: isoTimeSchema,
     decodedSchema: isoTimeSchema,

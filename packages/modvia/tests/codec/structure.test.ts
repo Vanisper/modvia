@@ -28,15 +28,15 @@ describe("跨层组合的结构契约", () => {
     });
   });
 
-  // 已知缺陷：路径映射依赖逐层手工透传，`.or` 与 `Codec.lazy` 包装层遗漏了映射
-  test.fails("经 nullable 包装的模型 check 同样翻译为外部键名", () => {
+  // 路径映射从描述符推导：or / refined / lazy / pipe 包装层统一穿透到模型
+  test("经 nullable 包装的模型 check 同样翻译为外部键名", () => {
     expect(Stamped.nullable().check(flagCreatedAt).safeParse({ created_at: "x" })).toMatchObject({
       ok: false,
       issues: [{ path: ["created_at"], code: "stamp.flagged" }],
     });
   });
 
-  test.fails("经 Codec.lazy 引用的模型 check 同样翻译为外部键名", () => {
+  test("经 Codec.lazy 引用的模型 check 同样翻译为外部键名", () => {
     expect(
       Codec.lazy(() => Stamped)
         .check(flagCreatedAt)
@@ -84,5 +84,179 @@ describe("跨层组合的结构契约", () => {
       Codec.inspect(boolean().fromString().describe("wire")),
     );
     expect(Codec.inspect(boolean().describe("wire").fromString()).description).toBe("wire");
+  });
+
+  test("Codec.extendStandard 派生同构实例挂载 Standard Schema 扩展，扩展只属于该实例", () => {
+    const converter = Object.freeze({ input: () => ({}), output: () => ({}) });
+    const Base = Stamped.strict();
+    const Extended = Codec.extendStandard(Base, { jsonSchema: converter });
+
+    expect(Extended["~standard"].jsonSchema).toBe(converter);
+    expect(Extended["~standard"].vendor).toBe("modvia");
+    expect(Codec.inspect(Extended)).toStrictEqual(Codec.inspect(Base));
+    expect(Extended.safeParse({ created_at: "a", extra: 1 }).ok).toBe(false);
+    expect(arrayOf(Extended).decode([{ created_at: "a" }])).toStrictEqual([{ createdAt: "a" }]);
+    expect(Extended.pick("createdAt").decode({ created_at: "b" })).toStrictEqual({
+      createdAt: "b",
+    });
+
+    // 在扩展实例上继续派生的新定义不继承扩展
+    expect("jsonSchema" in Extended.describe("next")["~standard"]).toBe(false);
+    expect("jsonSchema" in Extended.strict()["~standard"]).toBe(true);
+    const ExtendedInt = Codec.extendStandard(int(), { jsonSchema: converter });
+    expect("jsonSchema" in ExtendedInt.min(1)["~standard"]).toBe(false);
+    expect(ExtendedInt.fromString().decode("3")).toBe(3);
+
+    expect(() => Codec.extendStandard(Base, { validate: () => ({}) })).toThrow(RangeError);
+    expect(() =>
+      Codec.extendStandard({ decode: String, encode: String } as never, { jsonSchema: converter }),
+    ).toThrow(TypeError);
+  });
+
+  test("Codec.define 的 ctx.run 按方向分型、支持多错收集与反转方向，并守卫 Failed 契约", () => {
+    const PortText = int().min(1).max(65535).fromString();
+    const HostPort = Codec.define({
+      decode(input, ctx) {
+        if (typeof input !== "string") {
+          return ctx.fail("type.string", "Expected host:port string");
+        }
+        const [rawHost, rawPort, ...extra] = input.split(":");
+        if (extra.length > 0 || rawPort === undefined) {
+          return ctx.fail("endpoint.syntax", "Expected host:port");
+        }
+        const host = ctx.run(string().trim().nonEmpty(), rawHost, "host");
+        const port = ctx.run(PortText, rawPort, "port");
+        if (ctx.failed(host)) return host;
+        if (ctx.failed(port)) return port;
+        return { host, port };
+      },
+      encode(input, ctx) {
+        if (typeof input !== "object" || input === null) {
+          return ctx.fail("type.object", "Expected endpoint object");
+        }
+        const candidate = input as Record<string, unknown>;
+        const host = ctx.run(string().trim().nonEmpty(), candidate.host, "host");
+        const port = ctx.run(PortText, candidate.port, "port");
+        if (ctx.failed(host)) return host;
+        if (ctx.failed(port)) return port;
+        // encode 侧 ctx.run(PortText, ...) 静态推导为 string | Failed，经 failed 收窄后为 string
+        const portText: string = port;
+        return `${host}:${portText}`;
+      },
+    });
+
+    const endpoint = HostPort.decode(" api.modvia.dev :443");
+    expect(endpoint).toStrictEqual({ host: "api.modvia.dev", port: 443 });
+    expect(HostPort.encode(endpoint)).toBe("api.modvia.dev:443");
+
+    // 多个子 Codec 同时失败时收集全部问题与相对路径
+    expect(HostPort.safeDecode(" :0")).toMatchObject({
+      ok: false,
+      issues: [
+        { path: ["host"], code: "string.min_length" },
+        { path: ["port"], code: "number.min" },
+      ],
+    });
+    expect(HostPort.safeDump({ host: "", port: 70000 })).toMatchObject({
+      ok: false,
+      issues: [
+        { path: ["host"], code: "string.min_length" },
+        { path: ["port"], code: "number.max" },
+      ],
+    });
+
+    // Codec.invert 后子 Codec 依然沿 handler 自身一侧运行
+    const Inverted = Codec.invert(HostPort);
+    expect(Inverted.decode({ host: "local", port: 8080 })).toBe("local:8080");
+    expect(Inverted.encode("local:8080")).toStrictEqual({ host: "local", port: 8080 });
+
+    // 外部 CodecLike 经 ctx.run 调用时，其 ValidationError 转为相对路径问题
+    const foreignChild = {
+      decode: (value: unknown) => int().parse(value),
+      encode: (value: unknown) => int().dump(value),
+    };
+    const WrapForeign = Codec.define({
+      decode(input, ctx) {
+        const value = ctx.run(foreignChild, input, "inner");
+        if (ctx.failed(value)) return value;
+        return value;
+      },
+      encode: (input, ctx) => {
+        const value = ctx.run(foreignChild, input, "inner");
+        return ctx.failed(value) ? value : value;
+      },
+    });
+    expect(WrapForeign.safeParse("bad")).toMatchObject({
+      ok: false,
+      issues: [{ path: ["inner"], code: "type.integer" }],
+    });
+
+    // 传入 Field 给 ctx.run 立即抛 TypeError
+    const BadChild = Codec.define({
+      decode(input, ctx) {
+        return ctx.run(string().optional() as never, input);
+      },
+      encode: (input) => input,
+    });
+    expect(() => BadChild.safeParse("x")).toThrow(TypeError);
+
+    // 缓存 Failed 并在无问题的运行中返回会触发 TypeError，守住「失败 ⇒ 至少一条问题」
+    let cachedFailed: unknown;
+    const ForgedReturn = Codec.define({
+      decode(input, ctx) {
+        if (input === "capture") {
+          cachedFailed = ctx.run(int(), "not-int");
+          return 0;
+        }
+        return cachedFailed as never;
+      },
+      encode: (input) => input,
+    });
+    expect(ForgedReturn.safeParse("capture").ok).toBe(false);
+    expect(() => ForgedReturn.safeParse("forge")).toThrow(TypeError);
+
+    // 回调结束后再调用 ctx.run 立即抛 Error
+    let leakedRun: ((child: typeof PortText, input: unknown) => unknown) | undefined;
+    const CaptureRun = Codec.define({
+      decode(input, ctx) {
+        leakedRun = ctx.run;
+        return String(input);
+      },
+      encode: (input) => String(input),
+    });
+    expect(CaptureRun.parse("ok")).toBe("ok");
+    expect(() => leakedRun?.(PortText, "80")).toThrow(Error);
+  });
+
+  test("执行方法可解构独立调用，构建方法基于原型并要求有效 this，精化后不再视为静态字面量", () => {
+    const Port = int().fromString();
+    const { parse, safeParse, encode, dump } = Port;
+    expect(["80", "443"].map(parse)).toStrictEqual([80, 443]);
+    expect(safeParse("80")).toStrictEqual({ ok: true, value: 80 });
+    expect([80, 443].map(encode)).toStrictEqual(["80", "443"]);
+    expect(dump(80)).toBe("80");
+
+    // 构建方法位于原型而非自有属性，且不可脱绑调用
+    const baseInt = int();
+    expect(Object.hasOwn(baseInt, "min")).toBe(false);
+    expect(Object.hasOwn(baseInt, "fromString")).toBe(false);
+    const detachedMin = baseInt.min;
+    // @ts-expect-error 构建方法要求以标准 Codec 作为 this，不可脱绑直接调用
+    expect(() => detachedMin(1)).toThrow(TypeError);
+    // 即使盗取根原型的 fromString 强行绑定到已接上游的实例，运行时也拒绝
+    const pipedInt = string().trim().pipe(int().fromString());
+    const rootFromString = Reflect.get(baseInt, "fromString") as () => unknown;
+    expect(() => Reflect.apply(rootFromString, pipedInt, [])).toThrow(TypeError);
+
+    // 经过 refine 的字面量不再作为静态判别标签用于 Model.union
+    const RefinedBranch = Model.define({
+      fields: {
+        kind: string()
+          .or("a")
+          .refine((v) => v === "a", "only.a", "only a"),
+      },
+    });
+    const PlainBranch = Model.define({ fields: { kind: string().or("b") } });
+    expect(() => Model.union("kind", [RefinedBranch, PlainBranch])).toThrow(TypeError);
   });
 });

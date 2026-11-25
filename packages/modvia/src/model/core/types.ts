@@ -40,35 +40,24 @@ export interface Model<
   readonly fields: Readonly<Fields>;
   /** 挑选指定字段派生子模型，保留原字段的外部别名与缺省规则 */
   pick<const Key extends Exclude<keyof Fields, symbol>>(
-    this: void,
     ...keys: readonly Key[]
   ): ModelOf<Pick<Fields, Key>>;
   /** 剔除指定字段派生子模型，保留其余字段的外部别名与缺省规则 */
   omit<const Key extends Exclude<keyof Fields, symbol>>(
-    this: void,
     ...keys: readonly Key[]
   ): ModelOf<Omit<Fields, Key>>;
   /** 将全部字段转为可选键派生新模型（保留外部别名，移除创建期缺键默认值） */
-  partial(this: void): ModelOf<PartialFields<Fields>>;
+  partial(): ModelOf<PartialFields<Fields>>;
   /** 将指定字段转为可选键派生新模型（保留外部别名，移除创建期缺键默认值） */
   partial<const Key extends Exclude<keyof Fields, symbol>>(
-    this: void,
     ...keys: readonly [Key, ...Key[]]
   ): ModelOf<PartialFields<Fields, Key>>;
   /** 追加或覆写字段派生新模型，定义期重新检查外部键唯一性 */
-  extend<const Extra extends FieldRecord>(
-    this: void,
-    fields: Extra,
-  ): ModelOf<MergeFields<Fields, Extra>>;
+  extend<const Extra extends FieldRecord>(fields: Extra): ModelOf<MergeFields<Fields, Extra>>;
   /** 派生严格对象模型：解码遇到未声明的自有属性时报告 object.unknown_key 错误 */
-  strict(this: void): Model<Data, DTO, Out, Fields>;
-  /** 为模型附加静态文档说明文本，保留全部模型方法与实例构造工厂 */
-  describe(this: void, description: string): Model<Data, DTO, Out, Fields>;
+  strict(): Model<Data, DTO, Out, Fields>;
   /** 用新工厂替换实例构造步骤，工厂接收完整校验后的基础字段数据 */
-  withFactory<Next extends Data>(
-    this: void,
-    factory: (data: Data) => Next,
-  ): Model<Data, DTO, Next, Fields>;
+  withFactory<Next extends Data>(factory: (data: Data) => Next): Model<Data, DTO, Next, Fields>;
 }
 
 /** 具备指定判别字段的模型分支契约，供 taggedUnion 编译期校验分支结构 */

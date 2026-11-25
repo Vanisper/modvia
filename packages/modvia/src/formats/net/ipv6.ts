@@ -17,7 +17,8 @@ const ipv6Schema = Object.freeze({ type: "string", format: "ipv6" });
 const defaultIpv6Codec: Codec<string, string> = defineCodec<string, string>({
   decode: validateIpv6,
   encode: validateIpv6,
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "ipv6",
     encodedSchema: ipv6Schema,
     decodedSchema: ipv6Schema,

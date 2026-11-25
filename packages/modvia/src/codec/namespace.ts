@@ -1,4 +1,6 @@
-import { defineCodec, field, inspectCodec, isField } from "./core/define.ts";
+import { extendStandard, fieldOf, isField } from "./core/codec.ts";
+import { defineCodec } from "./core/define.ts";
+import { inspectCodec } from "./core/descriptor.ts";
 import type {
   Codec as CodecInterface,
   Field as FieldInterface,
@@ -16,6 +18,7 @@ export const Codec = Object.freeze({
   invert,
   lazy,
   union: unionOf,
+  extendStandard,
 });
 
 /** 绑定了外部键别名、缺省规则与属性说明的对象槽位描述符与工具命名空间 */
@@ -27,6 +30,6 @@ export type Field<
 > = FieldInterface<T, Encoded, Source, Presence>;
 
 export const Field = Object.freeze({
-  of: field,
+  of: fieldOf,
   is: isField,
 });

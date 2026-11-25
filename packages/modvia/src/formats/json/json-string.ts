@@ -23,7 +23,8 @@ const defaultJsonStringCodec: Codec<unknown, string> = defineCodec<unknown, stri
       return context.fail("format.json", "Value cannot be serialized to JSON");
     }
   },
-  meta: {
+  descriptor: {
+    kind: "custom",
     format: "json",
     encodedSchema: { type: "string" },
     decodedSchema: {},

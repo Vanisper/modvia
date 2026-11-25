@@ -85,7 +85,8 @@ export function zodCodec<S extends $ZodType>(
       }
       return result.data;
     },
-    meta: {
+    descriptor: {
+      kind: "custom",
       format: "zod",
       ...(description !== undefined ? { description } : {}),
     },
