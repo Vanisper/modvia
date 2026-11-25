@@ -111,7 +111,6 @@ export function createOrderedScalarCodec<N extends number | bigint, ResultCodec>
       description,
       validate: adapter.validateBounds,
       createRunner(state): InternalRunner<N, string> {
-        const hasBounds = state.lower !== undefined || state.upper !== undefined;
         return (input, direction, collector) => {
           if (direction === "decode") {
             if (typeof input !== "string") {
@@ -121,11 +120,9 @@ export function createOrderedScalarCodec<N extends number | bigint, ResultCodec>
             if (parsed === null) {
               return collector.add(adapter.stringFormatCode, adapter.stringFormatMessage);
             }
-            if (hasBounds) {
-              const violation = checkOrderedBounds(parsed, state);
-              if (violation !== undefined) {
-                return reportBoundViolation(violation, state, adapter, collector);
-              }
+            const violation = checkOrderedBounds(parsed, state);
+            if (violation !== undefined) {
+              return reportBoundViolation(violation, state, adapter, collector);
             }
             return parsed;
           }
@@ -133,11 +130,9 @@ export function createOrderedScalarCodec<N extends number | bigint, ResultCodec>
           if (!adapter.isNative(input)) {
             return collector.add(adapter.nativeTypeCode, adapter.nativeTypeMessage);
           }
-          if (hasBounds) {
-            const violation = checkOrderedBounds(input, state);
-            if (violation !== undefined) {
-              return reportBoundViolation(violation, state, adapter, collector);
-            }
+          const violation = checkOrderedBounds(input, state);
+          if (violation !== undefined) {
+            return reportBoundViolation(violation, state, adapter, collector);
           }
           return adapter.formatToString(input);
         };
@@ -159,12 +154,6 @@ export function createOrderedScalarCodec<N extends number | bigint, ResultCodec>
     state: {} as OrderedBounds<N>,
     validate: adapter.validateBounds,
     createRunner(state): InternalRunner<N, N> {
-      if (state.lower === undefined && state.upper === undefined) {
-        return (input, _direction, collector) =>
-          adapter.isNative(input)
-            ? input
-            : collector.add(adapter.nativeTypeCode, adapter.nativeTypeMessage);
-      }
       return (input, _direction, collector) => {
         if (!adapter.isNative(input)) {
           return collector.add(adapter.nativeTypeCode, adapter.nativeTypeMessage);

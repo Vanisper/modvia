@@ -1,13 +1,10 @@
 import {
-  createPrimaryContext,
-  createPrimaryStatefulContext,
-  createScopedContext,
-  createStatefulScopedContext,
-  enterActiveContext,
   INVALID,
   isAbortSignal,
-  leaveActiveContext,
-  primaryCollector,
+  openContext,
+  openStatefulContext,
+  type ContextScope,
+  type IssueCollector,
 } from "./collector.ts";
 import { ValidationError } from "./errors.ts";
 import {
@@ -130,28 +127,10 @@ function buildHandlerRunner<T, Encoded>(
   decodeFn: (input: unknown, context: CodecContext) => T,
   encodeFn: (input: unknown, context: CodecContext) => Encoded,
 ): InternalRunner<T, Encoded> {
-  const primaryContext = createPrimaryContext();
-
-  return (input, direction, collector) => {
-    const mark = collector.mark();
-    const context =
-      collector === primaryCollector ? primaryContext : createScopedContext(collector);
-    const prevToken = enterActiveContext(context);
-    try {
-      const output = direction === "decode" ? decodeFn(input, context) : encodeFn(input, context);
-      return collector.mark() > mark ? INVALID : output;
-    } catch (error) {
-      if (isAbortSignal(error)) {
-        return collector.add(error.code, error.message);
-      }
-      if (ValidationError.is(error)) {
-        return collector.addRelativeIssues(error.issues);
-      }
-      throw error;
-    } finally {
-      leaveActiveContext(prevToken);
-    }
-  };
+  return (input, direction, collector) =>
+    runHandler(openContext(collector), collector, (context) =>
+      direction === "decode" ? decodeFn(input, context) : encodeFn(input, context),
+    );
 }
 
 function buildStatefulHandlerRunner<T, Encoded, S extends object>(
@@ -159,33 +138,33 @@ function buildStatefulHandlerRunner<T, Encoded, S extends object>(
   decodeFn: (input: unknown, context: StatefulCodecContext<S>) => T,
   encodeFn: (input: unknown, context: StatefulCodecContext<S>) => Encoded,
 ): InternalRunner<T, Encoded> {
-  const primaryStatefulContext = createPrimaryStatefulContext(state);
+  return (input, direction, collector) =>
+    runHandler(openStatefulContext(collector, state), collector, (context) =>
+      direction === "decode" ? decodeFn(input, context) : encodeFn(input, context),
+    );
+}
 
-  return (input, direction, collector) => {
-    const mark = collector.mark();
-    const statefulContext =
-      collector === primaryCollector
-        ? primaryStatefulContext
-        : createStatefulScopedContext(collector, state);
-    const prevToken = enterActiveContext(statefulContext);
-    try {
-      const output =
-        direction === "decode"
-          ? decodeFn(input, statefulContext)
-          : encodeFn(input, statefulContext);
-      return collector.mark() > mark ? INVALID : output;
-    } catch (error) {
-      if (isAbortSignal(error)) {
-        return collector.add(error.code, error.message);
-      }
-      if (ValidationError.is(error)) {
-        return collector.addRelativeIssues(error.issues);
-      }
-      throw error;
-    } finally {
-      leaveActiveContext(prevToken);
+/** 在回调作用域内执行用户 handler：中断信号与嵌套 ValidationError 转为问题，回调结束即关闭 context */
+function runHandler<Context, Output>(
+  scope: ContextScope<Context>,
+  collector: IssueCollector,
+  invoke: (context: Context) => Output,
+): Output | typeof INVALID {
+  const mark = collector.mark();
+  try {
+    const output = invoke(scope.context);
+    return collector.mark() > mark ? INVALID : output;
+  } catch (error) {
+    if (isAbortSignal(error)) {
+      return collector.add(error.code, error.message);
     }
-  };
+    if (ValidationError.is(error)) {
+      return collector.addRelativeIssues(error.issues);
+    }
+    throw error;
+  } finally {
+    scope.close();
+  }
 }
 
 /** 读取任意 Codec、Field、Model 或自定义 CodecLike 的只读结构描述符（Field 自动叠加槽位级 description） */

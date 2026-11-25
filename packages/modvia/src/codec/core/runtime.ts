@@ -1,21 +1,11 @@
 import { isPlainObject, writeOwnField } from "../../shared/object.ts";
 import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
 import {
-  acquireCollector,
-  createPrimaryContext,
-  createScopedContext,
-  enterActiveContext,
-  hasActiveContext,
   INVALID,
   isAbortSignal,
-  leaveActiveContext,
-  primaryCollector,
-  releaseCollector,
-  releaseFailedCollector,
-  suspendActiveContext,
-  type InternalCollector,
+  IssueCollector,
+  openContext,
   type Invalid,
-  type IssueCollector,
   type SegmentMapper,
 } from "./collector.ts";
 import { ValidationError } from "./errors.ts";
@@ -52,14 +42,15 @@ interface RunnerCarrier<T = unknown, Encoded = unknown> {
   readonly [runnerSymbol]?: InternalRunner<T, Encoded>;
 }
 
-const runnerSymbol = Symbol.for("modvia.codecRunner");
-const literalStateSymbol = Symbol.for("modvia.literalState");
-const allowedLiteralsSymbol = Symbol.for("modvia.allowedLiterals");
-const segmentMapperSymbol = Symbol.for("modvia.decodeSegmentMapper");
-const defaultResolverSymbol = Symbol.for("modvia.defaultResolver");
-const traitKeysSymbol = Symbol.for("modvia.traitKeys");
-export const descriptorSymbol = Symbol.for("modvia.codecDescriptor");
-export const fieldBrand = Symbol.for("modvia.Field");
+// 内部槽位一律使用模块私有符号：跨副本互操作只走公开协议（CodecLike / FieldLike / StandardSchema）
+const runnerSymbol = Symbol("modvia.codecRunner");
+const literalStateSymbol = Symbol("modvia.literalState");
+const allowedLiteralsSymbol = Symbol("modvia.allowedLiterals");
+const segmentMapperSymbol = Symbol("modvia.decodeSegmentMapper");
+const defaultResolverSymbol = Symbol("modvia.defaultResolver");
+const traitKeysSymbol = Symbol("modvia.traitKeys");
+export const descriptorSymbol = Symbol("modvia.codecDescriptor");
+export const fieldBrand = Symbol("modvia.Field");
 
 const defaultCustomDescriptor: CodecDescriptor = Object.freeze({ kind: "custom" });
 
@@ -102,13 +93,9 @@ function instantiateCodec<T, Encoded, Extra extends object = Record<never, never
     version: 1,
     vendor: "modvia",
     validate(value: unknown): StandardSchemaV1.Result<T> {
-      const collector = acquireCollector();
-      const output = executeTopLevel(unknownRunner, value, "decode", collector);
-      if (output === INVALID) {
-        return { issues: releaseFailedCollector(collector) };
-      }
-      releaseCollector(collector);
-      return { value: output as T };
+      const collector = new IssueCollector();
+      const output = unknownRunner(value, "decode", collector);
+      return output === INVALID ? { issues: collector.frozenIssues() } : { value: output as T };
     },
   });
 
@@ -639,9 +626,6 @@ function createCheckedCodec<T, Encoded>(
   decodeSegmentMapper?: SegmentMapper,
 ): Codec<T, Encoded> {
   const baseRunner = getCodecRunner(base);
-  const primaryDecodeContext = createPrimaryContext(decodeSegmentMapper);
-  const primaryEncodeContext =
-    decodeSegmentMapper !== undefined ? createPrimaryContext() : primaryDecodeContext;
 
   return createCodec<T, Encoded>(
     (input, direction, collector) => {
@@ -650,18 +634,12 @@ function createCheckedCodec<T, Encoded>(
 
       const domainValue = (direction === "decode" ? converted : input) as T;
       const mark = collector.mark();
-      const context =
-        collector === primaryCollector
-          ? direction === "decode"
-            ? primaryDecodeContext
-            : primaryEncodeContext
-          : createScopedContext(
-              collector,
-              direction === "decode" ? decodeSegmentMapper : undefined,
-            );
-      const prevToken = enterActiveContext(context);
+      const scope = openContext(
+        collector,
+        direction === "decode" ? decodeSegmentMapper : undefined,
+      );
       try {
-        rule(domainValue, context);
+        rule(domainValue, scope.context);
         return collector.mark() > mark ? INVALID : converted;
       } catch (error) {
         if (isAbortSignal(error)) {
@@ -672,7 +650,7 @@ function createCheckedCodec<T, Encoded>(
         }
         throw error;
       } finally {
-        leaveActiveContext(prevToken);
+        scope.close();
       }
     },
     { decodeSegmentMapper, descriptor: getCodecDescriptor(base) },
@@ -702,42 +680,16 @@ function createNormalizedCodec<T, Encoded>(
   );
 }
 
-function executeTopLevel(
-  runner: InternalRunner<unknown, unknown>,
-  input: unknown,
-  direction: CodecDirection,
-  collector: InternalCollector,
-): unknown {
-  if (hasActiveContext()) {
-    const prevToken = suspendActiveContext();
-    try {
-      return runner(input, direction, collector);
-    } catch (error) {
-      releaseCollector(collector);
-      throw error;
-    } finally {
-      leaveActiveContext(prevToken);
-    }
-  }
-  try {
-    return runner(input, direction, collector);
-  } catch (error) {
-    releaseCollector(collector);
-    throw error;
-  }
-}
-
 function runThrowing<Result>(
   runner: InternalRunner<unknown, unknown>,
   input: unknown,
   direction: CodecDirection,
 ): Result {
-  const collector = acquireCollector();
-  const output = executeTopLevel(runner, input, direction, collector);
+  const collector = new IssueCollector();
+  const output = runner(input, direction, collector);
   if (output === INVALID) {
-    throw new ValidationError(releaseFailedCollector(collector));
+    throw new ValidationError(collector.frozenIssues());
   }
-  releaseCollector(collector);
   return output as Result;
 }
 
@@ -746,13 +698,11 @@ function runSafe<Result>(
   input: unknown,
   direction: CodecDirection,
 ): SafeResult<Result> {
-  const collector = acquireCollector();
-  const output = executeTopLevel(runner, input, direction, collector);
-  if (output === INVALID) {
-    return Object.freeze({ ok: false, issues: releaseFailedCollector(collector) });
-  }
-  releaseCollector(collector);
-  return Object.freeze({ ok: true, value: output as Result });
+  const collector = new IssueCollector();
+  const output = runner(input, direction, collector);
+  return output === INVALID
+    ? Object.freeze({ ok: false, issues: collector.frozenIssues() })
+    : Object.freeze({ ok: true, value: output as Result });
 }
 
 function createLiteralExtendedCodec<
@@ -773,20 +723,16 @@ function createLiteralExtendedCodec<
     literals: mergedLiterals,
   };
 
-  let runner: InternalRunner<T | Literals[number], Encoded | Literals[number]>;
-  if (mergedLiterals.length === 1) {
-    const single = mergedLiterals[0] as Literals[number];
-    runner = (input, direction, collector) =>
-      Object.is(input, single) ? single : baseRunner(input, direction, collector);
-  } else {
-    const candidates = [...mergedLiterals];
-    runner = (input, direction, collector) => {
-      for (const literal of candidates) {
-        if (Object.is(input, literal)) return literal as Literals[number];
-      }
-      return baseRunner(input, direction, collector);
-    };
-  }
+  const runner: InternalRunner<T | Literals[number], Encoded | Literals[number]> = (
+    input,
+    direction,
+    collector,
+  ) => {
+    for (const literal of mergedLiterals) {
+      if (Object.is(input, literal)) return literal as Literals[number];
+    }
+    return baseRunner(input, direction, collector);
+  };
 
   return createCodec<T | Literals[number], Encoded | Literals[number]>(runner, {
     literalState,

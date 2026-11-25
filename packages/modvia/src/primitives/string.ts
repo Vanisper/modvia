@@ -36,10 +36,6 @@ const defaultStringCodec: StringCodec = createStatefulCodec({
   validate: validateLengthBounds,
   createRunner(state) {
     const { trim, minLength, maxLength, pattern } = state;
-    if (!trim && minLength === undefined && maxLength === undefined && pattern === undefined) {
-      return (input, _direction, collector) =>
-        typeof input === "string" ? input : collector.add("type.string", "Expected a string");
-    }
     return (input, _direction, collector) => {
       if (typeof input !== "string") {
         return collector.add("type.string", "Expected a string");

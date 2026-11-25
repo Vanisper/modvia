@@ -42,20 +42,12 @@ export function literal<const Values extends readonly [FieldLiteral, ...FieldLit
   const uniqueValues = Object.freeze(deduplicateLiterals([], allowedValues));
   const expectedMessage = `Expected literal: ${uniqueValues.map(formatLiteral).join(", ")}`;
 
-  let runner: InternalRunner<Values[number], Values[number]>;
-  if (uniqueValues.length === 1) {
-    const single = uniqueValues[0] as Values[number];
-    runner = (input, _direction, collector) =>
-      Object.is(input, single) ? single : collector.add("value.literal", expectedMessage);
-  } else {
-    const candidates = [...uniqueValues];
-    runner = (input, _direction, collector) => {
-      for (const candidate of candidates) {
-        if (Object.is(input, candidate)) return candidate as Values[number];
-      }
-      return collector.add("value.literal", expectedMessage);
-    };
-  }
+  const runner: InternalRunner<Values[number], Values[number]> = (input, _direction, collector) => {
+    for (const candidate of uniqueValues) {
+      if (Object.is(input, candidate)) return candidate as Values[number];
+    }
+    return collector.add("value.literal", expectedMessage);
+  };
 
   return createCodec<Values[number], Values[number]>(runner, {
     allowedLiterals: uniqueValues,
