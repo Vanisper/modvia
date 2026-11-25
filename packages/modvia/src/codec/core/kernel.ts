@@ -1,7 +1,8 @@
 import { INVALID } from "./collector.ts";
 import { openContext, runInScope, type SegmentMapper } from "./context.ts";
 import type { Kernel } from "./internals.ts";
-import type { CodecContext, FieldLiteral } from "./types.ts";
+import { builtinIssues, reportIssue } from "./issues.ts";
+import type { CodecContext, FieldLiteral, IssueCode } from "./types.ts";
 
 /** 执行内核代数：所有组合都只操作成对的步骤函数，不感知 Codec 实例与方法面 */
 
@@ -31,7 +32,7 @@ export function invertKernel<T, Encoded>(inner: Kernel<T, Encoded>): Kernel<Enco
 export function refineKernel<T, Encoded>(
   base: Kernel<T, Encoded>,
   predicate: (value: T) => boolean,
-  code: string,
+  code: IssueCode,
   message: string,
 ): Kernel<T, Encoded> {
   return {
@@ -135,7 +136,7 @@ export function unionKernel<T, Encoded>(
         collector.restore(mark);
         if (output !== INVALID) return output;
       }
-      return collector.add("union.no_match", "Input did not match any union branch");
+      return reportIssue(collector, builtinIssues.unionNoMatch());
     };
   return {
     decode: firstMatch("decode") as Kernel<T, Encoded>["decode"],

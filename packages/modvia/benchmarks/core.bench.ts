@@ -9,7 +9,6 @@ import {
   literal,
   Model,
   number,
-  oneOf,
   string,
   type InferData,
   type InferDTO,
@@ -23,7 +22,7 @@ const pageIntFromString = int().min(1).max(10_000).fromString();
 const timestampCodec = isoDateTime();
 const sampleDate = new Date("2026-11-09T08:30:15.250Z");
 
-const UserRole = oneOf("member", "admin", "owner");
+const UserRole = literal("member", "admin", "owner");
 
 const UserModel = Model.define({
   alias: Alias.snakeCase,

@@ -8,6 +8,7 @@ import {
 import { INVALID, type IssueCollector } from "../../codec/core/collector.ts";
 import { compact } from "../../codec/core/descriptor.ts";
 import type { Kernel } from "../../codec/core/internals.ts";
+import { builtinIssues, reportIssue, reportIssueAt } from "../../codec/core/issues.ts";
 import type { CodecOrField } from "../../codec/core/types.ts";
 import { isObject, isPlainObject, writeOwnField } from "../../shared/object.ts";
 import type { Alias, AliasKind, ApplyAlias } from "./alias.ts";
@@ -193,7 +194,7 @@ function decodeModel(
   collector: IssueCollector,
 ): unknown {
   if (!isPlainObject(input)) {
-    return collector.add("type.object", "Expected a plain object");
+    return reportIssue(collector, builtinIssues.typeObject());
   }
 
   const data: Record<string, unknown> = {};
@@ -207,7 +208,7 @@ function decodeModel(
         if (!failed) writeOwnField(data, field.key, field.fallback());
         continue;
       }
-      collector.addAtSegment(source, "field.required", `Missing required field: ${source}`);
+      reportIssueAt(collector, source, builtinIssues.objectMissingKey(source, "decode"));
       failed = true;
       continue;
     }
@@ -221,7 +222,7 @@ function decodeModel(
   if (knownSources !== undefined) {
     for (const rawKey of Object.keys(input)) {
       if (!knownSources.has(rawKey)) {
-        collector.addAtSegment(rawKey, "object.unknown_key", `Unknown field: ${rawKey}`);
+        reportIssueAt(collector, rawKey, builtinIssues.objectUnknownKey(rawKey));
         failed = true;
       }
     }
@@ -237,7 +238,7 @@ function encodeModel(
   collector: IssueCollector,
 ): unknown {
   if (!isObject(input)) {
-    return collector.add("type.object", "Expected a model object");
+    return reportIssue(collector, builtinIssues.typeObject("Expected a model object"));
   }
 
   const output: Record<string, unknown> = {};
@@ -248,7 +249,7 @@ function encodeModel(
     const value = readModelField(input, key);
     if (value === missingField) {
       if (field.presence === "optional") continue;
-      collector.addAtSegment(key, "field.required", `Missing model field: ${key}`);
+      reportIssueAt(collector, key, builtinIssues.objectMissingKey(key, "encode"));
       failed = true;
       continue;
     }

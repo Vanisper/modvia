@@ -1,5 +1,6 @@
 export type { CodecHandlers, StatefulCodecHandlers } from "./codec/core/define.ts";
 export * from "./codec/core/errors.ts";
+export type { BuiltinIssueCode } from "./codec/core/issues.ts";
 export type {
   Brand,
   Branded,
@@ -20,12 +21,15 @@ export type {
   FieldPresence,
   InferEncoded,
   InferValue,
+  IssueCode,
+  IssueParams,
   PathSegment,
   SafeResult,
   StandardCodec,
   StandardSchemaV1,
   StatefulCodecContext,
   StatePatch,
+  StringFormat,
   ValidationIssue,
   ValueCodecInput,
   WithCodecTrait,

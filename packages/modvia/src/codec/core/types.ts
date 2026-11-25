@@ -1,9 +1,19 @@
+import type { BuiltinIssueCode } from "./issues.ts";
+
 export type PathSegment = string | number;
+
+/** 校验错误码：涵盖全部内置稳定错误码，同时允许自定义或生态桥接命名空间（如 `zod.*`） */
+export type IssueCode = BuiltinIssueCode | (string & {});
+
+/** 校验问题附带的只读结构化参数（仅含冻结原始值或冻结数组，供上层多语言文案插值） */
+export type IssueParams = Readonly<Record<string, unknown>>;
 
 export interface ValidationIssue {
   readonly path: readonly PathSegment[];
-  readonly code: string;
+  readonly code: IssueCode;
   readonly message: string;
+  /** 可选冻结参数表：不含与 code 语义重复的冗余字段，且不暴露可变对象 */
+  readonly params?: IssueParams;
 }
 
 export type SafeResult<T> =
@@ -19,15 +29,16 @@ export type SafeResult<T> =
     };
 
 export interface CodecIssueInput {
-  readonly code: string;
+  readonly code: IssueCode;
   readonly message: string;
   readonly path?: readonly PathSegment[];
+  readonly params?: IssueParams;
 }
 
 export interface CodecContext {
   /** 立即中断当前规则并记录一条校验问题 */
-  fail(this: void, code: string, message: string): never;
-  /** 记录一条校验问题但不中断后续检查（支持指定相对子路径） */
+  fail(this: void, code: IssueCode, message: string, params?: IssueParams): never;
+  /** 记录一条校验问题但不中断后续检查（支持指定相对子路径与结构化参数） */
   issue(this: void, detail: CodecIssueInput): void;
   /** 判定 context.run 的返回值是否为子 Codec 失败标记 */
   failed(this: void, value: unknown): value is Failed;
@@ -171,11 +182,11 @@ export interface Codec<T, Encoded = T> extends StandardCodec<T, Encoded> {
   /** 用类型守卫谓词在两端对称校验业务值，并将解码侧静态类型收窄为子类型 Narrowed */
   refine<Narrowed extends T>(
     predicate: (value: T) => value is Narrowed,
-    code: string,
+    code: IssueCode,
     message: string,
   ): Codec<Narrowed, Encoded>;
   /** 用布尔谓词在解码与编码两端对称校验业务值，强制指定稳定错误码 */
-  refine(predicate: (value: T) => boolean, code: string, message: string): Codec<T, Encoded>;
+  refine(predicate: (value: T) => boolean, code: IssueCode, message: string): Codec<T, Encoded>;
   /**
    * 对业务值执行同类型幂等规范化清洗，解码与编码两端共同维持规范形态
    *
@@ -301,14 +312,19 @@ export type CodecRefinement =
   | { readonly kind: "check" }
   | { readonly kind: "normalize" };
 
-/** 只读编解码结构描述符，与执行闭包完全解耦，零运行时校验开销 */
+/** 内置字符串语义格式标识（不耦合特定 Schema 方言，由独立导出包映射到目标规范） */
+export type StringFormat = "uuid" | "email" | "uri" | "ipv4" | "ipv6" | "date" | "time";
+
+/** 只读编解码结构描述符，与执行内核完全解耦，零运行时校验开销 */
 export type CodecDescriptor =
   | WithDescription<{
       readonly kind: "string";
-      readonly trim: boolean;
+      readonly trim?: boolean;
       readonly minLength?: number;
       readonly maxLength?: number;
       readonly pattern?: string;
+      readonly format?: StringFormat;
+      readonly protocols?: readonly string[];
     }>
   | WithDescription<{
       readonly kind: "number" | "integer";
@@ -324,11 +340,21 @@ export type CodecDescriptor =
       readonly exclusiveMin?: bigint;
       readonly exclusiveMax?: bigint;
     }>
+  | WithDescription<{
+      readonly kind: "numericString";
+      readonly numericKind: "integer" | "number" | "bigint";
+    }>
   | WithDescription<{ readonly kind: "boolean" }>
+  | WithDescription<{
+      readonly kind: "booleanString";
+      readonly truthy: readonly string[];
+      readonly falsy: readonly string[];
+      readonly caseSensitive: boolean;
+    }>
   | WithDescription<{ readonly kind: "unknown" }>
   | WithDescription<{ readonly kind: "literal"; readonly values: readonly FieldLiteral[] }>
-  | WithDescription<{ readonly kind: "enum"; readonly values: readonly string[] }>
   | WithDescription<{ readonly kind: "datetime" }>
+  | WithDescription<{ readonly kind: "json" }>
   | WithDescription<{
       readonly kind: "array";
       readonly item: StandardCodec;

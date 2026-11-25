@@ -1,6 +1,7 @@
 import { createCodec, promoteToCodec } from "../../codec/core/codec.ts";
 import { staticLiterals } from "../../codec/core/descriptor.ts";
 import { descriptorOf, kernelOf, type Kernel } from "../../codec/core/internals.ts";
+import { builtinIssues, reportIssue, reportIssueAt } from "../../codec/core/issues.ts";
 import type { Codec, FieldLiteral, InferEncoded, InferValue } from "../../codec/core/types.ts";
 import { isObject, isPlainObject } from "../../shared/object.ts";
 import { formatLiteral } from "../../shared/value.ts";
@@ -57,7 +58,7 @@ export function taggedUnion<
 
     const tags = staticLiterals(tagField.codec);
     if (tags === undefined || tags.length === 0) {
-      throw new TypeError(`Discriminator field "${discriminator}" must use literal() or oneOf()`);
+      throw new TypeError(`Discriminator field "${discriminator}" must use literal()`);
     }
     for (const tag of tags) {
       if (tag === undefined) {
@@ -73,48 +74,44 @@ export function taggedUnion<
   }
 
   const wireKey = externalKey as string;
-  const expectedTags = [...branchByTag.keys()].map(formatLiteral).join(", ");
+  const expectedTags = Object.freeze([...branchByTag.keys()]);
 
   const kernel: Kernel = {
     decode(input, collector) {
       if (!isPlainObject(input)) {
-        return collector.add("type.object", "Expected a plain object");
+        return reportIssue(collector, builtinIssues.typeObject());
       }
       if (!Object.hasOwn(input, wireKey)) {
-        return collector.addAtSegment(
-          wireKey,
-          "field.required",
-          `Missing required field: ${wireKey}`,
-        );
+        return reportIssueAt(collector, wireKey, builtinIssues.objectMissingKey(wireKey, "decode"));
       }
       const branch = branchByTag.get(input[wireKey] as FieldLiteral);
       if (branch === undefined) {
-        return collector.addAtSegment(
+        return reportIssueAt(
+          collector,
           wireKey,
-          "union.invalid_tag",
-          `Expected discriminator "${wireKey}" to be one of: ${expectedTags}`,
+          builtinIssues.unionUnknownTag(wireKey, expectedTags),
         );
       }
       return branch.decode(input, collector);
     },
     encode(input, collector) {
       if (!isObject(input)) {
-        return collector.add("type.object", "Expected a model object");
+        return reportIssue(collector, builtinIssues.typeObject("Expected a model object"));
       }
       const tag = readModelField(input, discriminator);
       if (tag === missingField) {
-        return collector.addAtSegment(
+        return reportIssueAt(
+          collector,
           discriminator,
-          "field.required",
-          `Missing model field: ${discriminator}`,
+          builtinIssues.objectMissingKey(discriminator, "encode"),
         );
       }
       const branch = branchByTag.get(tag as FieldLiteral);
       if (branch === undefined) {
-        return collector.addAtSegment(
+        return reportIssueAt(
+          collector,
           discriminator,
-          "union.invalid_tag",
-          `Expected discriminator "${discriminator}" to be one of: ${expectedTags}`,
+          builtinIssues.unionUnknownTag(discriminator, expectedTags),
         );
       }
       return branch.encode(input, collector);

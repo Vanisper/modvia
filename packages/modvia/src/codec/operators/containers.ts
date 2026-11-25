@@ -4,9 +4,11 @@ import {
   type LengthBounds,
 } from "../../scalars/bounds/length.ts";
 import { isPlainObject, writeOwnField } from "../../shared/object.ts";
-import { assertValueCodec, promoteToCodec } from "../core/codec.ts";
+import { promoteToCodec } from "../core/codec.ts";
 import { defineCodec } from "../core/define.ts";
 import { compact } from "../core/descriptor.ts";
+import { assertValueCodec } from "../core/guards.ts";
+import { builtinIssues, failIssue, pushIssue } from "../core/issues.ts";
 import { createFamily } from "../core/trait.ts";
 import type {
   Codec,
@@ -58,14 +60,14 @@ interface ArrayState extends LengthBounds {
 
 function convertArray(input: unknown, context: ChildRunner, state: ArrayState): unknown[] {
   if (!Array.isArray(input)) {
-    return context.fail("type.array", "Expected an array");
+    return failIssue(context, builtinIssues.typeArray());
   }
   const { minLength, maxLength } = state;
   if (minLength !== undefined && input.length < minLength) {
-    return context.fail("array.min_length", `Expected at least ${minLength} items`);
+    return failIssue(context, builtinIssues.arrayMinLength(minLength));
   }
   if (maxLength !== undefined && input.length > maxLength) {
-    return context.fail("array.max_length", `Expected at most ${maxLength} items`);
+    return failIssue(context, builtinIssues.arrayMaxLength(maxLength));
   }
   const output: unknown[] = [];
   for (let index = 0; index < input.length; index++) {
@@ -142,7 +144,7 @@ export function recordOf(
 
   const convert = (input: unknown, context: ChildRunner): Record<string, unknown> => {
     if (!isPlainObject(input)) {
-      return context.fail("type.object", "Expected a plain object");
+      return failIssue(context, builtinIssues.typeObject());
     }
     const output: Record<string, unknown> = {};
     for (const rawKey of Object.keys(input)) {
@@ -150,11 +152,7 @@ export function recordOf(
       const value = context.run(valueCodec, input[rawKey], rawKey);
       if (context.failed(key) || context.failed(value)) continue;
       if (Object.hasOwn(output, key as string)) {
-        context.issue({
-          code: "record.duplicate_key",
-          message: `Duplicate record key after conversion: ${String(key)}`,
-          path: [rawKey],
-        });
+        pushIssue(context, builtinIssues.recordDuplicateKey(key as string), [rawKey]);
         continue;
       }
       writeOwnField(output, key as string, value);
@@ -182,13 +180,10 @@ export function tupleOf<const Items extends readonly ValueCodecInput<unknown, un
 
   const convert = (input: unknown, context: ChildRunner): unknown[] => {
     if (!Array.isArray(input)) {
-      return context.fail("type.array", "Expected an array");
+      return failIssue(context, builtinIssues.typeArray());
     }
     if (input.length !== promoted.length) {
-      return context.fail(
-        "tuple.length",
-        `Expected tuple of length ${promoted.length}, got ${input.length}`,
-      );
+      return failIssue(context, builtinIssues.tupleLength(promoted.length, input.length));
     }
     return promoted.map((item, index) => context.run(item, input[index], index));
   };

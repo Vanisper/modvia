@@ -9,7 +9,6 @@ import {
   literal,
   Model,
   number,
-  oneOf,
   recordOf,
   string,
   tupleOf,
@@ -33,7 +32,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
           .pattern(/^[a-z0-9_]+$/),
         age: int().nonNegative().max(150).optional().describe("Age in years"),
         score: number().nonNegative().max(100).default(60),
-        role: oneOf("admin", "member").alias("account_role"),
+        role: literal("admin", "member").alias("account_role"),
         active: boolean(),
         nickname: string().nullable(),
         createdAt: isoDateTime(),
@@ -177,7 +176,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       exclusiveMaximum: true,
     });
 
-    const LocaleMap = recordOf(oneOf("zh", "en"), string());
+    const LocaleMap = recordOf(literal("zh", "en"), string());
     expect(toJsonSchema(LocaleMap, { includeSchemaUri: false })).toStrictEqual({
       type: "object",
       propertyNames: { type: "string", enum: ["zh", "en"] },

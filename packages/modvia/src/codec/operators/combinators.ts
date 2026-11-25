@@ -1,4 +1,5 @@
-import { assertValueCodec, createCodec, promoteToCodec } from "../core/codec.ts";
+import { createCodec, promoteToCodec } from "../core/codec.ts";
+import { assertValueCodec } from "../core/guards.ts";
 import { kernelOf } from "../core/internals.ts";
 import { invertKernel, lazyKernel, unionKernel } from "../core/kernel.ts";
 import type {

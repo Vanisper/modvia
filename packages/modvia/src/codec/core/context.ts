@@ -1,4 +1,4 @@
-import { INVALID, type Invalid, type IssueCollector } from "./collector.ts";
+import { freezeIssueParams, INVALID, type Invalid, type IssueCollector } from "./collector.ts";
 import { ValidationError } from "./errors.ts";
 import { isFieldLike } from "./field.ts";
 import { kernelOf, type Kernel, type Side, type Step } from "./internals.ts";
@@ -9,6 +9,8 @@ import type {
   DecodeContext,
   EncodeContext,
   Failed,
+  IssueCode,
+  IssueParams,
   PathSegment,
 } from "./types.ts";
 
@@ -20,8 +22,9 @@ const CLOSED_CONTEXT_MESSAGE = "Codec context cannot be used after its callback 
 
 interface AbortSignal {
   readonly [abortBrand]: true;
-  readonly code: string;
+  readonly code: IssueCode;
   readonly message: string;
+  readonly params?: IssueParams;
 }
 
 function isAbortSignal(value: unknown): value is AbortSignal {
@@ -75,9 +78,13 @@ export function openContext<S extends object>(
   };
 
   const context: AnyContext = {
-    fail(code: string, message: string): never {
+    fail(code: IssueCode, message: string, params?: IssueParams): never {
       assertOpen();
-      const signal: AbortSignal = { [abortBrand]: true, code, message };
+      const frozenParams = freezeIssueParams(params);
+      const signal: AbortSignal =
+        frozenParams === undefined
+          ? { [abortBrand]: true, code, message }
+          : { [abortBrand]: true, code, message, params: frozenParams };
       // oxlint-disable-next-line no-throw-literal -- 内部零调用栈开销中断信号，由紧邻执行器捕获转为 Issue
       throw signal;
     },
@@ -139,13 +146,13 @@ function recordIssue(
   }
   const rawPath = detail.path;
   if (!rawPath || rawPath.length === 0) {
-    collector.add(detail.code, detail.message);
+    collector.add(detail.code, detail.message, detail.params);
     return;
   }
   const mapper = resolveMapper();
   const path =
     mapper !== undefined ? [mapper(rawPath[0] as PathSegment), ...rawPath.slice(1)] : rawPath;
-  collector.addAt(path, detail.code, detail.message);
+  collector.addAt(path, detail.code, detail.message, detail.params);
 }
 
 /**
@@ -166,7 +173,7 @@ export function runInScope<Context, Output>(
     output = invoke(scope.context);
   } catch (error) {
     if (isAbortSignal(error)) {
-      return collector.add(error.code, error.message);
+      return collector.add(error.code, error.message, error.params);
     }
     if (ValidationError.is(error)) {
       return collector.addRelativeIssues(error.issues);

@@ -154,14 +154,14 @@ describe("跨层组合的结构契约", () => {
       ok: false,
       issues: [
         { path: ["host"], code: "string.min_length" },
-        { path: ["port"], code: "number.min" },
+        { path: ["port"], code: "integer.min" },
       ],
     });
     expect(HostPort.safeDump({ host: "", port: 70000 })).toMatchObject({
       ok: false,
       issues: [
         { path: ["host"], code: "string.min_length" },
-        { path: ["port"], code: "number.max" },
+        { path: ["port"], code: "integer.max" },
       ],
     });
 

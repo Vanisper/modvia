@@ -1,3 +1,4 @@
+import { builtinIssues, failIssue } from "../codec/core/issues.ts";
 import { createFamily } from "../codec/core/trait.ts";
 import type { CodecContext, WithCodecTrait } from "../codec/core/types.ts";
 import {
@@ -33,27 +34,28 @@ const defaultBooleanStringCodec = createFamily<BooleanTokenTable>({
   state: compileBooleanTokens(["true"], ["false"], false),
   decode(input, context) {
     if (typeof input !== "string") {
-      return context.fail("type.string", "Expected a string");
+      return failIssue(context, builtinIssues.typeString());
     }
     const parsed = parseBooleanToken(input, context.state);
     if (parsed === null) {
-      return context.fail("format.boolean_string", "Expected a valid boolean string");
+      return failIssue(
+        context,
+        builtinIssues.formatBooleanString(context.state.rawTruthy, context.state.rawFalsy),
+      );
     }
     return parsed;
   },
   encode(input, context) {
     if (typeof input !== "boolean") {
-      return context.fail("type.boolean", "Expected a boolean");
+      return failIssue(context, builtinIssues.typeBoolean());
     }
     return formatBooleanToken(input, context.state);
   },
   descriptor: (state) => ({
-    kind: "custom",
-    format: "boolean-string",
-    encodedSchema: state.caseSensitive
-      ? { type: "string", enum: [...state.truthySet, ...state.falsySet] }
-      : { type: "string" },
-    decodedSchema: { type: "boolean" },
+    kind: "booleanString",
+    truthy: state.rawTruthy,
+    falsy: state.rawFalsy,
+    caseSensitive: state.caseSensitive,
   }),
   methods: {
     tokens:
@@ -66,7 +68,7 @@ const defaultBooleanStringCodec = createFamily<BooleanTokenTable>({
 })();
 
 function convertBoolean(input: unknown, context: CodecContext): boolean {
-  return typeof input === "boolean" ? input : context.fail("type.boolean", "Expected a boolean");
+  return typeof input === "boolean" ? input : failIssue(context, builtinIssues.typeBoolean());
 }
 
 const defaultBooleanCodec = createFamily({

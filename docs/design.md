@@ -23,7 +23,7 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 | `Field<T, E, Source, Presence>` | 对象属性级   | 对象属性槽位描述符（实现纯数据协变协议 `FieldLike`，承载槽位级 `source`、`presence`、`description`、`fallback` 与 `codec`）；静态提供 `Field.of` / `is`。 |
 | `Model<Data, DTO, Out>`         | 领域模型级   | 组合字段表形成对象契约（本身亦是 `Codec<Out, DTO>`）；静态提供 `Model.define` 与 `Model.union`，键映射策略归属 `Alias` 命名空间。                         |
 
-内置 0 阶标量（`string`、`number`、`int`、`bigint`、`boolean`、`oneOf`、`literal`、`unknown`、`isoDateTime`）与 1 阶值容器（`arrayOf`、`tupleOf`、`recordOf`）作为高频数据形态构造器直接导入，与 `Codec.*` 组合算子及 `Model.define` 统一返回标准 `Codec`：
+内置 0 阶标量（`string`、`number`、`int`、`bigint`、`boolean`、`literal`、`unknown`、`isoDateTime`）与 1 阶值容器（`arrayOf`、`tupleOf`、`recordOf`）作为高频数据形态构造器直接导入，与 `Codec.*` 组合算子及 `Model.define` 统一返回标准 `Codec`：
 
 - 有序数值与布尔原始标量（`number`、`int`、`bigint`、`boolean`）默认以原生类型作为外部编码介质，并统一提供 `.fromString()` 切换为严格收敛的字符串外部表示（可与数值区间方法按任意顺序交换调用；`boolean().fromString()` 进一步解锁 `.tokens(truthy, falsy)` 与 `.caseSensitive()`）。
 - 任意 `Codec`（包括嵌套 `Model`）都可直接调用 `.alias(name)`、`.optional()` 或 `.default(...)` 跃迁为 `Field`，无需额外包装函数。
@@ -129,7 +129,7 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - **字段表结构派生（`pick` / `omit` / `partial` / `extend`）**：基于已绑定别名的字段表派生新数据模型，自动继承原模型的 `strict` 边界策略（与 `.strict()` 换序等价），同时重置 `withFactory` 与外层 `description`；`partial(...keys?)` 将指定或全部字段转为单层可选键并清除创建期缺键默认值；`extend` 新增或覆写的字段按其自身 `.alias()` 声明解析外部键，并在定义期重新校验外部键唯一性。
 - **单层严格边界与文档派生（`strict` / `describe`）**：`.strict()` 仅约束当前模型自身的单层未知键边界（不递归侵入嵌套子模型字段，保护子契约独立封装），与 `.describe(text)` 均完整保留原字段契约与 `withFactory` 实例构造工厂。
 - **跨字段校验路径自动翻译（`Model.check`）**：对模型调用 `.check(...)` 并通过 `context.issue({ path: ["fieldName"], ... })` 指定声明字段路径时，解码阶段自动将首段翻译为该字段的外部 DTO 键名，编码阶段保持模型业务键名。
-- **按标签分发的多态联合（`Model.union`）**：要求各分支模型均声明同一必填字面量判别键（由 `oneOf` 或 `literal` 定义，且映射至一致的外部键名）。解码按外部判别键 $O(1)$ 查表分发；编码通过自有属性或原型链 getter 读取业务判别键并分发到对应分支。
+- **按标签分发的多态联合（`Model.union`）**：要求各分支模型均声明同一必填字面量判别键（由 `literal` 定义，且映射至一致的外部键名；经 `.refine` / `.check` / `.normalize` 包裹后不再视为静态判别键）。解码按外部判别键 $O(1)$ 查表分发；编码通过自有属性或原型链 getter 读取业务判别键并分发到对应分支。
 
 ### 工厂派生与所有权
 
@@ -148,7 +148,7 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 `isoDateTime()` 以原生 `Date` 表达毫秒精度的确定时间点：
 
 - **解码格式**：要求完整日期、`T`、时分秒与显式时区偏移（`Z` 或 `-23:59` 至 `+23:59`）；年份支持四位数字或带正负号的六位扩展年份（拒绝 `-000000`）。
-- **日历与范围校验**：先按输入字面值校验公历闰年与月日合法性，再将亚毫秒小数截断为毫秒并按偏移换算为 UTC；超出原生 `Date` 可表示范围（距 Unix 纪元超过 `±8_640_000_000_000_000` 毫秒）时报 `datetime.out_of_range`。
+- **日历与范围校验**：先按输入字面值校验公历闰年与月日合法性，再将亚毫秒小数截断为毫秒并按偏移换算为 UTC；超出原生 `Date` 可表示范围（距 Unix 纪元超过 `±8_640_000_000_000_000` 毫秒）时报 `date.out_of_range`。
 - **编码格式**：通过 `Date.prototype.toISOString` 统一输出毫秒精度的 UTC 字符串（`0000`–`9999` 年输出四位年份，其余范围输出带符号六位年份），确保任意有效 `Date`（含跨上下文实例与自定义子类）均可无损往返。
 
 ## 设计边界
@@ -160,4 +160,4 @@ Modvia 工作在 TypeScript 应用的数据边界：接入层将不可信的外�
 - **缺键补全与值错误分离**：`.default()` 仅作用于父对象缺键场景，已存在键的值违规始终显式报告错误。
 - **模型派生替代方向开关**：读写契约差异通过 `pick`、`omit`、`partial`、`extend` 派生独立模型表达，不在单字段引入读写方向开关。
 - **显式动态载荷与单层可选化**：动态扩展数据须显式声明为 `unknown()` 或 `recordOf(unknown())`，局部更新可选化保持单层明确边界。
-- **外部无侵入装配与稳定错误码**：领域 `class` 经由 `withFactory` 从外部构造，校验失败统一输出机器可读的稳定 `issue.code` 供上层映射多语言文案。
+- **外部无侵入装配与稳定错误码**：领域 `class` 经由 `withFactory` 从外部构造；校验失败统一输出遵循 `<domain>.<reason>` 三层互斥规则的稳定 `issue.code`（`IssueCode`）与冻结的最小结构化 `issue.params`，供上层映射多语言文案。

@@ -1,4 +1,5 @@
 import { isPrimitiveLiteral } from "../../shared/value.ts";
+import { assertDescription, assertSource } from "./guards.ts";
 import type { Codec, Field, FieldLike, FieldLiteral, FieldPresence } from "./types.ts";
 
 /** Field 的完整槽位状态：每次修饰都基于它派生新的不可变实例 */
@@ -140,16 +141,4 @@ export function toFallback<T>(provider: unknown): () => T {
   throw new TypeError(
     "Non-primitive default values must be provided via a factory function () => value",
   );
-}
-
-export function assertDescription(description: unknown): asserts description is string {
-  if (typeof description !== "string") {
-    throw new TypeError("Description must be a string");
-  }
-}
-
-export function assertSource(source: unknown): asserts source is string {
-  if (typeof source !== "string") {
-    throw new TypeError("Field source must be a string");
-  }
 }

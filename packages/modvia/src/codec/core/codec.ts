@@ -1,15 +1,15 @@
-import { deduplicateLiterals, isPrimitiveLiteral } from "../../shared/value.ts";
+import { deduplicateLiterals } from "../../shared/value.ts";
 import { INVALID, IssueCollector } from "./collector.ts";
 import { compact, pathMapperOf, refinedDescriptor } from "./descriptor.ts";
 import { ValidationError } from "./errors.ts";
+import { createField, isFieldInstance, isFieldLike, toFallback } from "./field.ts";
 import {
   assertDescription,
+  assertFunction,
+  assertLiterals,
   assertSource,
-  createField,
-  isFieldInstance,
-  isFieldLike,
-  toFallback,
-} from "./field.ts";
+  assertValueCodec,
+} from "./guards.ts";
 import { checkKernel, literalKernel, normalizeKernel, pipeKernel, refineKernel } from "./kernel.ts";
 import {
   descriptorOf,
@@ -84,9 +84,7 @@ export class CodecImpl {
   }
 
   check(rule: (value: unknown, context: CodecContext) => void): CodecImpl {
-    if (typeof rule !== "function") {
-      throw new TypeError("check requires a validation function");
-    }
+    assertFunction(rule, "check requires a validation function");
     return createCodec(
       checkKernel(kernelOf(this), rule, () => pathMapperOf(this)),
       refinedDescriptor(this as never, { kind: "check" }),
@@ -94,9 +92,7 @@ export class CodecImpl {
   }
 
   refine(predicate: (value: unknown) => boolean, code: string, message: string): CodecImpl {
-    if (typeof predicate !== "function") {
-      throw new TypeError("refine requires a predicate function");
-    }
+    assertFunction(predicate, "refine requires a predicate function");
     if (typeof code !== "string" || code.length === 0) {
       throw new TypeError("refine requires a non-empty error code");
     }
@@ -110,9 +106,7 @@ export class CodecImpl {
   }
 
   normalize(fn: (value: unknown) => unknown): CodecImpl {
-    if (typeof fn !== "function") {
-      throw new TypeError("normalize requires a transformation function");
-    }
+    assertFunction(fn, "normalize requires a transformation function");
     return createCodec(
       normalizeKernel(kernelOf(this), fn),
       refinedDescriptor(this as never, { kind: "normalize" }),
@@ -310,34 +304,6 @@ export function isField(
 
 function normalizePresence(presence: FieldPresence): FieldPresence {
   return presence === "optional" || presence === "defaulted" ? presence : "required";
-}
-
-/** 值级容器与组合子只接受值级 Codec，拒绝携带键绑定元数据的 Field */
-export function assertValueCodec(
-  codec: unknown,
-  caller: string,
-): asserts codec is CodecLike<unknown, unknown> {
-  if (isFieldLike(codec)) {
-    throw new TypeError(
-      `${caller} accepts a value Codec, not a Field with .alias() or .optional(); apply field modifiers on the outer container or pass field.codec`,
-    );
-  }
-  if (
-    typeof codec !== "object" ||
-    codec === null ||
-    typeof (codec as Partial<CodecLike<unknown, unknown>>).decode !== "function" ||
-    typeof (codec as Partial<CodecLike<unknown, unknown>>).encode !== "function"
-  ) {
-    throw new TypeError(`${caller} requires a valid Codec`);
-  }
-}
-
-function assertLiterals(values: readonly unknown[]): asserts values is readonly FieldLiteral[] {
-  if (values.length === 0 || !values.every(isPrimitiveLiteral)) {
-    throw new TypeError(
-      "or requires at least one string, number, boolean, null, or undefined literal",
-    );
-  }
 }
 
 /** 追加字面量哨兵：相邻 .or 按集合并集扁平合并，并保留外层已声明的说明 */

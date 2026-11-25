@@ -5,8 +5,8 @@ import {
   boolean,
   int,
   isoDateTime,
+  literal,
   number,
-  oneOf,
   string,
   unknown,
   ValidationError,
@@ -87,7 +87,7 @@ describe("primitive codecs", () => {
     expect(() => string().pattern("^a$")).toThrow(TypeError);
   });
 
-  test("number、int、boolean 与 oneOf 支持闭区间、开区间与正负号链式派生，并在定义期拦截空区间", () => {
+  test("number、int、boolean 与 literal 支持闭区间、开区间与正负号链式派生，并在定义期拦截空区间", () => {
     const percentage = number().min(0).max(100);
     expect(percentage.decode(0)).toBe(0);
     expect(percentage.encode(100)).toBe(100);
@@ -133,12 +133,12 @@ describe("primitive codecs", () => {
       issues: [{ code: "type.boolean" }],
     });
 
-    expect(() => oneOf()).toThrow(RangeError);
-    const role = oneOf("admin", "member");
+    expect(() => Reflect.apply(literal, undefined, [])).toThrow(RangeError);
+    const role = literal("admin", "member");
     expect(role.decode("admin")).toBe("admin");
     expect(role.safeParse("guest")).toMatchObject({
       ok: false,
-      issues: [{ code: "string.one_of" }],
+      issues: [{ code: "literal.no_match" }],
     });
 
     const port = int().min(1).max(65535);
@@ -146,16 +146,16 @@ describe("primitive codecs", () => {
     expect(port.encode(443)).toBe(443);
     expect(port.safeDecode(0)).toMatchObject({
       ok: false,
-      issues: [{ code: "number.min" }],
+      issues: [{ code: "integer.min" }],
     });
     expect(port.safeEncode(70000)).toMatchObject({
       ok: false,
-      issues: [{ code: "number.max" }],
+      issues: [{ code: "integer.max" }],
     });
     expect(int().positive().decode(1)).toBe(1);
     expect(int().positive().safeDecode(0)).toMatchObject({
       ok: false,
-      issues: [{ code: "number.gt" }],
+      issues: [{ code: "integer.gt" }],
     });
     expect(int().negative().decode(-1)).toBe(-1);
     expect(int().nonNegative().decode(0)).toBe(0);
@@ -189,12 +189,15 @@ describe("primitive codecs", () => {
     for (const Port of [PortA, PortB]) {
       expect(Port.decode("8080")).toBe(8080);
       expect(Port.encode(8080)).toBe("8080");
-      expect(Port.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "number.min" }] });
-      expect(Port.safeEncode(70000)).toMatchObject({ ok: false, issues: [{ code: "number.max" }] });
+      expect(Port.safeDecode("0")).toMatchObject({ ok: false, issues: [{ code: "integer.min" }] });
+      expect(Port.safeEncode(70000)).toMatchObject({
+        ok: false,
+        issues: [{ code: "integer.max" }],
+      });
       for (const invalid of ["", "  ", "8080px", "1.5", "0x10", "9007199254740993"]) {
         expect(Port.safeDecode(invalid)).toMatchObject({
           ok: false,
-          issues: [{ code: "format.int_string" }],
+          issues: [{ code: "format.integer_string" }],
         });
       }
     }
@@ -275,7 +278,7 @@ describe("primitive codecs", () => {
     for (const input of ["-271821-04-19T00:00:59.999-23:59", "+275760-09-13T23:59:00.001+23:59"]) {
       expect(Event.safeDecode({ starts_at: input })).toMatchObject({
         ok: false,
-        issues: [{ path: ["starts_at"], code: "datetime.out_of_range" }],
+        issues: [{ path: ["starts_at"], code: "date.out_of_range" }],
       });
     }
   });
@@ -294,20 +297,20 @@ describe("primitive codecs", () => {
     }
     expect(instant.safeEncode(new Date(Number.NaN))).toMatchObject({
       ok: false,
-      issues: [{ code: "type.datetime" }],
+      issues: [{ code: "type.date" }],
     });
     expect(instant.safeDump("not-a-date")).toMatchObject({
       ok: false,
-      issues: [{ code: "type.datetime" }],
+      issues: [{ code: "type.date" }],
     });
     for (const fakeDate of [Object.create(Date.prototype) as Date, new Proxy(new Date(0), {})]) {
       expect(instant.safeDump(fakeDate)).toMatchObject({
         ok: false,
-        issues: [{ code: "type.datetime" }],
+        issues: [{ code: "type.date" }],
       });
       expect(instant.safeEncode(fakeDate)).toMatchObject({
         ok: false,
-        issues: [{ code: "type.datetime" }],
+        issues: [{ code: "type.date" }],
       });
       expect(() => instant.dump(fakeDate)).toThrow(ValidationError);
     }
@@ -333,7 +336,7 @@ describe("primitive codecs", () => {
     ]) {
       expect(instant.safeDecode(input)).toMatchObject({
         ok: false,
-        issues: [{ code: "datetime.invalid" }],
+        issues: [{ code: "format.iso_datetime" }],
       });
     }
   });

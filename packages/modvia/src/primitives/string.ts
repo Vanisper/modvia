@@ -1,5 +1,6 @@
 import { defineCodec } from "../codec/core/define.ts";
 import { compact } from "../codec/core/descriptor.ts";
+import { builtinIssues, failIssue } from "../codec/core/issues.ts";
 import type { StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
 import {
   assertNonNegativeSafeInt,
@@ -35,18 +36,18 @@ interface StringState extends LengthBounds {
 /** 两端对称：先按状态规范化（trim），再守卫长度与正则 */
 function convertString(input: unknown, context: StatefulCodecContext<StringState>): string {
   if (typeof input !== "string") {
-    return context.fail("type.string", "Expected a string");
+    return failIssue(context, builtinIssues.typeString());
   }
   const { trim, minLength, maxLength, pattern } = context.state;
   const value = trim ? input.trim() : input;
   if (minLength !== undefined && value.length < minLength) {
-    return context.fail("string.min_length", `Expected at least ${minLength} characters`);
+    return failIssue(context, builtinIssues.stringMinLength(minLength));
   }
   if (maxLength !== undefined && value.length > maxLength) {
-    return context.fail("string.max_length", `Expected at most ${maxLength} characters`);
+    return failIssue(context, builtinIssues.stringMaxLength(maxLength));
   }
   if (pattern !== undefined && !pattern.test(value)) {
-    return context.fail("string.pattern", `String does not match pattern ${pattern}`);
+    return failIssue(context, builtinIssues.stringPattern(pattern.source));
   }
   return value;
 }

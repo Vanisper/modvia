@@ -1,4 +1,8 @@
-import { validateDiscreteBigIntBounds } from "../../scalars/bounds/ordered.ts";
+import { builtinIssues } from "../../codec/core/issues.ts";
+import {
+  validateDiscreteBigIntBounds,
+  type OrderedViolation,
+} from "../../scalars/bounds/ordered.ts";
 import {
   assertBigIntValue,
   formatBigIntValue,
@@ -10,23 +14,25 @@ import { createOrderedNumericCodec, type OrderedNumericCodec } from "./shared.ts
 /** 大整数双向编解码器，默认编码为 bigint，经 .fromString() 切换后编码为 string */
 export type BigIntCodec<Encoded = bigint> = OrderedNumericCodec<bigint, Encoded>;
 
+const boundIssues = {
+  min: builtinIssues.bigintMin,
+  max: builtinIssues.bigintMax,
+  gt: builtinIssues.bigintGt,
+  lt: builtinIssues.bigintLt,
+} as const;
+
 const defaultBigIntCodec: BigIntCodec = createOrderedNumericCodec<bigint>({
   kind: "bigint",
   zero: 0n,
-  noun: "a bigint",
-  constraintDomain: "bigint",
-  typeCode: "type.bigint",
-  typeMessage: "Expected a bigint",
   isNative: isBigIntValue,
   assertBound: assertBigIntValue,
   validateBounds: validateDiscreteBigIntBounds,
-  text: {
-    format: "bigint-string",
-    issueCode: "format.bigint_string",
-    issueMessage: "Expected a base-10 bigint string",
-    encodedSchema: { type: "string", pattern: "^[+-]?\\d+$" },
-    parse: parseBigIntString,
-    stringify: formatBigIntValue,
+  parseText: parseBigIntString,
+  formatText: formatBigIntValue,
+  issues: {
+    type: builtinIssues.typeBigint,
+    format: builtinIssues.formatBigintString,
+    bound: (violation: OrderedViolation, limit: bigint) => boundIssues[violation](limit),
   },
 });
 

@@ -56,7 +56,7 @@ describe("field binding", () => {
     expect(CountModel.safeDecode({}).ok).toBe(false);
     expect(CountModel.safeParse({})).toMatchObject({
       ok: false,
-      issues: [{ path: ["new_key"], code: "field.required" }],
+      issues: [{ path: ["new_key"], code: "object.missing_key" }],
     });
   });
 
@@ -68,7 +68,7 @@ describe("field binding", () => {
 
     expect(required.safeParse({})).toMatchObject({
       ok: false,
-      issues: [{ path: ["sku"], code: "field.required" }],
+      issues: [{ path: ["sku"], code: "object.missing_key" }],
     });
     // @ts-expect-error 缺少必填键时编码在编译期报错，运行时亦失败
     expect(() => required.encode({})).toThrow();
@@ -126,7 +126,7 @@ describe("field binding", () => {
     expect(model.encode({ code: "A", title: "B" })).toStrictEqual({ external: "A", title: "B" });
     expect(model.safeParse({ ignored: "B" })).toMatchObject({
       ok: false,
-      issues: [{ path: ["title"], code: "field.required" }],
+      issues: [{ path: ["title"], code: "object.missing_key" }],
     });
   });
 
@@ -173,11 +173,11 @@ describe("field binding", () => {
       });
       expect(model.safeParse({ event_dates: [null, false] })).toMatchObject({
         ok: false,
-        issues: [{ path: ["event_dates", 1], code: "type.datetime" }],
+        issues: [{ path: ["event_dates", 1], code: "type.string" }],
       });
       expect(model.safeEncode({ dates: [new Date(Number.NaN)] })).toMatchObject({
         ok: false,
-        issues: [{ path: ["dates", 0], code: "type.datetime" }],
+        issues: [{ path: ["dates", 0], code: "type.date" }],
       });
     }
 

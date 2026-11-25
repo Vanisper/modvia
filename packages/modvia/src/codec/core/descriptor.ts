@@ -71,7 +71,6 @@ export function staticLiterals(codec: object): readonly FieldLiteral[] | undefin
   const descriptor = descriptorOf(codec);
   switch (descriptor.kind) {
     case "literal":
-    case "enum":
       return descriptor.values;
     case "or": {
       const inner = staticLiterals(descriptor.base);

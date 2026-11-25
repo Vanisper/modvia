@@ -1,4 +1,6 @@
 import { defineCodec } from "../../codec/core/define.ts";
+import { compact } from "../../codec/core/descriptor.ts";
+import { builtinIssues, failIssue } from "../../codec/core/issues.ts";
 import type { StatefulCodecContext, WithCodecTrait } from "../../codec/core/types.ts";
 
 /** URL 编解码器自有链式方法特征 */
@@ -13,7 +15,8 @@ export interface UrlTrait {
 export type UrlCodec = WithCodecTrait<string, string, UrlTrait>;
 
 interface UrlState {
-  readonly allowedProtocols?: ReadonlySet<string>;
+  readonly allowedProtocols?: readonly string[];
+  readonly allowedSet?: ReadonlySet<string>;
 }
 
 interface GlobalUrlConstructor {
@@ -22,37 +25,40 @@ interface GlobalUrlConstructor {
 
 const authorityProtocols = new Set(["http:", "https:", "ws:", "wss:", "ftp:"]);
 
-function normalizeProtocols(rawList: readonly string[]): ReadonlySet<string> {
+function normalizeProtocols(rawList: readonly string[]): {
+  readonly allowedProtocols: readonly string[];
+  readonly allowedSet: ReadonlySet<string>;
+} {
   if (!Array.isArray(rawList) || rawList.length === 0) {
     throw new RangeError("protocols requires at least one protocol name");
   }
-  return new Set(
-    rawList.map((entry) => {
-      if (typeof entry !== "string" || entry.length === 0) {
-        throw new TypeError("Each protocol must be a non-empty string");
-      }
-      const lower = entry.toLowerCase();
-      return lower.endsWith(":") ? lower : `${lower}:`;
-    }),
-  );
+  const normalized = rawList.map((entry) => {
+    if (typeof entry !== "string" || entry.length === 0) {
+      throw new TypeError("Each protocol must be a non-empty string");
+    }
+    const lower = entry.toLowerCase();
+    return lower.endsWith(":") ? lower : `${lower}:`;
+  });
+  const allowedSet = new Set(normalized);
+  return { allowedProtocols: Object.freeze([...allowedSet]), allowedSet };
 }
 
 function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): string {
   if (typeof input !== "string") {
-    return ctx.fail("type.string", "Expected a string");
+    return failIssue(ctx, builtinIssues.typeString());
   }
   const UrlCtor = (globalThis as { readonly URL?: GlobalUrlConstructor }).URL;
   if (!UrlCtor) {
     throw new Error("Global URL constructor is not available in this runtime");
   }
   if (input.length === 0 || /\s/.test(input)) {
-    return ctx.fail("format.url", "Expected a valid URL");
+    return failIssue(ctx, builtinIssues.formatUrl());
   }
   let parsed: { readonly protocol: string; readonly hostname: string };
   try {
     parsed = new UrlCtor(input);
   } catch {
-    return ctx.fail("format.url", "Expected a valid URL");
+    return failIssue(ctx, builtinIssues.formatUrl());
   }
   const protocol = parsed.protocol.toLowerCase();
   const afterProtocol = input.slice(parsed.protocol.length);
@@ -60,33 +66,27 @@ function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): strin
     authorityProtocols.has(protocol) &&
     (!afterProtocol.startsWith("//") || afterProtocol[2] === "/" || parsed.hostname.length === 0)
   ) {
-    return ctx.fail("format.url", "Expected a valid URL");
+    return failIssue(ctx, builtinIssues.formatUrl());
   }
-  if (ctx.state.allowedProtocols !== undefined && !ctx.state.allowedProtocols.has(protocol)) {
-    return ctx.fail("format.url_protocol", `URL protocol "${parsed.protocol}" is not allowed`);
+  if (ctx.state.allowedSet !== undefined && !ctx.state.allowedSet.has(protocol)) {
+    return failIssue(ctx, builtinIssues.urlProtocol(parsed.protocol, ctx.state.allowedProtocols!));
   }
   return input;
 }
-
-const uriSchema = Object.freeze({ type: "string", format: "uri" });
 
 const defaultUrlCodec: UrlCodec = defineCodec({
   state: {} as UrlState,
   decode: validateUrl,
   encode: validateUrl,
-  descriptor: {
-    kind: "custom",
-    format: "uri",
-    encodedSchema: uriSchema,
-    decodedSchema: uriSchema,
-  },
+  descriptor: (state) =>
+    compact({
+      kind: "string" as const,
+      format: "uri" as const,
+      protocols: state.allowedProtocols,
+    }),
   methods: {
-    protocols: (...allowed: readonly [string, ...string[]]) => ({
-      allowedProtocols: normalizeProtocols(allowed),
-    }),
-    https: () => ({
-      allowedProtocols: normalizeProtocols(["https"]),
-    }),
+    protocols: (...allowed: readonly [string, ...string[]]) => normalizeProtocols(allowed),
+    https: () => normalizeProtocols(["https"]),
   },
 });
 

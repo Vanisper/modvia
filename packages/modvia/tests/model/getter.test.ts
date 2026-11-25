@@ -4,7 +4,7 @@ import { Model, number } from "../../src/index.ts";
 
 const Quantity = Model.define({ fields: { count: number().alias("quantity") } });
 const missingCount = expect.objectContaining({
-  issues: [expect.objectContaining({ path: ["count"], code: "field.required" })],
+  issues: [expect.objectContaining({ path: ["count"], code: "object.missing_key" })],
 });
 
 describe("声明字段的 getter", () => {
@@ -62,7 +62,7 @@ describe("声明字段的 getter", () => {
     const Counter = Model.define({ fields: { [key]: number() } });
     const input = {} as { [key]: number };
     const missing = expect.objectContaining({
-      issues: [expect.objectContaining({ path: [key], code: "field.required" })],
+      issues: [expect.objectContaining({ path: [key], code: "object.missing_key" })],
     });
 
     Object.defineProperty(Object.prototype, key, { configurable: true, get: () => 4 });

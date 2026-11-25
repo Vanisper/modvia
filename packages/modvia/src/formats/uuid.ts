@@ -1,29 +1,23 @@
 import { defineCodec } from "../codec/core/define.ts";
+import { builtinIssues, failIssue } from "../codec/core/issues.ts";
 import type { Codec, CodecContext } from "../codec/core/types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validateUuid(input: unknown, context: CodecContext): string {
   if (typeof input !== "string") {
-    return context.fail("type.string", "Expected a string");
+    return failIssue(context, builtinIssues.typeString());
   }
   if (!uuidPattern.test(input)) {
-    return context.fail("format.uuid", "Expected a valid UUID");
+    return failIssue(context, builtinIssues.formatUuid());
   }
   return input.toLowerCase();
 }
 
-const uuidSchema = Object.freeze({ type: "string", format: "uuid" });
-
 const defaultUuidCodec: Codec<string, string> = defineCodec<string, string>({
   decode: validateUuid,
   encode: validateUuid,
-  descriptor: {
-    kind: "custom",
-    format: "uuid",
-    encodedSchema: uuidSchema,
-    decodedSchema: uuidSchema,
-  },
+  descriptor: { kind: "string", format: "uuid" },
 });
 
 /**

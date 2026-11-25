@@ -1,4 +1,4 @@
-import { assertValueCodec } from "../../codec/core/codec.ts";
+import { assertValueCodec } from "../../codec/core/guards.ts";
 import type { Codec, CodecTrait, ValueCodecInput, WithCodecTrait } from "../../codec/core/types.ts";
 import { jsonString } from "./json-string.ts";
 

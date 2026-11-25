@@ -38,7 +38,7 @@ describe("modvia/formats", () => {
       ok: false,
       issues: [{ code: "type.string" }],
     });
-    expect(Codec.inspect(Uuid)).toMatchObject({ kind: "custom", format: "uuid" });
+    expect(Codec.inspect(Uuid)).toStrictEqual({ kind: "string", format: "uuid" });
 
     const Email = email().trim().lowercase();
     expect(Email.decode("  User.Name+tag@Example.COM ")).toBe("user.name+tag@example.com");
@@ -66,11 +66,11 @@ describe("modvia/formats", () => {
     expect(HttpsOnly.decode("https://modvia.dev/docs?v=1")).toBe("https://modvia.dev/docs?v=1");
     expect(HttpsOnly.safeDecode("http://modvia.dev")).toMatchObject({
       ok: false,
-      issues: [{ code: "format.url_protocol" }],
+      issues: [{ code: "url.protocol" }],
     });
     expect(HttpsOnly.safeDecode("javascript:alert(1)")).toMatchObject({
       ok: false,
-      issues: [{ code: "format.url_protocol" }],
+      issues: [{ code: "url.protocol" }],
     });
     for (const badUrl of [
       "https://example.com/with space",
@@ -148,11 +148,11 @@ describe("modvia/formats", () => {
     });
     expect(RawJson.safeDump(undefined)).toMatchObject({
       ok: false,
-      issues: [{ code: "format.json" }],
+      issues: [{ code: "json.unserializable" }],
     });
     expect(RawJson.safeDump(10n)).toMatchObject({
       ok: false,
-      issues: [{ code: "format.json" }],
+      issues: [{ code: "json.unserializable" }],
     });
 
     const EventPayload = Model.define({

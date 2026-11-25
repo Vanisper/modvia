@@ -1,11 +1,16 @@
 import { compact } from "../../codec/core/descriptor.ts";
+import { builtinIssues, failIssue, type BuiltinIssue } from "../../codec/core/issues.ts";
 import { createFamily } from "../../codec/core/trait.ts";
 import type {
   CodecDescriptor,
   StatefulCodecContext,
   WithCodecTrait,
 } from "../../codec/core/types.ts";
-import { checkOrderedBounds, type OrderedBounds } from "../../scalars/bounds/ordered.ts";
+import {
+  checkOrderedBounds,
+  type OrderedBounds,
+  type OrderedViolation,
+} from "../../scalars/bounds/ordered.ts";
 
 /** 有序数值编解码器通用的区间与正负号链式方法特征 */
 export interface OrderedNumericTrait<N extends number | bigint> {
@@ -38,64 +43,46 @@ export type OrderedNumericCodec<N extends number | bigint, Encoded = N> = [Encod
   ? WithCodecTrait<N, N, OrderedNumericTrait<N>, OrderedNumericRoot<N>>
   : WithCodecTrait<N, Encoded, OrderedNumericTrait<N>>;
 
-/** 有序数值领域：原生类型守卫、区间代数与十进制文本介质规则 */
+/** 有序数值领域：原生类型守卫、区间代数、十进制文本规则与对应目录问题工厂 */
 export interface OrderedNumericDomain<N extends number | bigint> {
   readonly kind: "number" | "integer" | "bigint";
   readonly zero: N;
-  readonly noun: string;
-  readonly constraintDomain: "number" | "bigint";
-  readonly typeCode: string;
-  readonly typeMessage: string;
   readonly isNative: (value: unknown) => value is N;
   readonly assertBound: (value: N, label: string) => void;
   readonly validateBounds: (bounds: Readonly<OrderedBounds<N>>) => void;
-  readonly text: {
-    readonly format: string;
-    readonly issueCode: string;
-    readonly issueMessage: string;
-    readonly encodedSchema: Readonly<Record<string, unknown>>;
-    readonly parse: (input: string) => N | null;
-    readonly stringify: (value: N) => string;
+  readonly parseText: (input: string) => N | null;
+  readonly formatText: (value: N) => string;
+  readonly issues: {
+    readonly type: () => BuiltinIssue;
+    readonly format: () => BuiltinIssue;
+    readonly bound: (violation: OrderedViolation, limit: N) => BuiltinIssue;
   };
 }
-
-const violationSymbols = { min: ">=", gt: ">", max: "<=", lt: "<" } as const;
 
 /** 构造有序数值族：原生介质根实例 + 十进制文本上游（.fromString() 即把文本 Codec 接入上游槽） */
 export function createOrderedNumericCodec<N extends number | bigint>(
   domain: OrderedNumericDomain<N>,
 ): OrderedNumericCodec<N> {
-  const typeFail = (context: StatefulCodecContext<object>): never =>
-    context.fail(domain.typeCode, domain.typeMessage);
-
   const decimalText = createFamily({
     state: {},
     decode(input, context) {
-      if (typeof input !== "string") return context.fail("type.string", "Expected a string");
-      const parsed = domain.text.parse(input);
-      return parsed === null
-        ? context.fail(domain.text.issueCode, domain.text.issueMessage)
-        : parsed;
+      if (typeof input !== "string") return failIssue(context, builtinIssues.typeString());
+      const parsed = domain.parseText(input);
+      return parsed === null ? failIssue(context, domain.issues.format()) : parsed;
     },
     encode: (input, context) =>
-      domain.isNative(input) ? domain.text.stringify(input) : typeFail(context),
-    descriptor: {
-      kind: "custom",
-      format: domain.text.format,
-      encodedSchema: domain.text.encodedSchema,
-    },
+      domain.isNative(input) ? domain.formatText(input) : failIssue(context, domain.issues.type()),
+    descriptor: { kind: "numericString", numericKind: domain.kind },
   })();
 
   function convertNative(input: unknown, context: StatefulCodecContext<OrderedBounds<N>>): N {
-    if (!domain.isNative(input)) return typeFail(context);
+    if (!domain.isNative(input)) return failIssue(context, domain.issues.type());
     const bounds = context.state;
     const violation = checkOrderedBounds(input, bounds);
     if (violation === undefined) return input;
-    const bound = violation === "min" || violation === "gt" ? bounds.lower : bounds.upper;
-    return context.fail(
-      `${domain.constraintDomain}.${violation}`,
-      `Expected ${domain.noun} ${violationSymbols[violation]} ${String(bound?.value)}`,
-    );
+    const limit =
+      violation === "min" || violation === "gt" ? bounds.lower!.value : bounds.upper!.value;
+    return failIssue(context, domain.issues.bound(violation, limit));
   }
 
   return createFamily<OrderedBounds<N>>({

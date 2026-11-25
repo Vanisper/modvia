@@ -18,7 +18,7 @@ pnpm add modvia @modvia/json-schema
 
 ```ts
 import { toJsonSchema } from "@modvia/json-schema";
-import { Alias, int, isoDateTime, Model, oneOf, string } from "modvia";
+import { Alias, int, isoDateTime, literal, Model, string } from "modvia";
 import { email, uuid } from "modvia/formats";
 
 const User = Model.define({
@@ -27,7 +27,7 @@ const User = Model.define({
     userId: uuid().describe("Primary user UUID"),
     contactEmail: email().trim().lowercase(),
     username: string().minLength(3).maxLength(20),
-    role: oneOf("admin", "member").default("member"),
+    role: literal("admin", "member").default("member"),
     seatQuota: int().positive().max(100),
     createdAt: isoDateTime(),
   },

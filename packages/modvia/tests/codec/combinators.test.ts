@@ -54,7 +54,7 @@ describe("codec combinators", () => {
     });
     expect(afterEpoch.safeEncode(new Date(Number.NaN))).toMatchObject({
       ok: false,
-      issues: [{ code: "type.datetime" }],
+      issues: [{ code: "type.date" }],
     });
     expect(afterEpoch.safeDecode("1969-12-31T23:59:59Z")).toMatchObject({
       ok: false,
@@ -189,7 +189,7 @@ describe("codec combinators", () => {
     expect(TrimmedBoundedInt.encode(42)).toBe("42");
     expect(TrimmedBoundedInt.safeDecode("  0  ")).toMatchObject({
       ok: false,
-      issues: [{ code: "number.gt" }],
+      issues: [{ code: "integer.gt" }],
     });
 
     expectTypeOf(trimmedPositiveInt).toEqualTypeOf<Codec<number, string>>();
@@ -205,7 +205,7 @@ describe("codec combinators", () => {
     expect(utcStringFromDate.encode("2026-11-09T02:00:00+02:00")).toEqual(date);
     expect(utcStringFromDate.safeParse("not-a-date")).toMatchObject({
       ok: false,
-      issues: [{ code: "type.datetime" }],
+      issues: [{ code: "type.date" }],
     });
 
     expectTypeOf<InferValue<typeof utcStringFromDate>>().toEqualTypeOf<string>();
@@ -260,7 +260,7 @@ describe("codec combinators", () => {
     }
     expect(status.safeParse(500)).toMatchObject({
       ok: false,
-      issues: [{ code: "value.literal" }],
+      issues: [{ code: "literal.no_match" }],
     });
     expect(() => Reflect.apply(literal, undefined, [])).toThrow(RangeError);
     expect(() => Reflect.apply(literal, undefined, [{}])).toThrow(TypeError);
