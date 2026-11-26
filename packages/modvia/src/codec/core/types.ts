@@ -36,17 +36,17 @@ export interface CodecIssueInput {
 }
 
 export interface CodecContext {
-  /** 立即中断当前规则并记录一条校验问题 */
-  fail(this: void, code: IssueCode, message: string, params?: IssueParams): never;
-  /** 记录一条校验问题但不中断后续检查（支持指定相对子路径与结构化参数） */
-  issue(this: void, detail: CodecIssueInput): void;
-  /** 判定 context.run 的返回值是否为子 Codec 失败标记 */
+  /** 立即中断当前规则并记录一条校验问题（用于深层辅助函数或 .check 中提前退出） */
+  fail(code: IssueCode, message: string, params?: IssueParams): never;
+  /** 记录一条校验问题并返回不透明 Failed 标记（零抛错；可作为单步失败返回值，也可连续调用收集多错） */
+  issue(detail: CodecIssueInput): Failed;
+  /** 判定 context.run 或 context.issue 的返回值是否为失败标记 */
   failed(this: void, value: unknown): value is Failed;
 }
 
 declare const failedBrand: unique symbol;
 
-/** context.run 的不透明失败标记：仅能由内核产生，必须经 context.failed 收窄后才能把结果当作业务值使用 */
+/** context.run 与 context.issue 的不透明失败标记：仅能由内核产生，必须经 context.failed 收窄后才能把结果当作业务值使用 */
 export interface Failed {
   readonly [failedBrand]: true;
 }
@@ -62,7 +62,7 @@ export interface DecodeContext<
   S extends object = Record<never, never>,
 > extends StatefulCodecContext<S> {
   /** 以解码方向运行子 Codec，at 为相对路径段；失败返回 Failed 并已记录问题 */
-  run<T>(this: void, child: CodecLike<T, unknown>, input: unknown, at?: PathSegment): T | Failed;
+  run<T>(child: CodecLike<T, unknown>, input: unknown, at?: PathSegment): T | Failed;
 }
 
 /** 编码侧 handler 上下文：可在同一次运行与路径下编码子 Codec，失败时不中断 */
@@ -70,7 +70,7 @@ export interface EncodeContext<
   S extends object = Record<never, never>,
 > extends StatefulCodecContext<S> {
   /** 以编码方向运行子 Codec，at 为相对路径段；失败返回 Failed 并已记录问题 */
-  run<E>(this: void, child: CodecLike<unknown, E>, input: unknown, at?: PathSegment): E | Failed;
+  run<E>(child: CodecLike<unknown, E>, input: unknown, at?: PathSegment): E | Failed;
 }
 
 export declare const brandSymbol: unique symbol;

@@ -1,18 +1,18 @@
 import { defineCodec } from "../../codec/core/define.ts";
-import { builtinIssues, failIssue } from "../../codec/core/issues.ts";
-import type { Codec, CodecContext } from "../../codec/core/types.ts";
+import { builtinIssues } from "../../codec/core/issues.ts";
+import type { Codec, CodecContext, Failed } from "../../codec/core/types.ts";
 import { checkIsoTimeString } from "../../scalars/temporal.ts";
 
-function validateIsoTime(input: unknown, context: CodecContext): string {
+function validateIsoTime(input: unknown, context: CodecContext): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(context, builtinIssues.typeString());
+    return context.issue(builtinIssues.typeString());
   }
   const status = checkIsoTimeString(input);
   if (status === "invalid_syntax") {
-    return failIssue(context, builtinIssues.formatIsoTime());
+    return context.issue(builtinIssues.formatIsoTime("syntax"));
   }
   if (status === "invalid_clock") {
-    return failIssue(context, builtinIssues.formatIsoTime("Invalid clock time"));
+    return context.issue(builtinIssues.formatIsoTime("clock"));
   }
   return input;
 }

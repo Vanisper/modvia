@@ -65,7 +65,7 @@ export function refinedDescriptor(
 /**
  * 从描述符推导静态字面量集合（供 Model.union 判别分发）
  *
- * @description literal / enum 直接给出取值；or 为内层静态字面量与哨兵的并集；精化节点可能拒绝其中部分取值，因此不再视为静态
+ * @description literal 直接给出取值；or 为内层静态字面量与哨兵的并集；精化节点可能拒绝其中部分取值，因此不再视为静态
  */
 export function staticLiterals(codec: object): readonly FieldLiteral[] | undefined {
   const descriptor = descriptorOf(codec);

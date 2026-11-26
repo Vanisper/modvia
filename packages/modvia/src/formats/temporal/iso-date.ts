@@ -1,18 +1,18 @@
 import { defineCodec } from "../../codec/core/define.ts";
-import { builtinIssues, failIssue } from "../../codec/core/issues.ts";
-import type { Codec, CodecContext } from "../../codec/core/types.ts";
+import { builtinIssues } from "../../codec/core/issues.ts";
+import type { Codec, CodecContext, Failed } from "../../codec/core/types.ts";
 import { checkIsoDateString } from "../../scalars/temporal.ts";
 
-function validateIsoDate(input: unknown, context: CodecContext): string {
+function validateIsoDate(input: unknown, context: CodecContext): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(context, builtinIssues.typeString());
+    return context.issue(builtinIssues.typeString());
   }
   const status = checkIsoDateString(input);
   if (status === "invalid_syntax") {
-    return failIssue(context, builtinIssues.formatIsoDate());
+    return context.issue(builtinIssues.formatIsoDate("syntax"));
   }
   if (status === "invalid_calendar") {
-    return failIssue(context, builtinIssues.formatIsoDate("Invalid calendar date"));
+    return context.issue(builtinIssues.formatIsoDate("calendar"));
   }
   return input;
 }

@@ -1,8 +1,11 @@
+import { promoteToCodec } from "../../codec/core/codec.ts";
+import { defineCodec } from "../../codec/core/define.ts";
 import { compact } from "../../codec/core/descriptor.ts";
-import { builtinIssues, failIssue, type BuiltinIssue } from "../../codec/core/issues.ts";
+import { builtinIssues, type BuiltinIssue } from "../../codec/core/issues.ts";
 import { createFamily } from "../../codec/core/trait.ts";
 import type {
   CodecDescriptor,
+  Failed,
   StatefulCodecContext,
   WithCodecTrait,
 } from "../../codec/core/types.ts";
@@ -63,26 +66,30 @@ export interface OrderedNumericDomain<N extends number | bigint> {
 export function createOrderedNumericCodec<N extends number | bigint>(
   domain: OrderedNumericDomain<N>,
 ): OrderedNumericCodec<N> {
-  const decimalText = createFamily({
-    state: {},
-    decode(input, context) {
-      if (typeof input !== "string") return failIssue(context, builtinIssues.typeString());
-      const parsed = domain.parseText(input);
-      return parsed === null ? failIssue(context, domain.issues.format()) : parsed;
-    },
-    encode: (input, context) =>
-      domain.isNative(input) ? domain.formatText(input) : failIssue(context, domain.issues.type()),
-    descriptor: { kind: "numericString", numericKind: domain.kind },
-  })();
+  const decimalText = promoteToCodec(
+    defineCodec<N, string>({
+      decode(input, context) {
+        if (typeof input !== "string") return context.issue(builtinIssues.typeString());
+        const parsed = domain.parseText(input);
+        return parsed === null ? context.issue(domain.issues.format()) : parsed;
+      },
+      encode: (input, context) =>
+        domain.isNative(input) ? domain.formatText(input) : context.issue(domain.issues.type()),
+      descriptor: { kind: "numericString", numericKind: domain.kind },
+    }),
+  );
 
-  function convertNative(input: unknown, context: StatefulCodecContext<OrderedBounds<N>>): N {
-    if (!domain.isNative(input)) return failIssue(context, domain.issues.type());
+  function convertNative(
+    input: unknown,
+    context: StatefulCodecContext<OrderedBounds<N>>,
+  ): N | Failed {
+    if (!domain.isNative(input)) return context.issue(domain.issues.type());
     const bounds = context.state;
     const violation = checkOrderedBounds(input, bounds);
     if (violation === undefined) return input;
     const limit =
       violation === "min" || violation === "gt" ? bounds.lower!.value : bounds.upper!.value;
-    return failIssue(context, domain.issues.bound(violation, limit));
+    return context.issue(domain.issues.bound(violation, limit));
   }
 
   return createFamily<OrderedBounds<N>>({

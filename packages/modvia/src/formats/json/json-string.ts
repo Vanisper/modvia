@@ -1,27 +1,27 @@
 import { defineCodec } from "../../codec/core/define.ts";
-import { builtinIssues, failIssue } from "../../codec/core/issues.ts";
+import { builtinIssues } from "../../codec/core/issues.ts";
 import type { Codec } from "../../codec/core/types.ts";
 
 const defaultJsonStringCodec: Codec<unknown, string> = defineCodec<unknown, string>({
   decode(input, context) {
     if (typeof input !== "string") {
-      return failIssue(context, builtinIssues.typeString());
+      return context.issue(builtinIssues.typeString());
     }
     try {
       return JSON.parse(input) as unknown;
     } catch {
-      return failIssue(context, builtinIssues.formatJson());
+      return context.issue(builtinIssues.formatJson());
     }
   },
   encode(input, context) {
     try {
       const serialized = JSON.stringify(input);
       if (serialized === undefined) {
-        return failIssue(context, builtinIssues.jsonUnserializable());
+        return context.issue(builtinIssues.jsonUnserializable());
       }
       return serialized;
     } catch {
-      return failIssue(context, builtinIssues.jsonUnserializable());
+      return context.issue(builtinIssues.jsonUnserializable());
     }
   },
   descriptor: { kind: "json" },

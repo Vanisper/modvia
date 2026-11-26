@@ -35,142 +35,145 @@ function isAbortSignal(value: unknown): value is AbortSignal {
   );
 }
 
-export interface ContextOptions<S extends object> {
-  /** handler 所在的一侧：决定 context.run 运行子 Codec 的方向；省略时不提供 run（如 .check 回调） */
-  readonly side?: Side;
-  /** 状态化 handler 的冻结状态 */
-  readonly state?: Readonly<S>;
-  /** 解码侧 issue 首段路径翻译器（惰性求值，首次使用时解析，以支持尚未就绪的递归引用） */
-  readonly pathMapper?: () => SegmentMapper | undefined;
-}
-
-/** 回调期 context 作用域：context 只在其回调同步执行期间可用，close 之后任何调用立即抛错 */
-export interface ContextScope<Context> {
-  readonly context: Context;
-  close(): void;
-}
-
-type AnyContext = CodecContext &
-  Partial<Pick<DecodeContext, "run" | "state">> &
-  Partial<Pick<EncodeContext, "run">>;
-
-/** 打开一个回调期 context：fail 中断、issue 非中断收集、run 在同一收集器与路径下运行子 Codec */
-export function openContext<S extends object>(
-  collector: IssueCollector,
-  options: ContextOptions<S> = {},
-): ContextScope<AnyContext> {
-  let open = true;
-  let mapper: SegmentMapper | undefined;
-  let mapperResolved = false;
-  let lastChild: unknown;
-  let lastStep: Step<unknown> | undefined;
-  const { side, state, pathMapper } = options;
-
-  const assertOpen = (): void => {
-    if (!open) throw new Error(CLOSED_CONTEXT_MESSAGE);
-  };
-  const resolveMapper = (): SegmentMapper | undefined => {
-    if (!mapperResolved) {
-      mapper = pathMapper?.();
-      mapperResolved = true;
-    }
-    return mapper;
-  };
-
-  const context: AnyContext = {
-    fail(code: IssueCode, message: string, params?: IssueParams): never {
-      assertOpen();
-      const frozenParams = freezeIssueParams(params);
-      const signal: AbortSignal =
-        frozenParams === undefined
-          ? { [abortBrand]: true, code, message }
-          : { [abortBrand]: true, code, message, params: frozenParams };
-      // oxlint-disable-next-line no-throw-literal -- 内部零调用栈开销中断信号，由紧邻执行器捕获转为 Issue
-      throw signal;
-    },
-    issue(detail: CodecIssueInput): void {
-      assertOpen();
-      recordIssue(collector, detail, resolveMapper);
-    },
-    failed(value: unknown): value is Failed {
-      return value === FAILED;
-    },
-    ...(state !== undefined ? { state } : {}),
-  };
-
-  if (side !== undefined) {
-    context.run = ((child: CodecLike<unknown, unknown>, input: unknown, at?: PathSegment) => {
-      assertOpen();
-      if (child !== lastChild) {
-        if (isFieldLike(child) || typeof child !== "object" || child === null) {
-          throw new TypeError("context.run requires a value Codec, not a Field");
-        }
-        lastStep = kernelOf(child)[side];
-        lastChild = child;
-      }
-      if (at === undefined) {
-        const output = lastStep!(input, collector);
-        return output === INVALID ? FAILED : output;
-      }
-      collector.pushSegment(at);
-      try {
-        const output = lastStep!(input, collector);
-        return output === INVALID ? FAILED : output;
-      } finally {
-        collector.popSegment();
-      }
-    }) as AnyContext["run"];
-  }
-
-  return {
-    context: Object.freeze(context),
-    close() {
-      open = false;
-    },
-  };
-}
-
-function recordIssue(
-  collector: IssueCollector,
-  detail: CodecIssueInput,
-  resolveMapper: () => SegmentMapper | undefined,
-): void {
-  if (
-    typeof detail !== "object" ||
-    detail === null ||
-    typeof detail.code !== "string" ||
-    detail.code.length === 0 ||
-    typeof detail.message !== "string"
-  ) {
-    throw new TypeError("context.issue requires a non-empty code and a message string");
-  }
-  const rawPath = detail.path;
-  if (!rawPath || rawPath.length === 0) {
-    collector.add(detail.code, detail.message, detail.params);
-    return;
-  }
-  const mapper = resolveMapper();
-  const path =
-    mapper !== undefined ? [mapper(rawPath[0] as PathSegment), ...rawPath.slice(1)] : rawPath;
-  collector.addAt(path, detail.code, detail.message, detail.params);
-}
+let closeContext: (context: CheckContext) => void;
+let assertContextOpen: (context: CheckContext) => void;
+let collectorOf: (context: CheckContext) => IssueCollector;
 
 /**
- * 在回调作用域内执行用户回调，统一收敛内核契约：
- * - 回调期间记录过任何问题时丢弃其返回值并判为失败（多错收集天然成立）
+ * 回调期轻量执行上下文基类：方法位于冻结原型，生命周期与收集器完全封装在私有字段内
+ *
+ * @description 每次回调独立实例化（无跨调用复用），避免重复分配闭包与 per-call Object.freeze
+ */
+class CheckContext implements CodecContext {
+  #open = true;
+  readonly #collector: IssueCollector;
+  readonly #pathMapper: (() => SegmentMapper | undefined) | undefined;
+  #mapperResolved = false;
+  #mapper: SegmentMapper | undefined;
+
+  static {
+    closeContext = (context) => {
+      context.#open = false;
+    };
+    assertContextOpen = (context) => {
+      if (!context.#open) throw new Error(CLOSED_CONTEXT_MESSAGE);
+    };
+    collectorOf = (context) => context.#collector;
+  }
+
+  constructor(collector: IssueCollector, pathMapper?: () => SegmentMapper | undefined) {
+    this.#collector = collector;
+    this.#pathMapper = pathMapper;
+  }
+
+  fail(code: IssueCode, message: string, params?: IssueParams): never {
+    if (!this.#open) throw new Error(CLOSED_CONTEXT_MESSAGE);
+    const frozenParams = freezeIssueParams(params);
+    const signal: AbortSignal =
+      frozenParams === undefined
+        ? { [abortBrand]: true, code, message }
+        : { [abortBrand]: true, code, message, params: frozenParams };
+    // oxlint-disable-next-line no-throw-literal -- 内部零调用栈开销中断信号，由紧邻执行器捕获转为 Issue
+    throw signal;
+  }
+
+  issue(detail: CodecIssueInput): Failed {
+    if (!this.#open) throw new Error(CLOSED_CONTEXT_MESSAGE);
+    if (
+      typeof detail !== "object" ||
+      detail === null ||
+      typeof detail.code !== "string" ||
+      detail.code.length === 0 ||
+      typeof detail.message !== "string"
+    ) {
+      throw new TypeError("context.issue requires a non-empty code and a message string");
+    }
+    const rawPath = detail.path;
+    if (!rawPath || rawPath.length === 0) {
+      this.#collector.add(detail.code, detail.message, detail.params);
+      return FAILED;
+    }
+    const mapper = this.#resolveMapper();
+    const path =
+      mapper !== undefined ? [mapper(rawPath[0] as PathSegment), ...rawPath.slice(1)] : rawPath;
+    this.#collector.addAt(path, detail.code, detail.message, detail.params);
+    return FAILED;
+  }
+
+  failed(this: void, value: unknown): value is Failed {
+    return value === FAILED;
+  }
+
+  #resolveMapper(): SegmentMapper | undefined {
+    if (!this.#mapperResolved) {
+      this.#mapper = this.#pathMapper?.();
+      this.#mapperResolved = true;
+    }
+    return this.#mapper;
+  }
+}
+
+/** Codec.define handler 专用上下文：扩展只读冻结 state 与按方向运行子 Codec 的 run 方法 */
+class HandlerContext<S extends object> extends CheckContext {
+  readonly #side: Side;
+  readonly #state: Readonly<S>;
+  #lastChild: unknown;
+  #lastStep: Step<unknown> | undefined;
+
+  constructor(collector: IssueCollector, side: Side, state: Readonly<S>) {
+    super(collector);
+    this.#side = side;
+    this.#state = state;
+  }
+
+  get state(): Readonly<S> {
+    return this.#state;
+  }
+
+  run(child: CodecLike<unknown, unknown>, input: unknown, at?: PathSegment): unknown {
+    assertContextOpen(this);
+    if (child !== this.#lastChild) {
+      if (isFieldLike(child) || typeof child !== "object" || child === null) {
+        throw new TypeError("context.run requires a value Codec, not a Field");
+      }
+      this.#lastStep = kernelOf(child)[this.#side];
+      this.#lastChild = child;
+    }
+    const collector = collectorOf(this);
+    if (at === undefined) {
+      const output = this.#lastStep!(input, collector);
+      return output === INVALID ? FAILED : output;
+    }
+    collector.pushSegment(at);
+    try {
+      const output = this.#lastStep!(input, collector);
+      return output === INVALID ? FAILED : output;
+    } finally {
+      collector.popSegment();
+    }
+  }
+}
+
+Object.freeze(CheckContext.prototype);
+Object.freeze(HandlerContext.prototype);
+
+/**
+ * 在回调上下文内执行用户函数，统一收敛内核契约：
+ * - 执行期间记录过任何问题时丢弃返回值并判为失败（多错收集天然成立，零抛错返回直接走此分支）
  * - context.fail 的中断信号与嵌套 ValidationError 转为问题，其他异常原样传播
  * - 返回 Failed 标记却未记录任何问题时抛 TypeError，守住「失败 ⇒ 至少一条问题」
- * - 回调结束后关闭 context
+ * - 回调结束后立即关闭 context 私有守卫
  */
-export function runInScope<Context, Output>(
-  scope: ContextScope<Context>,
+function runWithContext<Input, Context extends CheckContext, Output>(
+  context: Context,
   collector: IssueCollector,
-  invoke: (context: Context) => Output,
+  input: Input,
+  invoke: (input: Input, context: Context) => Output,
 ): Output | Invalid {
   const mark = collector.mark();
   let output: Output;
   try {
-    output = invoke(scope.context);
+    output = invoke(input, context);
   } catch (error) {
     if (isAbortSignal(error)) {
       return collector.add(error.code, error.message, error.params);
@@ -180,7 +183,7 @@ export function runInScope<Context, Output>(
     }
     throw error;
   } finally {
-    scope.close();
+    closeContext(context);
   }
   if (collector.mark() > mark) return INVALID;
   if ((output as unknown) === FAILED) {
@@ -189,20 +192,40 @@ export function runInScope<Context, Output>(
   return output;
 }
 
-/** 由一对用户 handler 构造执行内核：每次调用打开独立 context，方向即 handler 所在一侧 */
+/** 在回调作用域内执行 .check 规则，返回是否记录了校验问题 */
+export function runCheckRule<T>(
+  collector: IssueCollector,
+  value: T,
+  rule: (value: T, context: CodecContext) => void,
+  pathMapper?: () => SegmentMapper | undefined,
+): boolean {
+  return (
+    runWithContext(new CheckContext(collector, pathMapper), collector, value, rule) === INVALID
+  );
+}
+
+/** 由一对用户 handler 构造执行内核：每次调用创建独立 HandlerContext，方向即 handler 所在一侧 */
 export function handlerKernel<T, Encoded, S extends object>(
-  decodeFn: (input: unknown, context: DecodeContext<S>) => T,
-  encodeFn: (input: unknown, context: EncodeContext<S>) => Encoded,
+  decodeFn: (input: unknown, context: DecodeContext<S>) => T | Failed,
+  encodeFn: (input: unknown, context: EncodeContext<S>) => Encoded | Failed,
   state: Readonly<S>,
 ): Kernel<T, Encoded> {
   return {
     decode: (input, collector) =>
-      runInScope(openContext(collector, { side: "decode", state }), collector, (context) =>
-        decodeFn(input, context as DecodeContext<S>),
-      ),
+      runWithContext(
+        new HandlerContext(collector, "decode", state) as unknown as DecodeContext<S> &
+          CheckContext,
+        collector,
+        input,
+        decodeFn,
+      ) as T | Invalid,
     encode: (input, collector) =>
-      runInScope(openContext(collector, { side: "encode", state }), collector, (context) =>
-        encodeFn(input, context as EncodeContext<S>),
-      ),
+      runWithContext(
+        new HandlerContext(collector, "encode", state) as unknown as EncodeContext<S> &
+          CheckContext,
+        collector,
+        input,
+        encodeFn,
+      ) as Encoded | Invalid,
   };
 }

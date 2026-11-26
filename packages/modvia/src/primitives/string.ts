@@ -1,7 +1,7 @@
 import { defineCodec } from "../codec/core/define.ts";
 import { compact } from "../codec/core/descriptor.ts";
-import { builtinIssues, failIssue } from "../codec/core/issues.ts";
-import type { StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
+import type { Failed, StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
 import {
   assertNonNegativeSafeInt,
   validateLengthBounds,
@@ -34,20 +34,23 @@ interface StringState extends LengthBounds {
 }
 
 /** 两端对称：先按状态规范化（trim），再守卫长度与正则 */
-function convertString(input: unknown, context: StatefulCodecContext<StringState>): string {
+function convertString(
+  input: unknown,
+  context: StatefulCodecContext<StringState>,
+): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(context, builtinIssues.typeString());
+    return context.issue(builtinIssues.typeString());
   }
   const { trim, minLength, maxLength, pattern } = context.state;
   const value = trim ? input.trim() : input;
   if (minLength !== undefined && value.length < minLength) {
-    return failIssue(context, builtinIssues.stringMinLength(minLength));
+    return context.issue(builtinIssues.stringMinLength(minLength));
   }
   if (maxLength !== undefined && value.length > maxLength) {
-    return failIssue(context, builtinIssues.stringMaxLength(maxLength));
+    return context.issue(builtinIssues.stringMaxLength(maxLength));
   }
   if (pattern !== undefined && !pattern.test(value)) {
-    return failIssue(context, builtinIssues.stringPattern(pattern.source));
+    return context.issue(builtinIssues.stringPattern(pattern.source));
   }
   return value;
 }

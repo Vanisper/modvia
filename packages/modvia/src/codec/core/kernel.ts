@@ -1,5 +1,5 @@
 import { INVALID } from "./collector.ts";
-import { openContext, runInScope, type SegmentMapper } from "./context.ts";
+import { runCheckRule, type SegmentMapper } from "./context.ts";
 import type { Kernel } from "./internals.ts";
 import { builtinIssues, reportIssue } from "./issues.ts";
 import type { CodecContext, FieldLiteral, IssueCode } from "./types.ts";
@@ -59,19 +59,12 @@ export function checkKernel<T, Encoded>(
     decode(input, collector) {
       const value = base.decode(input, collector);
       if (value === INVALID) return INVALID;
-      const scope = openContext(collector, { pathMapper: decodePathMapper });
-      return runInScope(scope, collector, (context) => {
-        rule(value, context);
-        return value;
-      });
+      return runCheckRule(collector, value, rule, decodePathMapper) ? INVALID : value;
     },
     encode(input, collector) {
       const encoded = base.encode(input, collector);
       if (encoded === INVALID) return INVALID;
-      return runInScope(openContext(collector), collector, (context) => {
-        rule(input as T, context);
-        return encoded;
-      });
+      return runCheckRule(collector, input as T, rule) ? INVALID : encoded;
     },
   };
 }

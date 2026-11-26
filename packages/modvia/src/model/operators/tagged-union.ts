@@ -96,7 +96,7 @@ export function taggedUnion<
     },
     encode(input, collector) {
       if (!isObject(input)) {
-        return reportIssue(collector, builtinIssues.typeObject("Expected a model object"));
+        return reportIssue(collector, builtinIssues.typeObject("model"));
       }
       const tag = readModelField(input, discriminator);
       if (tag === missingField) {

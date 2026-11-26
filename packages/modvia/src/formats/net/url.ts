@@ -1,7 +1,7 @@
 import { defineCodec } from "../../codec/core/define.ts";
 import { compact } from "../../codec/core/descriptor.ts";
-import { builtinIssues, failIssue } from "../../codec/core/issues.ts";
-import type { StatefulCodecContext, WithCodecTrait } from "../../codec/core/types.ts";
+import { builtinIssues } from "../../codec/core/issues.ts";
+import type { Failed, StatefulCodecContext, WithCodecTrait } from "../../codec/core/types.ts";
 
 /** URL 编解码器自有链式方法特征 */
 export interface UrlTrait {
@@ -43,22 +43,22 @@ function normalizeProtocols(rawList: readonly string[]): {
   return { allowedProtocols: Object.freeze([...allowedSet]), allowedSet };
 }
 
-function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): string {
+function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(ctx, builtinIssues.typeString());
+    return ctx.issue(builtinIssues.typeString());
   }
   const UrlCtor = (globalThis as { readonly URL?: GlobalUrlConstructor }).URL;
   if (!UrlCtor) {
     throw new Error("Global URL constructor is not available in this runtime");
   }
   if (input.length === 0 || /\s/.test(input)) {
-    return failIssue(ctx, builtinIssues.formatUrl());
+    return ctx.issue(builtinIssues.formatUrl());
   }
   let parsed: { readonly protocol: string; readonly hostname: string };
   try {
     parsed = new UrlCtor(input);
   } catch {
-    return failIssue(ctx, builtinIssues.formatUrl());
+    return ctx.issue(builtinIssues.formatUrl());
   }
   const protocol = parsed.protocol.toLowerCase();
   const afterProtocol = input.slice(parsed.protocol.length);
@@ -66,10 +66,10 @@ function validateUrl(input: unknown, ctx: StatefulCodecContext<UrlState>): strin
     authorityProtocols.has(protocol) &&
     (!afterProtocol.startsWith("//") || afterProtocol[2] === "/" || parsed.hostname.length === 0)
   ) {
-    return failIssue(ctx, builtinIssues.formatUrl());
+    return ctx.issue(builtinIssues.formatUrl());
   }
   if (ctx.state.allowedSet !== undefined && !ctx.state.allowedSet.has(protocol)) {
-    return failIssue(ctx, builtinIssues.urlProtocol(parsed.protocol, ctx.state.allowedProtocols!));
+    return ctx.issue(builtinIssues.urlProtocol(parsed.protocol, ctx.state.allowedProtocols!));
   }
   return input;
 }

@@ -1,8 +1,8 @@
 import { formatLiteral } from "../../shared/value.ts";
 import type { Invalid, IssueCollector } from "./collector.ts";
-import type { CodecContext, FieldLiteral, IssueParams, PathSegment } from "./types.ts";
+import type { CodecContext, Failed, FieldLiteral, IssueParams, PathSegment } from "./types.ts";
 
-/** 内置问题构造结果：携带稳定错误码、默认英文消息与可选结构化参数 */
+/** 内置问题构造结果：携带稳定错误码、默认英文消息与可选结构化参数，可直接传入 context.issue */
 export interface BuiltinIssue<Code extends string = string> {
   readonly code: Code;
   readonly message: string;
@@ -17,6 +17,59 @@ function makeIssue<const Code extends string>(
   return params === undefined ? { code, message } : { code, message, params };
 }
 
+function constantIssue<const Code extends string>(code: Code, message: string): BuiltinIssue<Code> {
+  return Object.freeze({ code, message });
+}
+
+// 无参数高频问题预分配冻结常量，消除校验失败时的重复对象分配
+const TYPE_STRING = constantIssue("type.string", "Expected a string");
+const TYPE_NUMBER = constantIssue("type.number", "Expected a finite number");
+const TYPE_INTEGER = constantIssue("type.integer", "Expected a safe integer");
+const TYPE_BIGINT = constantIssue("type.bigint", "Expected a bigint");
+const TYPE_BOOLEAN = constantIssue("type.boolean", "Expected a boolean");
+const TYPE_DATE = constantIssue("type.date", "Expected a valid Date");
+const TYPE_ARRAY = constantIssue("type.array", "Expected an array");
+const TYPE_PLAIN_OBJECT = constantIssue("type.object", "Expected a plain object");
+const TYPE_MODEL_OBJECT = constantIssue("type.object", "Expected a model object");
+const FORMAT_INTEGER_STRING = constantIssue(
+  "format.integer_string",
+  "Expected a base-10 integer string",
+);
+const FORMAT_NUMBER_STRING = constantIssue(
+  "format.number_string",
+  "Expected a finite numeric string",
+);
+const FORMAT_BIGINT_STRING = constantIssue(
+  "format.bigint_string",
+  "Expected a base-10 bigint string",
+);
+const FORMAT_ISO_DATETIME = constantIssue("format.iso_datetime", "Invalid ISO date-time");
+const FORMAT_ISO_DATE_SYNTAX = constantIssue(
+  "format.iso_date",
+  "Expected an ISO date string (YYYY-MM-DD)",
+);
+const FORMAT_ISO_DATE_CALENDAR = constantIssue("format.iso_date", "Invalid calendar date");
+const FORMAT_ISO_TIME_SYNTAX = constantIssue(
+  "format.iso_time",
+  "Expected an ISO time string (HH:mm:ss)",
+);
+const FORMAT_ISO_TIME_CLOCK = constantIssue("format.iso_time", "Invalid clock time");
+const FORMAT_UUID = constantIssue("format.uuid", "Expected a valid UUID");
+const FORMAT_EMAIL = constantIssue("format.email", "Expected a valid email address");
+const FORMAT_URL = constantIssue("format.url", "Expected a valid URL");
+const FORMAT_IPV4 = constantIssue("format.ipv4", "Expected a valid IPv4 address");
+const FORMAT_IPV6 = constantIssue("format.ipv6", "Expected a valid IPv6 address");
+const FORMAT_JSON = constantIssue("format.json", "Invalid JSON text");
+const DATE_OUT_OF_RANGE = constantIssue(
+  "date.out_of_range",
+  "Date-time exceeds the native Date range",
+);
+const UNION_NO_MATCH = constantIssue("union.no_match", "Input did not match any union branch");
+const JSON_UNSERIALIZABLE = constantIssue(
+  "json.unserializable",
+  "Value cannot be serialized to JSON",
+);
+
 /**
  * 全库内置错误码与默认消息的唯一信源
  *
@@ -27,33 +80,33 @@ function makeIssue<const Code extends string>(
  */
 export const builtinIssues = {
   // ── 类型层（type.<kind>）───────────────────────────────────────────────
-  typeString: (message = "Expected a string") => makeIssue("type.string", message),
-  typeNumber: () => makeIssue("type.number", "Expected a finite number"),
-  typeInteger: () => makeIssue("type.integer", "Expected a safe integer"),
-  typeBigint: () => makeIssue("type.bigint", "Expected a bigint"),
-  typeBoolean: () => makeIssue("type.boolean", "Expected a boolean"),
-  typeDate: () => makeIssue("type.date", "Expected a valid Date"),
-  typeArray: () => makeIssue("type.array", "Expected an array"),
-  typeObject: (message = "Expected a plain object") => makeIssue("type.object", message),
+  typeString: () => TYPE_STRING,
+  typeNumber: () => TYPE_NUMBER,
+  typeInteger: () => TYPE_INTEGER,
+  typeBigint: () => TYPE_BIGINT,
+  typeBoolean: () => TYPE_BOOLEAN,
+  typeDate: () => TYPE_DATE,
+  typeArray: () => TYPE_ARRAY,
+  typeObject: (kind: "plain" | "model" = "plain") =>
+    kind === "model" ? TYPE_MODEL_OBJECT : TYPE_PLAIN_OBJECT,
 
   // ── 文本格式层（format.<wire_format>）──────────────────────────────────
-  formatIntegerString: () =>
-    makeIssue("format.integer_string", "Expected a base-10 integer string"),
-  formatNumberString: () => makeIssue("format.number_string", "Expected a finite numeric string"),
-  formatBigintString: () => makeIssue("format.bigint_string", "Expected a base-10 bigint string"),
+  formatIntegerString: () => FORMAT_INTEGER_STRING,
+  formatNumberString: () => FORMAT_NUMBER_STRING,
+  formatBigintString: () => FORMAT_BIGINT_STRING,
   formatBooleanString: (truthy: readonly string[], falsy: readonly string[]) =>
     makeIssue("format.boolean_string", "Expected a valid boolean string", { truthy, falsy }),
-  formatIsoDatetime: () => makeIssue("format.iso_datetime", "Invalid ISO date-time"),
-  formatIsoDate: (message = "Expected an ISO date string (YYYY-MM-DD)") =>
-    makeIssue("format.iso_date", message),
-  formatIsoTime: (message = "Expected an ISO time string (HH:mm:ss)") =>
-    makeIssue("format.iso_time", message),
-  formatUuid: () => makeIssue("format.uuid", "Expected a valid UUID"),
-  formatEmail: () => makeIssue("format.email", "Expected a valid email address"),
-  formatUrl: () => makeIssue("format.url", "Expected a valid URL"),
-  formatIpv4: () => makeIssue("format.ipv4", "Expected a valid IPv4 address"),
-  formatIpv6: () => makeIssue("format.ipv6", "Expected a valid IPv6 address"),
-  formatJson: () => makeIssue("format.json", "Invalid JSON text"),
+  formatIsoDatetime: () => FORMAT_ISO_DATETIME,
+  formatIsoDate: (reason: "syntax" | "calendar" = "syntax") =>
+    reason === "calendar" ? FORMAT_ISO_DATE_CALENDAR : FORMAT_ISO_DATE_SYNTAX,
+  formatIsoTime: (reason: "syntax" | "clock" = "syntax") =>
+    reason === "clock" ? FORMAT_ISO_TIME_CLOCK : FORMAT_ISO_TIME_SYNTAX,
+  formatUuid: () => FORMAT_UUID,
+  formatEmail: () => FORMAT_EMAIL,
+  formatUrl: () => FORMAT_URL,
+  formatIpv4: () => FORMAT_IPV4,
+  formatIpv6: () => FORMAT_IPV6,
+  formatJson: () => FORMAT_JSON,
 
   // ── 值约束层（<kind>.<rule>）───────────────────────────────────────────
   stringMinLength: (minLength: number) =>
@@ -78,7 +131,7 @@ export const builtinIssues = {
   bigintGt: (gt: bigint) => makeIssue("bigint.gt", `Expected a bigint > ${gt}`, { gt }),
   bigintLt: (lt: bigint) => makeIssue("bigint.lt", `Expected a bigint < ${lt}`, { lt }),
 
-  dateOutOfRange: () => makeIssue("date.out_of_range", "Date-time exceeds the native Date range"),
+  dateOutOfRange: () => DATE_OUT_OF_RANGE,
 
   arrayMinLength: (minLength: number) =>
     makeIssue("array.min_length", `Expected at least ${minLength} items`, { minLength }),
@@ -106,7 +159,7 @@ export const builtinIssues = {
       expected,
     }),
 
-  unionNoMatch: () => makeIssue("union.no_match", "Input did not match any union branch"),
+  unionNoMatch: () => UNION_NO_MATCH,
   unionUnknownTag: (discriminator: string, expected: readonly FieldLiteral[]) =>
     makeIssue(
       "union.unknown_tag",
@@ -116,7 +169,7 @@ export const builtinIssues = {
 
   urlProtocol: (protocol: string, allowed: readonly string[]) =>
     makeIssue("url.protocol", `URL protocol "${protocol}" is not allowed`, { protocol, allowed }),
-  jsonUnserializable: () => makeIssue("json.unserializable", "Value cannot be serialized to JSON"),
+  jsonUnserializable: () => JSON_UNSERIALIZABLE,
 } as const;
 
 type Catalog = typeof builtinIssues;
@@ -180,21 +233,16 @@ export const BUILTIN_ISSUE_CODES: readonly BuiltinIssueCode[] = Object.freeze(
   Object.keys(builtinIssueCodeMap) as BuiltinIssueCode[],
 );
 
-/** 通过 context.fail 立即中断并报告一条目录内建问题 */
-export function failIssue(context: CodecContext, entry: BuiltinIssue): never {
-  return context.fail(entry.code, entry.message, entry.params);
-}
-
-/** 通过 context.issue 非中断报告一条目录内建问题 */
+/** 通过 context.issue 无抛错记录一条带相对路径的目录内建问题并返回 Failed */
 export function pushIssue(
   context: CodecContext,
   entry: BuiltinIssue,
-  path?: readonly PathSegment[],
-): void {
-  context.issue({
+  path: readonly PathSegment[],
+): Failed {
+  return context.issue({
     code: entry.code,
     message: entry.message,
-    ...(path !== undefined ? { path } : {}),
+    path,
     ...(entry.params !== undefined ? { params: entry.params } : {}),
   });
 }

@@ -238,7 +238,7 @@ function encodeModel(
   collector: IssueCollector,
 ): unknown {
   if (!isObject(input)) {
-    return reportIssue(collector, builtinIssues.typeObject("Expected a model object"));
+    return reportIssue(collector, builtinIssues.typeObject("model"));
   }
 
   const output: Record<string, unknown> = {};

@@ -324,7 +324,7 @@ const Order = Model.define({
 });
 ```
 
-- 无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, descriptor? })`；在 `decode` / `encode` 内可通过按方向分型的 `ctx.run(child, input, at?)` 组合子 Codec 并在同一收集器下多错收集（经 `ctx.failed(v)` 收窄后直接返回 `Failed` 即可退出失败路径）。
+- 无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, descriptor? })`；在 `decode` / `encode` 内可通过 `ctx.issue({ code, message, path?, params? })` 无抛错记录问题并返回 `Failed`（可单行 `return ctx.issue(...)` 退出，也可连续调用收集多错；深层辅助函数中需提前中断时使用 `ctx.fail(...)`），亦可通过按方向分型的 `ctx.run(child, input, at?)` 组合子 Codec（经 `ctx.failed(v)` 收窄后直接返回 `Failed`）。
 - 状态化形式要求初始 `state` 为普通对象，`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数；自定义 `methods` 禁止覆盖 `Codec` 保留协议名（编译期与定义期双重拦截）。
 - 执行方法（`decode` / `encode` / `parse` / `dump` 及 `safe*` 变体）支持解构单独传入回调；链式构建方法位于原型并依赖 `this`。
 - 若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰；生态适配包可通过 `Codec.extendStandard(codec, ext)` 在保留原方法面的前提下扩展 `~standard`。

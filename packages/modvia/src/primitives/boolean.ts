@@ -1,6 +1,6 @@
-import { builtinIssues, failIssue } from "../codec/core/issues.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
 import { createFamily } from "../codec/core/trait.ts";
-import type { CodecContext, WithCodecTrait } from "../codec/core/types.ts";
+import type { CodecContext, Failed, WithCodecTrait } from "../codec/core/types.ts";
 import {
   compileBooleanTokens,
   formatBooleanToken,
@@ -34,12 +34,11 @@ const defaultBooleanStringCodec = createFamily<BooleanTokenTable>({
   state: compileBooleanTokens(["true"], ["false"], false),
   decode(input, context) {
     if (typeof input !== "string") {
-      return failIssue(context, builtinIssues.typeString());
+      return context.issue(builtinIssues.typeString());
     }
     const parsed = parseBooleanToken(input, context.state);
     if (parsed === null) {
-      return failIssue(
-        context,
+      return context.issue(
         builtinIssues.formatBooleanString(context.state.rawTruthy, context.state.rawFalsy),
       );
     }
@@ -47,7 +46,7 @@ const defaultBooleanStringCodec = createFamily<BooleanTokenTable>({
   },
   encode(input, context) {
     if (typeof input !== "boolean") {
-      return failIssue(context, builtinIssues.typeBoolean());
+      return context.issue(builtinIssues.typeBoolean());
     }
     return formatBooleanToken(input, context.state);
   },
@@ -67,8 +66,8 @@ const defaultBooleanStringCodec = createFamily<BooleanTokenTable>({
   },
 })();
 
-function convertBoolean(input: unknown, context: CodecContext): boolean {
-  return typeof input === "boolean" ? input : failIssue(context, builtinIssues.typeBoolean());
+function convertBoolean(input: unknown, context: CodecContext): boolean | Failed {
+  return typeof input === "boolean" ? input : context.issue(builtinIssues.typeBoolean());
 }
 
 const defaultBooleanCodec = createFamily({

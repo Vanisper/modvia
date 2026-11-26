@@ -215,17 +215,59 @@ describe("跨层组合的结构契约", () => {
     expect(ForgedReturn.safeParse("capture").ok).toBe(false);
     expect(() => ForgedReturn.safeParse("forge")).toThrow(TypeError);
 
-    // 回调结束后再调用 ctx.run 立即抛 Error
-    let leakedRun: ((child: typeof PortText, input: unknown) => unknown) | undefined;
+    // 回调结束后再调用 ctx.run 立即抛 Error，且原型冻结不可篡改 state 或覆盖方法
+    let leakedCtx: { run(child: typeof PortText, input: unknown): unknown } | undefined;
     const CaptureRun = Codec.define({
       decode(input, ctx) {
-        leakedRun = ctx.run;
+        leakedCtx = ctx;
+        expect(Object.isFrozen(Object.getPrototypeOf(ctx))).toBe(true);
+        expect(() => {
+          (ctx as unknown as { state: unknown }).state = { hacked: true };
+        }).toThrow(TypeError);
+        expect(() => {
+          (ctx as unknown as { issue: unknown }).issue = () => {};
+        }).toThrow(TypeError);
         return String(input);
       },
       encode: (input) => String(input),
     });
     expect(CaptureRun.parse("ok")).toBe("ok");
-    expect(() => leakedRun?.(PortText, "80")).toThrow(Error);
+    expect(() => leakedCtx?.run(PortText, "80")).toThrow(Error);
+
+    // context.issue 返回 Failed，可直接作为零抛错失败返回值，同时类型推导自动剥离 Failed
+    const PositiveOdd = Codec.define({
+      decode(input, ctx) {
+        if (typeof input !== "number" || !Number.isSafeInteger(input)) {
+          return ctx.issue({ code: "type.integer", message: "Expected a safe integer" });
+        }
+        if (input <= 0 || input % 2 === 0) {
+          const marker = ctx.issue({
+            code: "custom.positive_odd",
+            message: "Expected positive odd",
+          });
+          expect(ctx.failed(marker)).toBe(true);
+          return marker;
+        }
+        return input;
+      },
+      encode(input, ctx) {
+        if (
+          typeof input !== "number" ||
+          !Number.isSafeInteger(input) ||
+          input <= 0 ||
+          input % 2 === 0
+        ) {
+          return ctx.issue({ code: "custom.positive_odd", message: "Expected positive odd" });
+        }
+        return input;
+      },
+    });
+    const oddValue: number = PositiveOdd.decode(3);
+    expect(oddValue).toBe(3);
+    expect(PositiveOdd.safeDecode(4)).toMatchObject({
+      ok: false,
+      issues: [{ path: [], code: "custom.positive_odd", message: "Expected positive odd" }],
+    });
   });
 
   test("执行方法可解构独立调用，构建方法基于原型并要求有效 this，精化后不再视为静态字面量", () => {

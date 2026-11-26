@@ -8,13 +8,14 @@ import { promoteToCodec } from "../core/codec.ts";
 import { defineCodec } from "../core/define.ts";
 import { compact } from "../core/descriptor.ts";
 import { assertValueCodec } from "../core/guards.ts";
-import { builtinIssues, failIssue, pushIssue } from "../core/issues.ts";
+import { builtinIssues, pushIssue } from "../core/issues.ts";
 import { createFamily } from "../core/trait.ts";
 import type {
   Codec,
   CodecLike,
   DecodeContext,
   EncodeContext,
+  Failed,
   InferEncoded,
   InferValue,
   StandardCodec,
@@ -58,16 +59,16 @@ interface ArrayState extends LengthBounds {
   readonly item: StandardCodec;
 }
 
-function convertArray(input: unknown, context: ChildRunner, state: ArrayState): unknown[] {
+function convertArray(input: unknown, context: ChildRunner, state: ArrayState): unknown[] | Failed {
   if (!Array.isArray(input)) {
-    return failIssue(context, builtinIssues.typeArray());
+    return context.issue(builtinIssues.typeArray());
   }
   const { minLength, maxLength } = state;
   if (minLength !== undefined && input.length < minLength) {
-    return failIssue(context, builtinIssues.arrayMinLength(minLength));
+    return context.issue(builtinIssues.arrayMinLength(minLength));
   }
   if (maxLength !== undefined && input.length > maxLength) {
-    return failIssue(context, builtinIssues.arrayMaxLength(maxLength));
+    return context.issue(builtinIssues.arrayMaxLength(maxLength));
   }
   const output: unknown[] = [];
   for (let index = 0; index < input.length; index++) {
@@ -142,9 +143,9 @@ export function recordOf(
       : undefined;
   const valueCodec: StandardCodec = promoteToCodec(valueInput);
 
-  const convert = (input: unknown, context: ChildRunner): Record<string, unknown> => {
+  const convert = (input: unknown, context: ChildRunner): Record<string, unknown> | Failed => {
     if (!isPlainObject(input)) {
-      return failIssue(context, builtinIssues.typeObject());
+      return context.issue(builtinIssues.typeObject());
     }
     const output: Record<string, unknown> = {};
     for (const rawKey of Object.keys(input)) {
@@ -178,12 +179,12 @@ export function tupleOf<const Items extends readonly ValueCodecInput<unknown, un
     items.map((item) => promoteToCodec(item)),
   );
 
-  const convert = (input: unknown, context: ChildRunner): unknown[] => {
+  const convert = (input: unknown, context: ChildRunner): unknown[] | Failed => {
     if (!Array.isArray(input)) {
-      return failIssue(context, builtinIssues.typeArray());
+      return context.issue(builtinIssues.typeArray());
     }
     if (input.length !== promoted.length) {
-      return failIssue(context, builtinIssues.tupleLength(promoted.length, input.length));
+      return context.issue(builtinIssues.tupleLength(promoted.length, input.length));
     }
     return promoted.map((item, index) => context.run(item, input[index], index));
   };

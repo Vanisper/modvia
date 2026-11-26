@@ -1,15 +1,15 @@
 import { defineCodec } from "../codec/core/define.ts";
-import { builtinIssues, failIssue } from "../codec/core/issues.ts";
-import type { Codec, CodecContext } from "../codec/core/types.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
+import type { Codec, CodecContext, Failed } from "../codec/core/types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function validateUuid(input: unknown, context: CodecContext): string {
+function validateUuid(input: unknown, context: CodecContext): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(context, builtinIssues.typeString());
+    return context.issue(builtinIssues.typeString());
   }
   if (!uuidPattern.test(input)) {
-    return failIssue(context, builtinIssues.formatUuid());
+    return context.issue(builtinIssues.formatUuid());
   }
   return input.toLowerCase();
 }

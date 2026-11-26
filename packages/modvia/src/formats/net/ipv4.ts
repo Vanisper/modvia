@@ -1,14 +1,14 @@
 import { defineCodec } from "../../codec/core/define.ts";
-import { builtinIssues, failIssue } from "../../codec/core/issues.ts";
-import type { Codec, CodecContext } from "../../codec/core/types.ts";
+import { builtinIssues } from "../../codec/core/issues.ts";
+import type { Codec, CodecContext, Failed } from "../../codec/core/types.ts";
 import { isValidIpv4 } from "../../scalars/ip.ts";
 
-function validateIpv4(input: unknown, context: CodecContext): string {
+function validateIpv4(input: unknown, context: CodecContext): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(context, builtinIssues.typeString());
+    return context.issue(builtinIssues.typeString());
   }
   if (!isValidIpv4(input)) {
-    return failIssue(context, builtinIssues.formatIpv4());
+    return context.issue(builtinIssues.formatIpv4());
   }
   return input;
 }

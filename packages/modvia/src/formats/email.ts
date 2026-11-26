@@ -1,6 +1,6 @@
 import { defineCodec } from "../codec/core/define.ts";
-import { builtinIssues, failIssue } from "../codec/core/issues.ts";
-import type { StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
+import type { Failed, StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
 
 /** 电子邮箱编解码器自有链式方法特征 */
 export interface EmailTrait {
@@ -33,16 +33,16 @@ function isValidEmailAddress(value: string): boolean {
   return localPartPattern.test(local) && domainPartPattern.test(domain);
 }
 
-function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): string {
+function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): string | Failed {
   if (typeof input !== "string") {
-    return failIssue(ctx, builtinIssues.typeString());
+    return ctx.issue(builtinIssues.typeString());
   }
   let normalized = ctx.state.trim ? input.trim() : input;
   if (ctx.state.lowercase) {
     normalized = normalized.toLowerCase();
   }
   if (!isValidEmailAddress(normalized)) {
-    return failIssue(ctx, builtinIssues.formatEmail());
+    return ctx.issue(builtinIssues.formatEmail());
   }
   return normalized;
 }
