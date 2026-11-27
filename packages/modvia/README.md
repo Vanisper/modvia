@@ -75,7 +75,7 @@ import { ValidationError } from "modvia";
 const result = User.safeParse(payload);
 if (!result.ok) {
   for (const issue of result.issues) {
-    console.log(issue.path, issue.code, issue.message);
+    console.log(issue.path, issue.code, issue.message, issue.params);
   }
 }
 
@@ -166,15 +166,19 @@ import { Codec, int, isoDateTime, string, type Branded } from "modvia";
 const Email = string()
   .trim()
   .normalize((s) => s.toLowerCase())
-  .refine((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s), "string.email", "Expected a valid email")
+  .refine((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s), "email.invalid", "Expected a valid email")
   .brand<"Email">();
 
 type EmailAddress = Branded<string, "Email">;
 
-// 2. 过程式多问题检查（支持通过 context.issue 附加多条错误与相对子路径）
+// 2. 过程式多问题检查（支持通过 context.issue 附加多条错误、相对子路径与结构化 params）
 const Port = int().check((n, ctx) => {
   if (n < 1 || n > 65535) {
-    ctx.issue({ code: "number.port_range", message: "Port must be between 1 and 65535" });
+    ctx.issue({
+      code: "port.out_of_range",
+      message: "Port must be between 1 and 65535",
+      params: { min: 1, max: 65535 },
+    });
   }
 });
 
@@ -285,20 +289,28 @@ const yuanToCents = Codec.define({
   state: {} as YuanState,
   decode(input, ctx) {
     if (typeof input !== "string" || !/^-?\d+(?:\.\d{1,2})?$/.test(input)) {
-      return ctx.fail("money.format", "Expected decimal yuan string");
+      return ctx.issue({ code: "money.format", message: "Expected decimal yuan string" });
     }
     const cents = Math.round(Number(input) * 100);
     if (ctx.state.minCents !== undefined && cents < ctx.state.minCents) {
-      return ctx.fail("money.min", `Expected >= ${ctx.state.minCents} cents`);
+      return ctx.issue({
+        code: "money.min",
+        message: `Expected >= ${ctx.state.minCents} cents`,
+        params: { minCents: ctx.state.minCents },
+      });
     }
     return cents;
   },
   encode(cents, ctx) {
     if (typeof cents !== "number" || !Number.isSafeInteger(cents)) {
-      return ctx.fail("money.cents", "Expected integer cents");
+      return ctx.issue({ code: "money.cents", message: "Expected integer cents" });
     }
     if (ctx.state.minCents !== undefined && cents < ctx.state.minCents) {
-      return ctx.fail("money.min", `Expected >= ${ctx.state.minCents} cents`);
+      return ctx.issue({
+        code: "money.min",
+        message: `Expected >= ${ctx.state.minCents} cents`,
+        params: { minCents: ctx.state.minCents },
+      });
     }
     return (cents / 100).toFixed(2);
   },

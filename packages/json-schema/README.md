@@ -45,7 +45,7 @@ const dataSchema = toJsonSchema(User, { side: "data" });
 
 ### 对接 `StandardJSONSchemaV1` 全栈与 AI 工具生态
 
-`withJsonSchema` 在完整保留原 `Codec` / `Model` 全部方法与可组合性的同时，向 `"~standard"` 挂载 `jsonSchema: { input, output }`，可直接接入支持 Standard JSON Schema 的 OpenAPI 路由、RPC 框架与 AI Tool / MCP SDK：
+`withJsonSchema` 在完整保留原 `Codec` / `Model` 全部方法与可组合性的同时，向 `"~standard"` 挂载 `jsonSchema: { input, output }`，可直接接入支持 Standard JSON Schema 的 OpenAPI 路由、RPC 框架与 AI Tool / MCP SDK（该扩展仅属于返回实例，在其上继续派生的新 `Codec` 或 `Model` 不会继承 `jsonSchema` 扩展）：
 
 ```ts
 import { withJsonSchema } from "@modvia/json-schema";

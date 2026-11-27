@@ -13,7 +13,7 @@ Modvia 以双向编解码契约为底座，围绕应用数据边界组织校验�
    - 承载零 `Codec` 耦合的纯数学、词法与时间计算原语：离散长度闭区间代数、通用全序开闭区间代数（连续浮点数、离散安全整数与大整数）、无状态正则复制、布尔候选词表编译以及公历闰年与 ISO 日期时间换算。
    - 不构造 `Codec` 实例、不分配错误对象，供上层容器算子、原始标量编解码器与领域格式规则跨层共享。
 3. **双向编解码引擎与算子层（Codec Kernel & Operators，`src/codec`）**
-   - **内核（`core`）**：定义双向协议 `CodecLike<T, E>`、标准实例 `Codec<T, E>`、特征承载体 `WithCodecTrait<T, E, Trait>` 与属性描述符 `Field`；提供零异常栈开销的 `IssueCollector`、状态化增量补丁构造机制以及 `StandardSchemaV1` 挂载。
+   - **内核（`core`）**：定义双向协议 `CodecLike<T, E>`、协变标准协议 `StandardCodec<T, E>`、标准实例 `Codec<T, E>`、带上游槽的特征承载体 `WithCodecTrait<T, E, Trait, Root>` 与属性描述符 `Field`；基于成对执行内核（`{ decode, encode }`）、浅层原型类、逐次独占 `IssueCollector`、冻结原型轻量上下文、集中错误码目录（`IssueCode` / `params`）与 `StandardSchemaV1` 挂载机制运行。
    - **算子（`operators`）**：构建数组、元组与动态字典容器（`arrayOf` 复用 `src/scalars` 的长度区间代数），以及保留下游自有方法特征的管道串联（`pipe`）、方向反转（`invert`）、惰性递归（`lazy`）与顺序联合（`unionOf`）。
 4. **原始标量与领域格式编解码层（Primitives & Domain Formats，`src/primitives` / `src/formats`）**
    - **原始标量层（`src/primitives`）**：将 `src/scalars` 的计算原子桥接至 `src/codec`，提供 `string`、`number`、`int`、`bigint`、`boolean`、`literal`、`unknown` 与 `isoDateTime`，并在有序数值与布尔原语上统一内建 `.fromString()` 外部字符串介质切换。
@@ -68,7 +68,7 @@ packages/modvia/src/
 │   ├── core/                     # 编解码内核（严禁导入 operators）
 │   │   ├── types.ts              # [公开] StandardCodec / Codec / Field / FieldLike / WithCodecTrait、CodecDescriptor、IssueCode、StandardSchemaV1
 │   │   ├── issues.ts             # [内部] 全库内置错误码目录、默认消息与 params 构造器（导出 BuiltinIssueCode）
-│   │   ├── guards.ts             # [内部] 定义期参数守卫（TypeError / RangeError 统一规则）
+│   │   ├── guards.ts             # [内部] 定义期参数守卫（含 assertValueCodec，统一 TypeError / RangeError 规则）
 │   │   ├── errors.ts             # [公开] ValidationError（含跨上下文 ValidationError.is）
 │   │   ├── collector.ts          # [内部] 逐次独占 IssueCollector、params 冻结与私有 INVALID 哨兵
 │   │   ├── internals.ts          # [内部] 模块私有 WeakMap 注册表（Kernel / Descriptor）与外部 CodecLike 适配
@@ -76,7 +76,7 @@ packages/modvia/src/
 │   │   ├── kernel.ts             # [内部] 成对执行内核代数（pipe / invert / refine / check / normalize / literal / lazy / union）
 │   │   ├── descriptor.ts         # [内部] Codec.inspect 与描述符推导（refined 归并、静态字面量与路径首段映射）
 │   │   ├── field.ts              # [内部] FieldImpl 槽位描述符与 FieldLike 纯数据识别
-│   │   ├── codec.ts              # [内部] CodecImpl 基类、Codec.extendStandard、toField 与 assertValueCodec
+│   │   ├── codec.ts              # [内部] CodecImpl 基类、Codec.extendStandard 与 toField
 │   │   ├── trait.ts              # [内部] TraitCodec 上游槽与 createFamily 族原型构造器
 │   │   └── define.ts             # [内部定义] Codec.define（无状态直构 CodecImpl，状态化直构 TraitCodec 族）
 │   └── operators/                # 值容器与组合算子

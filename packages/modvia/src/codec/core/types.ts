@@ -184,9 +184,15 @@ export interface Codec<T, Encoded = T> extends StandardCodec<T, Encoded> {
     predicate: (value: T) => value is Narrowed,
     code: IssueCode,
     message: string,
+    params?: IssueParams,
   ): Codec<Narrowed, Encoded>;
   /** 用布尔谓词在解码与编码两端对称校验业务值，强制指定稳定错误码 */
-  refine(predicate: (value: T) => boolean, code: IssueCode, message: string): Codec<T, Encoded>;
+  refine(
+    predicate: (value: T) => boolean,
+    code: IssueCode,
+    message: string,
+    params?: IssueParams,
+  ): Codec<T, Encoded>;
   /**
    * 对业务值执行同类型幂等规范化清洗，解码与编码两端共同维持规范形态
    *
@@ -308,7 +314,7 @@ type WithDescription<T> = T & { readonly description?: string };
 
 /** 精化步骤：refine 携带稳定错误码，check 与 normalize 为不透明回调 */
 export type CodecRefinement =
-  | { readonly kind: "refine"; readonly code: string }
+  | { readonly kind: "refine"; readonly code: IssueCode }
   | { readonly kind: "check" }
   | { readonly kind: "normalize" };
 

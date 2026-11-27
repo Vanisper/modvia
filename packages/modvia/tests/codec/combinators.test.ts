@@ -7,8 +7,10 @@ import {
   literal,
   number,
   string,
+  type CodecRefinement,
   type InferEncoded,
   type InferValue,
+  type IssueCode,
 } from "../../src/codec.ts";
 import { Model } from "../../src/index.ts";
 
@@ -117,6 +119,91 @@ describe("codec combinators", () => {
     });
 
     expect(() => number().refine((n) => n > 0, "", "msg")).toThrow(TypeError);
+  });
+
+  test("refine 支持可选静态 params：定义期校验并冻结复用，双端透出结构化参数", () => {
+    const allowed = ["admin", "editor"];
+    const rawParams = { allowed, minRoleLevel: 2 };
+
+    const AllowedRole = string().refine(
+      (value): value is "admin" | "editor" => value === "admin" || value === "editor",
+      "role.not_allowed",
+      "Expected an allowed role",
+      rawParams,
+    );
+    expectTypeOf<InferValue<typeof AllowedRole>>().toEqualTypeOf<"admin" | "editor">();
+    expectTypeOf<InferEncoded<typeof AllowedRole>>().toEqualTypeOf<string>();
+
+    // 定义期已拷贝并冻结，外部后续修改不会污染运行时 issue.params
+    allowed.push("guest");
+    rawParams.minRoleLevel = 99;
+
+    const decodeFail1 = AllowedRole.safeDecode("viewer");
+    const decodeFail2 = AllowedRole.safeDecode("guest");
+    const encodeFail = AllowedRole.safeEncode("viewer" as "admin");
+
+    expect(decodeFail1).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: [],
+          code: "role.not_allowed",
+          message: "Expected an allowed role",
+          params: { allowed: ["admin", "editor"], minRoleLevel: 2 },
+        },
+      ],
+    });
+    expect(encodeFail).toStrictEqual(decodeFail1);
+    if (decodeFail1.ok || decodeFail2.ok || encodeFail.ok) throw new Error("Expected failure");
+    expect(Object.isFrozen(decodeFail1.issues[0]?.params)).toBe(true);
+    expect(Object.isFrozen(decodeFail1.issues[0]?.params?.allowed)).toBe(true);
+    expect(decodeFail1.issues[0]?.params).toBe(decodeFail2.issues[0]?.params);
+    expect(decodeFail1.issues[0]?.params).toBe(encodeFail.issues[0]?.params);
+
+    // 布尔重载同样支持 params，未传 params 时不附带 params 键
+    const Port = int().refine(
+      (n) => n >= 1 && n <= 65535,
+      "port.out_of_range",
+      "Port must be between 1 and 65535",
+      { min: 1, max: 65535 },
+    );
+    expect(Port.safeDecode(0)).toStrictEqual({
+      ok: false,
+      issues: [
+        {
+          path: [],
+          code: "port.out_of_range",
+          message: "Port must be between 1 and 65535",
+          params: { min: 1, max: 65535 },
+        },
+      ],
+    });
+    expect(Port.safeEncode(70000)).toMatchObject({
+      ok: false,
+      issues: [{ code: "port.out_of_range", params: { min: 1, max: 65535 } }],
+    });
+
+    const PlainRefine = int().refine((n) => n % 2 === 0, "number.even", "Expected even");
+    const plainFail = PlainRefine.safeDecode(3);
+    if (plainFail.ok) throw new Error("Expected failure");
+    expect("params" in plainFail.issues[0]!).toBe(false);
+
+    // 非普通对象 params 在定义期立即抛 TypeError
+    expect(() =>
+      int().refine((n) => n > 0, "port.invalid", "Invalid", [] as unknown as Record<string, never>),
+    ).toThrow(TypeError);
+    expect(() =>
+      int().refine(
+        (n) => n > 0,
+        "port.invalid",
+        "Invalid",
+        null as unknown as Record<string, never>,
+      ),
+    ).toThrow(TypeError);
+
+    // CodecRefinement 的 refine 分支静态收紧为 IssueCode
+    type RefineStep = Extract<CodecRefinement, { readonly kind: "refine" }>;
+    expectTypeOf<RefineStep["code"]>().toEqualTypeOf<IssueCode>();
   });
 
   test("normalize 在解码与编码两端维持幂等规范形态且满足往返收敛", () => {

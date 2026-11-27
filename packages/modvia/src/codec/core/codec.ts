@@ -1,5 +1,5 @@
 import { deduplicateLiterals } from "../../shared/value.ts";
-import { INVALID, IssueCollector } from "./collector.ts";
+import { freezeIssueParams, INVALID, IssueCollector } from "./collector.ts";
 import { compact, pathMapperOf, refinedDescriptor } from "./descriptor.ts";
 import { ValidationError } from "./errors.ts";
 import { createField, isFieldInstance, isFieldLike, toFallback } from "./field.ts";
@@ -29,6 +29,8 @@ import type {
   FieldLike,
   FieldLiteral,
   FieldPresence,
+  IssueCode,
+  IssueParams,
   SafeResult,
   StandardCodec,
   StandardSchemaV1,
@@ -91,7 +93,12 @@ export class CodecImpl {
     );
   }
 
-  refine(predicate: (value: unknown) => boolean, code: string, message: string): CodecImpl {
+  refine(
+    predicate: (value: unknown) => boolean,
+    code: IssueCode,
+    message: string,
+    params?: IssueParams,
+  ): CodecImpl {
     assertFunction(predicate, "refine requires a predicate function");
     if (typeof code !== "string" || code.length === 0) {
       throw new TypeError("refine requires a non-empty error code");
@@ -99,8 +106,9 @@ export class CodecImpl {
     if (typeof message !== "string") {
       throw new TypeError("refine requires an error message string");
     }
+    const frozenParams = freezeIssueParams(params);
     return createCodec(
-      refineKernel(kernelOf(this), predicate, code, message),
+      refineKernel(kernelOf(this), predicate, code, message, frozenParams),
       refinedDescriptor(this as never, { kind: "refine", code }),
     );
   }

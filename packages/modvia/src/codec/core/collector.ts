@@ -6,10 +6,14 @@ export const INVALID: unique symbol = Symbol("modvia.invalid");
 export type Invalid = typeof INVALID;
 
 const EMPTY_PATH: readonly PathSegment[] = Object.freeze([]);
+const FROZEN_PARAMS = new WeakSet<IssueParams>();
 
 /** 防御性浅拷贝并冻结问题参数（数组值同步冻结），防止外部修改污染或暴露可变引用 */
 export function freezeIssueParams(params: IssueParams | undefined): IssueParams | undefined {
   if (params === undefined) return undefined;
+  if (typeof params === "object" && params !== null && FROZEN_PARAMS.has(params)) {
+    return params;
+  }
   if (!isPlainObject(params)) {
     throw new TypeError("Issue params must be a plain object");
   }
@@ -17,7 +21,9 @@ export function freezeIssueParams(params: IssueParams | undefined): IssueParams 
   for (const [key, value] of Object.entries(params)) {
     copy[key] = Array.isArray(value) ? Object.freeze([...value]) : value;
   }
-  return Object.freeze(copy);
+  const frozen = Object.freeze(copy);
+  FROZEN_PARAMS.add(frozen);
+  return frozen;
 }
 
 /** 构造冻结的 ValidationIssue（无参数时省略 params 键） */

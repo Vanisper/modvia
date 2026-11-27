@@ -2,7 +2,7 @@ import { INVALID } from "./collector.ts";
 import { runCheckRule, type SegmentMapper } from "./context.ts";
 import type { Kernel } from "./internals.ts";
 import { builtinIssues, reportIssue } from "./issues.ts";
-import type { CodecContext, FieldLiteral, IssueCode } from "./types.ts";
+import type { CodecContext, FieldLiteral, IssueCode, IssueParams } from "./types.ts";
 
 /** 执行内核代数：所有组合都只操作成对的步骤函数，不感知 Codec 实例与方法面 */
 
@@ -34,17 +34,18 @@ export function refineKernel<T, Encoded>(
   predicate: (value: T) => boolean,
   code: IssueCode,
   message: string,
+  params?: IssueParams,
 ): Kernel<T, Encoded> {
   return {
     decode(input, collector) {
       const value = base.decode(input, collector);
       if (value === INVALID) return INVALID;
-      return predicate(value) ? value : collector.add(code, message);
+      return predicate(value) ? value : collector.add(code, message, params);
     },
     encode(input, collector) {
       const encoded = base.encode(input, collector);
       if (encoded === INVALID) return INVALID;
-      return predicate(input as T) ? encoded : collector.add(code, message);
+      return predicate(input as T) ? encoded : collector.add(code, message, params);
     },
   };
 }
