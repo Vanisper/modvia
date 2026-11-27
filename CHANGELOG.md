@@ -1,12 +1,8 @@
 # Changelog
 
-本文件记录 Modvia 工作区各公开包（`modvia`、`@modvia/json-schema`、`@modvia/zod`）的版本演进。
+本文件记录 Modvia 工作区各公开包（`modvia`、`@modvia/json-schema`、`@modvia/zod`）的版本演进，由 [release-please](https://github.com/googleapis/release-please) 基于 Conventional Commits 自动维护。
 
-格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本（SemVer）](https://semver.org/lang/zh-CN/)。
-
-## [Unreleased]
-
-## [0.1.0] - 2026-11-27
+## [0.1.0](https://github.com/Vanisper/modvia/releases/tag/v0.1.0) (2026-11-27)
 
 首次公开发布，推出零运行时依赖的核心编解码与领域模型包 `modvia`，以及两个独立生态扩展包 `@modvia/json-schema` 与 `@modvia/zod`。
 
@@ -29,6 +25,3 @@
 
 - **Zod v4 双向桥接**：提供 `zodCodec`，基于 `zod/v4/core` 桥接对称 Zod Schema 与双向 `z.codec`（兼容 `"zod"` 与 `"zod/mini"`），并将错误码统一映射为 `zod.<issue.code>`。
 - **可逆性双重守卫**：在编译期（`ReversibleZodSchema`）与定义期同步拦截单向 `.transform()` / `z.preprocess()` / `z.success()`、隐式 `z.coerce.*`、吞错 `.catch()` 与异步 `z.promise()`。
-
-[Unreleased]: https://github.com/Vanisper/modvia/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/Vanisper/modvia/releases/tag/v0.1.0
