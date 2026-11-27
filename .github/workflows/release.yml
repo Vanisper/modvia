@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify & Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          node-version: "24"
+          cache: true
+
+      - name: Validate release tag and workspace versions
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "Invalid release tag format: $TAG (expected vX.Y.Z or vX.Y.Z-prerelease)" >&2
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
+          for pkg in packages/modvia/package.json packages/json-schema/package.json packages/zod/package.json; do
+            pkg_version="$(node -p "JSON.parse(require('node:fs').readFileSync('$pkg', 'utf8')).version")"
+            if [[ "$pkg_version" != "$VERSION" ]]; then
+              echo "Version mismatch in $pkg: expected $VERSION (from tag $TAG), got $pkg_version" >&2
+              exit 1
+            fi
+          done
+          if [[ "$VERSION" == *-* ]]; then
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Verified tag $TAG matches all workspace packages ($VERSION)"
+
+      - name: Run full workspace gate
+        run: vp run --no-cache ready
+
+      - name: Verify npm CLI version for OIDC Trusted Publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -v
+          npm -v
+          vp --version
+          node -e '
+            const cp = require("node:child_process");
+            const ver = cp.execFileSync("npm", ["-v"], { encoding: "utf8" }).trim();
+            const [maj, min, pat] = ver.split("-")[0].split(".").map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            if (!ok) {
+              console.error(`npm ${ver} is below 11.5.1 required for OIDC Trusted Publishing`);
+              process.exit(1);
+            }
+          '
+
+      # Uses npm Trusted Publishing (OIDC) with SLSA provenance; do not inject a legacy NPM_TOKEN here
+      # once all three packages have Trusted Publisher configured on npmjs.com.
+      - name: Publish packages to npm with provenance
+        run: vp pm publish -r --access public --provenance --no-git-checks --tag "${{ steps.meta.outputs.npm_tag }}"
