@@ -1,6 +1,6 @@
-import { defineCodec } from "../codec/core/define.ts";
-import { createCodec, extendCodec } from "../codec/core/runtime.ts";
-import type { Codec, WithCodecTrait } from "../codec/core/types.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
+import { createFamily } from "../codec/core/trait.ts";
+import type { CodecContext, Failed, WithCodecTrait } from "../codec/core/types.ts";
 import {
   compileBooleanTokens,
   formatBooleanToken,
@@ -20,37 +20,41 @@ export interface BooleanStringTrait {
 export type BooleanStringCodec = WithCodecTrait<boolean, string, BooleanStringTrait>;
 
 /** 原生布尔值双向编解码器（boolean ↔ boolean），可通过 .fromString() 切换为字符串传输介质 */
-export interface BooleanCodec extends Codec<boolean, boolean> {
-  /** 切换外部编码表示为布尔字符串（string ↔ boolean，默认大小写不敏感匹配 "true" / "false"） */
-  fromString(this: void): BooleanStringCodec;
-  /** 为当前布尔编解码器附加静态文档说明文本，保留 .fromString() 方法 */
-  describe(this: void, description: string): BooleanCodec;
-}
+export type BooleanCodec = WithCodecTrait<
+  boolean,
+  boolean,
+  Record<never, never>,
+  {
+    /** 切换外部编码表示为布尔字符串（string ↔ boolean，默认大小写不敏感匹配 "true" / "false"） */
+    fromString(): BooleanStringCodec;
+  }
+>;
 
-const defaultBooleanStringCodec: BooleanStringCodec = defineCodec({
+const defaultBooleanStringCodec = createFamily<BooleanTokenTable>({
   state: compileBooleanTokens(["true"], ["false"], false),
-  decode(input, ctx) {
+  decode(input, context) {
     if (typeof input !== "string") {
-      return ctx.fail("type.string", "Expected a string");
+      return context.issue(builtinIssues.typeString());
     }
-    const parsed = parseBooleanToken(input, ctx.state);
+    const parsed = parseBooleanToken(input, context.state);
     if (parsed === null) {
-      return ctx.fail("format.boolean_string", "Expected a valid boolean string");
+      return context.issue(
+        builtinIssues.formatBooleanString(context.state.rawTruthy, context.state.rawFalsy),
+      );
     }
     return parsed;
   },
-  encode(input, ctx) {
+  encode(input, context) {
     if (typeof input !== "boolean") {
-      return ctx.fail("type.boolean", "Expected a boolean");
+      return context.issue(builtinIssues.typeBoolean());
     }
-    return formatBooleanToken(input, ctx.state);
+    return formatBooleanToken(input, context.state);
   },
-  meta: (state) => ({
-    format: "boolean-string",
-    encodedSchema: state.caseSensitive
-      ? { type: "string", enum: [...state.truthySet, ...state.falsySet] }
-      : { type: "string" },
-    decodedSchema: { type: "boolean" },
+  descriptor: (state) => ({
+    kind: "booleanString",
+    truthy: state.rawTruthy,
+    falsy: state.rawFalsy,
+    caseSensitive: state.caseSensitive,
   }),
   methods: {
     tokens:
@@ -60,40 +64,21 @@ const defaultBooleanStringCodec: BooleanStringCodec = defineCodec({
     caseSensitive: () => (prev: Readonly<BooleanTokenTable>) =>
       compileBooleanTokens(prev.rawTruthy, prev.rawFalsy, true),
   },
-});
+})();
 
-function buildNativeBooleanCodec(description?: string): BooleanCodec {
-  const base = createCodec<boolean, boolean>(
-    (input, _direction, collector) => {
-      if (typeof input !== "boolean") {
-        return collector.add("type.boolean", "Expected a boolean");
-      }
-      return input;
-    },
-    {
-      descriptor: {
-        kind: "boolean",
-        ...(description !== undefined ? { description } : {}),
-      },
-    },
-  );
-
-  return extendCodec(base, {
-    fromString(): BooleanStringCodec {
-      return description !== undefined
-        ? defaultBooleanStringCodec.describe(description)
-        : defaultBooleanStringCodec;
-    },
-    describe(nextDescription: string): BooleanCodec {
-      if (typeof nextDescription !== "string") {
-        throw new TypeError("Description must be a string");
-      }
-      return buildNativeBooleanCodec(nextDescription);
-    },
-  });
+function convertBoolean(input: unknown, context: CodecContext): boolean | Failed {
+  return typeof input === "boolean" ? input : context.issue(builtinIssues.typeBoolean());
 }
 
-const defaultBooleanCodec: BooleanCodec = buildNativeBooleanCodec();
+const defaultBooleanCodec = createFamily({
+  state: {},
+  decode: convertBoolean,
+  encode: convertBoolean,
+  descriptor: { kind: "boolean" },
+  derive: {
+    fromString: () => defaultBooleanStringCodec,
+  },
+})() as unknown as BooleanCodec;
 
 /** 布尔值双向编解码器，可通过 .fromString() 切换至字符串传输表示 */
 export function boolean(): BooleanCodec {

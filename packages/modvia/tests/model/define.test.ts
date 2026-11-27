@@ -6,8 +6,8 @@ import {
   Field,
   isoDateTime,
   Model,
+  literal,
   number,
-  oneOf,
   string,
   ValidationError,
 } from "../../src/index.ts";
@@ -26,7 +26,7 @@ const UserModel = Model.define({
   fields: {
     id: string(),
     name: string().trim().nonEmpty(),
-    role: oneOf("admin", "manager", "member"),
+    role: literal("admin", "manager", "member"),
     createdAt: isoDateTime().alias("created_at"),
     department: DepartmentModel,
     active: boolean(),
@@ -171,7 +171,7 @@ describe("domain model", () => {
     if (result.ok) throw new Error("Expected validation failure");
     expect(result.issues.map((issue) => ({ path: issue.path, code: issue.code }))).toEqual([
       { path: [1, "name"], code: "string.min_length" },
-      { path: [1, "created_at"], code: "datetime.invalid" },
+      { path: [1, "created_at"], code: "format.iso_datetime" },
       { path: [1, "department", "name"], code: "type.string" },
     ]);
   });
@@ -185,7 +185,7 @@ describe("domain model", () => {
     expect(missing.ok).toBe(false);
     if (missing.ok) throw new Error("Expected failure");
     expect(missing.issues.length).toBeGreaterThan(1);
-    expect(missing.issues[0]).toMatchObject({ path: ["name"], code: "field.required" });
+    expect(missing.issues[0]).toMatchObject({ path: ["name"], code: "object.missing_key" });
 
     expect(arrayOf(UserModel).safeParse({ 0: validDTO })).toMatchObject({
       ok: false,
@@ -246,7 +246,7 @@ describe("domain model", () => {
     }
 
     const missing = expect.objectContaining({
-      issues: [expect.objectContaining({ path: ["__proto__"], code: "field.required" })],
+      issues: [expect.objectContaining({ path: ["__proto__"], code: "object.missing_key" })],
     });
     expect(() => Required.parse({})).toThrow(missing);
     expect(() => Required.dump({})).toThrow(missing);
@@ -412,8 +412,8 @@ describe("domain model", () => {
   });
 
   test("联合字段表保留各分支的键以及索引签名中的已知字段", () => {
-    const compact = { kind: oneOf("compact"), label: string().alias("title") };
-    const counted = { kind: oneOf("counted"), count: number().optional() };
+    const compact = { kind: literal("compact"), label: string().alias("title") };
+    const counted = { kind: literal("counted"), count: number().optional() };
     function catalog(fields: typeof compact | typeof counted) {
       return Model.define({ fields });
     }

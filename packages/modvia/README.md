@@ -9,13 +9,13 @@
 包提供三个零外部依赖的子路径入口，元操作按领域主体收纳为命名空间，高频数据形态构造器保持直接导入：
 
 - `modvia`：完整主入口，导出领域模型主体（`Model`、`Alias`）与全部核心编解码能力。
-- `modvia/codec`：纯粹的值级双向编解码底座，导出主体命名空间（`Codec`、`Field`、`ValidationError`）、0 阶原始标量（`string`、`number`、`int`、`bigint`、`boolean`、`unknown`、`literal`、`oneOf`、`isoDateTime`）与 1 阶容器（`arrayOf`、`tupleOf`、`recordOf`）。
+- `modvia/codec`：纯粹的值级双向编解码底座，导出主体命名空间（`Codec`、`Field`、`ValidationError`）、0 阶原始标量（`string`、`number`、`int`、`bigint`、`boolean`、`unknown`、`literal`、`isoDateTime`）与 1 阶容器（`arrayOf`、`tupleOf`、`recordOf`）。
 - `modvia/formats`：按需 Tree-shaking 的领域格式与 JSON 文本原语（`uuid`、`email`、`url`、`ipv4`、`ipv6`、`isoDate`、`isoTime`、`jsonString`、`jsonOf`），不引入时零体积开销。
 
 ## 定义模型与双向转换
 
 ```ts
-import { isoDateTime, Model, oneOf, string, type InferData, type InferDTO } from "modvia";
+import { isoDateTime, literal, Model, string, type InferData, type InferDTO } from "modvia";
 
 const Department = Model.define({
   fields: {
@@ -28,7 +28,7 @@ const User = Model.define({
   fields: {
     id: string(),
     name: string().trim().nonEmpty(),
-    role: oneOf("admin", "manager", "member"),
+    role: literal("admin", "manager", "member"),
     createdAt: isoDateTime().alias("created_at"),
     department: Department,
   },
@@ -75,7 +75,7 @@ import { ValidationError } from "modvia";
 const result = User.safeParse(payload);
 if (!result.ok) {
   for (const issue of result.issues) {
-    console.log(issue.path, issue.code, issue.message);
+    console.log(issue.path, issue.code, issue.message, issue.params);
   }
 }
 
@@ -166,15 +166,19 @@ import { Codec, int, isoDateTime, string, type Branded } from "modvia";
 const Email = string()
   .trim()
   .normalize((s) => s.toLowerCase())
-  .refine((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s), "string.email", "Expected a valid email")
+  .refine((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s), "email.invalid", "Expected a valid email")
   .brand<"Email">();
 
 type EmailAddress = Branded<string, "Email">;
 
-// 2. 过程式多问题检查（支持通过 context.issue 附加多条错误与相对子路径）
+// 2. 过程式多问题检查（支持通过 context.issue 附加多条错误、相对子路径与结构化 params）
 const Port = int().check((n, ctx) => {
   if (n < 1 || n > 65535) {
-    ctx.issue({ code: "number.port_range", message: "Port must be between 1 and 65535" });
+    ctx.issue({
+      code: "port.out_of_range",
+      message: "Port must be between 1 and 65535",
+      params: { min: 1, max: 65535 },
+    });
   }
 });
 
@@ -285,24 +289,33 @@ const yuanToCents = Codec.define({
   state: {} as YuanState,
   decode(input, ctx) {
     if (typeof input !== "string" || !/^-?\d+(?:\.\d{1,2})?$/.test(input)) {
-      return ctx.fail("money.format", "Expected decimal yuan string");
+      return ctx.issue({ code: "money.format", message: "Expected decimal yuan string" });
     }
     const cents = Math.round(Number(input) * 100);
     if (ctx.state.minCents !== undefined && cents < ctx.state.minCents) {
-      return ctx.fail("money.min", `Expected >= ${ctx.state.minCents} cents`);
+      return ctx.issue({
+        code: "money.min",
+        message: `Expected >= ${ctx.state.minCents} cents`,
+        params: { minCents: ctx.state.minCents },
+      });
     }
     return cents;
   },
   encode(cents, ctx) {
     if (typeof cents !== "number" || !Number.isSafeInteger(cents)) {
-      return ctx.fail("money.cents", "Expected integer cents");
+      return ctx.issue({ code: "money.cents", message: "Expected integer cents" });
     }
     if (ctx.state.minCents !== undefined && cents < ctx.state.minCents) {
-      return ctx.fail("money.min", `Expected >= ${ctx.state.minCents} cents`);
+      return ctx.issue({
+        code: "money.min",
+        message: `Expected >= ${ctx.state.minCents} cents`,
+        params: { minCents: ctx.state.minCents },
+      });
     }
     return (cents / 100).toFixed(2);
   },
-  meta: (state) => ({
+  descriptor: (state) => ({
+    kind: "custom",
     format: "yuan-decimal",
     encodedSchema: { type: "string" },
     decodedSchema: {
@@ -323,7 +336,10 @@ const Order = Model.define({
 });
 ```
 
-无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, meta? })`；状态化形式要求初始 `state` 为普通对象，`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数。自定义 `methods` 禁止使用 `Codec` 保留协议名（编译期与定义期双重拦截）；若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰。
+- 无需状态或自有方法时，可直接调用无状态形式 `Codec.define<T, Encoded>({ decode, encode, descriptor? })`；在 `decode` / `encode` 内可通过 `ctx.issue({ code, message, path?, params? })` 无抛错记录问题并返回 `Failed`（可单行 `return ctx.issue(...)` 退出，也可连续调用收集多错；深层辅助函数中需提前中断时使用 `ctx.fail(...)`），亦可通过按方向分型的 `ctx.run(child, input, at?)` 组合子 Codec（经 `ctx.failed(v)` 收窄后直接返回 `Failed`）。
+- 状态化形式要求初始 `state` 为普通对象，`methods` 中的方法若需基于旧状态计算新补丁，也可返回 `(prev) => Partial<State>` 函数；自定义 `methods` 禁止覆盖 `Codec` 保留协议名（编译期与定义期双重拦截）。
+- 执行方法（`decode` / `encode` / `parse` / `dump` 及 `safe*` 变体）支持解构单独传入回调；链式构建方法位于原型并依赖 `this`。
+- 若已有满足 `{ decode, encode }` 协议的外部对象（`CodecLike`），可直接作为模型字段或数组元素使用，或用 `Field.of(customCodec)` 包装后附加字段修饰；生态适配包可通过 `Codec.extendStandard(codec, ext)` 在保留原方法面的前提下扩展 `~standard`。
 
 ## 日期时间
 
@@ -367,54 +383,58 @@ const NodeModel: Model<NodeData, NodeDTO> = Model.define({
 
 ## 错误码速查
 
-`issue.code` 为稳定标识，可用于程序化分支处理：
+`issue.code`（类型 `IssueCode`，内置子集 `BuiltinIssueCode`）遵循 `<domain>.<reason>` 三层互斥规则：类型层 `type.<kind>`、文本格式层 `format.<wire_format>`、值约束层 `<kind>.<rule>`。带参数约束的问题同时通过冻结的 `issue.params` 透出最小结构化参数，供上层映射多语言文案：
 
-| 错误码                  | 触发条件                                                                |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `type.object`           | 解码输入不是普通对象，或编码输入为 `null`、数组或非对象                 |
-| `object.unknown_key`    | `Model.strict()` 解码时遇到未声明的外部自有属性                         |
-| `type.array`            | `arrayOf` 或 `tupleOf` 收到非数组输入                                   |
-| `array.min_length`      | `arrayOf(codec).minLength()` / `.nonEmpty()` / `.length()` 元素个数不足 |
-| `array.max_length`      | `arrayOf(codec).maxLength()` / `.length()` 元素个数超出上限             |
-| `tuple.length`          | `tupleOf` 收到的数组长度与声明的元组长度不一致                          |
-| `type.string`           | `string()`、`.fromString()` 解码或字符串格式规则收到非字符串输入        |
-| `type.number`           | `number()` 或 `number().fromString()` 编码收到非有限数字                |
-| `type.integer`          | `int()` 或 `int().fromString()` 编码收到非安全整数                      |
-| `type.bigint`           | `bigint()` 或 `bigint().fromString()` 编码收到非 `bigint` 值            |
-| `number.min`            | 数值或整数规则小于闭区间下界（`.min()` / `.nonNegative()`）             |
-| `number.max`            | 数值或整数规则大于闭区间上界（`.max()` / `.nonPositive()`）             |
-| `number.gt`             | 数值或整数规则未满足严格下界（`.gt()` / `.positive()`）                 |
-| `number.lt`             | 数值或整数规则未满足严格上界（`.lt()` / `.negative()`）                 |
-| `bigint.min`            | `bigint()` 规则小于闭区间下界（`.min()` / `.nonNegative()`）            |
-| `bigint.max`            | `bigint()` 规则大于闭区间上界（`.max()` / `.nonPositive()`）            |
-| `bigint.gt`             | `bigint()` 规则未满足严格下界（`.gt()` / `.positive()`）                |
-| `bigint.lt`             | `bigint()` 规则未满足严格上界（`.lt()` / `.negative()`）                |
-| `type.boolean`          | `boolean()` 或 `boolean().fromString()` 编码收到非布尔值                |
-| `type.datetime`         | `isoDateTime()` 解码输入非字符串，或编码输入不是有效 `Date`             |
-| `string.min_length`     | `string().minLength()` / `.nonEmpty()` / `.length()` 长度不足           |
-| `string.max_length`     | `string().maxLength()` / `.length()` 长度超出上限                       |
-| `string.pattern`        | `string().pattern()` 未匹配指定正则表达式                               |
-| `string.one_of`         | `oneOf()` 收到枚举集合之外的值                                          |
-| `value.literal`         | `literal()` 收到声明字面量集合之外的值                                  |
-| `datetime.invalid`      | 日期时间字符串的格式、日历日期、时分秒或时区偏移非法                    |
-| `datetime.out_of_range` | 日期时间换算为 UTC 后超出原生 `Date` 可表示范围                         |
-| `format.uuid`           | `uuid()` 收到非法 UUID 字符串                                           |
-| `format.email`          | `email()` 收到非法电子邮箱地址                                          |
-| `format.url`            | `url()` 收到非法 URL 字符串                                             |
-| `format.url_protocol`   | `url().protocols()` / `.https()` 协议不在允许白名单内                   |
-| `format.ipv4`           | `ipv4()` 收到非法 IPv4 地址                                             |
-| `format.ipv6`           | `ipv6()` 收到非法 IPv6 地址                                             |
-| `format.iso_date`       | `isoDate()` 收到非法 `YYYY-MM-DD` 公历日期                              |
-| `format.iso_time`       | `isoTime()` 收到非法 `HH:mm:ss` 时钟时间                                |
-| `format.int_string`     | `int().fromString()` 收到非十进制安全整数文本                           |
-| `format.number_string`  | `number().fromString()` 收到非有限数值文本                              |
-| `format.boolean_string` | `boolean().fromString()` 收到不在真/假词集合内的文本                    |
-| `format.bigint_string`  | `bigint().fromString()` 收到非十进制整数文本                            |
-| `format.json`           | `jsonString()` 收到非法 JSON 文本或不可 JSON 序列化的值                 |
-| `record.duplicate_key`  | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞                         |
-| `union.no_match`        | `Codec.union` 的所有候选分支均未匹配当前输入                            |
-| `union.invalid_tag`     | `Model.union` 的判别字段值不在已注册的分支标签集合内                    |
-| `field.required`        | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段              |
+| 错误码                  | `issue.params`                | 触发条件                                                                               |
+| ----------------------- | ----------------------------- | -------------------------------------------------------------------------------------- |
+| `type.string`           | —                             | `string()`、`.fromString()` 解码、`isoDateTime()` 解码或字符串格式规则收到非字符串输入 |
+| `type.number`           | —                             | `number()` 或 `number().fromString()` 编码收到非有限数字                               |
+| `type.integer`          | —                             | `int()` 或 `int().fromString()` 编码收到非安全整数                                     |
+| `type.bigint`           | —                             | `bigint()` 或 `bigint().fromString()` 编码收到非 `bigint` 值                           |
+| `type.boolean`          | —                             | `boolean()` 或 `boolean().fromString()` 编码收到非布尔值                               |
+| `type.date`             | —                             | `isoDateTime()` 编码输入不是有效 `Date`                                                |
+| `type.array`            | —                             | `arrayOf` 或 `tupleOf` 收到非数组输入                                                  |
+| `type.object`           | —                             | 解码输入不是普通对象，或编码输入为 `null`、数组或非对象                                |
+| `format.integer_string` | —                             | `int().fromString()` 收到非十进制安全整数文本                                          |
+| `format.number_string`  | —                             | `number().fromString()` 收到非有限数值文本                                             |
+| `format.bigint_string`  | —                             | `bigint().fromString()` 收到非十进制整数文本                                           |
+| `format.boolean_string` | `{ truthy, falsy }`           | `boolean().fromString()` 收到不在真/假词集合内的文本                                   |
+| `format.iso_datetime`   | —                             | `isoDateTime()` 收到语法、日历日期、时分秒或时区偏移非法的文本                         |
+| `format.iso_date`       | —                             | `isoDate()` 收到非法 `YYYY-MM-DD` 公历日期                                             |
+| `format.iso_time`       | —                             | `isoTime()` 收到非法 `HH:mm:ss` 时钟时间                                               |
+| `format.uuid`           | —                             | `uuid()` 收到非法 UUID 字符串                                                          |
+| `format.email`          | —                             | `email()` 收到非法电子邮箱地址                                                         |
+| `format.url`            | —                             | `url()` 收到非法 URL 字符串                                                            |
+| `format.ipv4`           | —                             | `ipv4()` 收到非法 IPv4 地址                                                            |
+| `format.ipv6`           | —                             | `ipv6()` 收到非法 IPv6 地址                                                            |
+| `format.json`           | —                             | `jsonString()` 解码收到非法 JSON 文本                                                  |
+| `string.min_length`     | `{ minLength }`               | `string().minLength()` / `.nonEmpty()` / `.length()` 长度不足                          |
+| `string.max_length`     | `{ maxLength }`               | `string().maxLength()` / `.length()` 长度超出上限                                      |
+| `string.pattern`        | `{ pattern }`                 | `string().pattern()` 未匹配指定正则表达式（`pattern` 为正则源码字符串）                |
+| `number.min`            | `{ min }`                     | `number()` 小于闭区间下界（`.min()` / `.nonNegative()`）                               |
+| `number.max`            | `{ max }`                     | `number()` 大于闭区间上界（`.max()` / `.nonPositive()`）                               |
+| `number.gt`             | `{ gt }`                      | `number()` 未满足严格下界（`.gt()` / `.positive()`）                                   |
+| `number.lt`             | `{ lt }`                      | `number()` 未满足严格上界（`.lt()` / `.negative()`）                                   |
+| `integer.min`           | `{ min }`                     | `int()` 小于闭区间下界（`.min()` / `.nonNegative()`）                                  |
+| `integer.max`           | `{ max }`                     | `int()` 大于闭区间上界（`.max()` / `.nonPositive()`）                                  |
+| `integer.gt`            | `{ gt }`                      | `int()` 未满足严格下界（`.gt()` / `.positive()`）                                      |
+| `integer.lt`            | `{ lt }`                      | `int()` 未满足严格上界（`.lt()` / `.negative()`）                                      |
+| `bigint.min`            | `{ min }`                     | `bigint()` 小于闭区间下界（`.min()` / `.nonNegative()`）                               |
+| `bigint.max`            | `{ max }`                     | `bigint()` 大于闭区间上界（`.max()` / `.nonPositive()`）                               |
+| `bigint.gt`             | `{ gt }`                      | `bigint()` 未满足严格下界（`.gt()` / `.positive()`）                                   |
+| `bigint.lt`             | `{ lt }`                      | `bigint()` 未满足严格上界（`.lt()` / `.negative()`）                                   |
+| `date.out_of_range`     | —                             | 日期时间换算为 UTC 后超出原生 `Date` 可表示范围                                        |
+| `array.min_length`      | `{ minLength }`               | `arrayOf(codec).minLength()` / `.nonEmpty()` / `.length()` 元素个数不足                |
+| `array.max_length`      | `{ maxLength }`               | `arrayOf(codec).maxLength()` / `.length()` 元素个数超出上限                            |
+| `tuple.length`          | `{ expected, actual }`        | `tupleOf` 收到的数组长度与声明的元组长度不一致                                         |
+| `record.duplicate_key`  | `{ key }`                     | `recordOf` 的键经 `keyCodec` 转换后发生同名碰撞                                        |
+| `object.missing_key`    | `{ key }`                     | 解码对象缺少必填外部键，或编码对象缺少可读取的必填声明字段                             |
+| `object.unknown_key`    | `{ key }`                     | `Model.strict()` 解码时遇到未声明的外部自有属性                                        |
+| `literal.no_match`      | `{ expected }`                | `literal()` 收到声明字面量集合之外的值                                                 |
+| `union.no_match`        | —                             | `Codec.union` 的所有候选分支均未匹配当前输入                                           |
+| `union.unknown_tag`     | `{ discriminator, expected }` | `Model.union` 的判别字段值不在已注册的分支标签集合内                                   |
+| `url.protocol`          | `{ protocol, allowed }`       | `url().protocols()` / `.https()` 协议不在允许白名单内                                  |
+| `json.unserializable`   | —                             | `jsonString()` 编码收到不可 JSON 序列化的值                                            |
 
 ## 开发与验证
 

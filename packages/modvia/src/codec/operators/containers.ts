@@ -4,20 +4,21 @@ import {
   type LengthBounds,
 } from "../../scalars/bounds/length.ts";
 import { isPlainObject, writeOwnField } from "../../shared/object.ts";
-import { INVALID } from "../core/collector.ts";
-import {
-  assertValueCodec,
-  createCodec,
-  createStatefulCodec,
-  getCodecRunner,
-  promoteToCodec,
-  type InternalRunner,
-} from "../core/runtime.ts";
+import { promoteToCodec } from "../core/codec.ts";
+import { defineCodec } from "../core/define.ts";
+import { compact } from "../core/descriptor.ts";
+import { assertValueCodec } from "../core/guards.ts";
+import { builtinIssues, pushIssue } from "../core/issues.ts";
+import { createFamily } from "../core/trait.ts";
 import type {
   Codec,
   CodecLike,
+  DecodeContext,
+  EncodeContext,
+  Failed,
   InferEncoded,
   InferValue,
+  StandardCodec,
   ValueCodecInput,
   WithCodecTrait,
 } from "../core/types.ts";
@@ -49,6 +50,65 @@ export type TupleEncoded<Items extends readonly CodecLike<unknown, unknown>[]> =
   -readonly [Index in keyof Items]: InferEncoded<Items[Index]>;
 };
 
+/** 容器 handler 共用的子 Codec 运行能力（解码与编码两侧 context 的公共形态） */
+type ChildRunner = Pick<DecodeContext, "fail" | "issue" | "failed"> & {
+  run(child: CodecLike<unknown, unknown>, input: unknown, at?: string | number): unknown;
+};
+
+interface ArrayState extends LengthBounds {
+  readonly item: StandardCodec;
+}
+
+function convertArray(input: unknown, context: ChildRunner, state: ArrayState): unknown[] | Failed {
+  if (!Array.isArray(input)) {
+    return context.issue(builtinIssues.typeArray());
+  }
+  const { minLength, maxLength } = state;
+  if (minLength !== undefined && input.length < minLength) {
+    return context.issue(builtinIssues.arrayMinLength(minLength));
+  }
+  if (maxLength !== undefined && input.length > maxLength) {
+    return context.issue(builtinIssues.arrayMaxLength(maxLength));
+  }
+  const output: unknown[] = [];
+  for (let index = 0; index < input.length; index++) {
+    const converted = context.run(state.item, input[index], index);
+    if (!context.failed(converted)) output.push(converted);
+  }
+  return output;
+}
+
+const arrayFamily = createFamily<ArrayState>({
+  state: {} as ArrayState,
+  validate: validateLengthBounds,
+  decode: (input, context: DecodeContext<ArrayState>) =>
+    convertArray(input, context, context.state),
+  encode: (input, context: EncodeContext<ArrayState>) =>
+    convertArray(input, context, context.state),
+  descriptor: (state) =>
+    compact({
+      kind: "array" as const,
+      item: state.item,
+      minLength: state.minLength,
+      maxLength: state.maxLength,
+    }),
+  methods: {
+    minLength: (min: number) => {
+      assertNonNegativeSafeInt(min, "minLength");
+      return { minLength: min };
+    },
+    maxLength: (max: number) => {
+      assertNonNegativeSafeInt(max, "maxLength");
+      return { maxLength: max };
+    },
+    length: (exact: number) => {
+      assertNonNegativeSafeInt(exact, "length");
+      return { minLength: exact, maxLength: exact };
+    },
+    nonEmpty: () => ({ minLength: 1 }),
+  },
+});
+
 /**
  * 按元素规则双向编解码数组，元素校验错误保留下标路径，可通过 .minLength()、.maxLength()、.nonEmpty() 链式派生
  *
@@ -56,68 +116,7 @@ export type TupleEncoded<Items extends readonly CodecLike<unknown, unknown>[]> =
  */
 export function arrayOf<T, Encoded>(codec: ValueCodecInput<T, Encoded>): ArrayCodec<T, Encoded[]> {
   assertValueCodec(codec, "arrayOf");
-  const itemCodec = promoteToCodec(codec);
-  const itemRunner = getCodecRunner(itemCodec);
-
-  return createStatefulCodec({
-    state: {} as LengthBounds,
-    validate: validateLengthBounds,
-    createRunner(state): InternalRunner<T[], Encoded[]> {
-      const { minLength, maxLength } = state;
-      return (input, direction, collector) => {
-        if (!Array.isArray(input)) {
-          return collector.add("type.array", "Expected an array");
-        }
-        const len = input.length;
-        if (minLength !== undefined && len < minLength) {
-          return collector.add("array.min_length", `Expected at least ${minLength} items`);
-        }
-        if (maxLength !== undefined && len > maxLength) {
-          return collector.add("array.max_length", `Expected at most ${maxLength} items`);
-        }
-
-        const output: (T | Encoded)[] = [];
-        let failed = false;
-
-        for (let index = 0; index < len; index++) {
-          collector.pushSegment(index);
-          const converted = itemRunner(input[index], direction, collector);
-          collector.popSegment();
-          if (converted === INVALID) {
-            failed = true;
-          } else if (!failed) {
-            output.push(converted);
-          }
-        }
-
-        return failed ? INVALID : (output as T[] | Encoded[]);
-      };
-    },
-    createDescriptor(state, description) {
-      return {
-        kind: "array",
-        item: itemCodec as Codec<unknown, unknown>,
-        ...(state.minLength !== undefined ? { minLength: state.minLength } : {}),
-        ...(state.maxLength !== undefined ? { maxLength: state.maxLength } : {}),
-        ...(description !== undefined ? { description } : {}),
-      };
-    },
-    methods: {
-      minLength: (min: number) => {
-        assertNonNegativeSafeInt(min, "minLength");
-        return { minLength: min };
-      },
-      maxLength: (max: number) => {
-        assertNonNegativeSafeInt(max, "maxLength");
-        return { maxLength: max };
-      },
-      length: (exact: number) => {
-        assertNonNegativeSafeInt(exact, "length");
-        return { minLength: exact, maxLength: exact };
-      },
-      nonEmpty: () => ({ minLength: 1 }),
-    },
-  });
+  return arrayFamily({ item: promoteToCodec(codec) }) as unknown as ArrayCodec<T, Encoded[]>;
 }
 
 /** 编解码动态字符串键字典，每个属性值按 valueCodec 转换 */
@@ -133,66 +132,40 @@ export function recordOf(
   first: ValueCodecInput<unknown, unknown>,
   second?: ValueCodecInput<unknown, unknown>,
 ): Codec<Record<string, unknown>, Record<string, unknown>> {
-  const keyInput = (second !== undefined ? first : undefined) as
-    | CodecLike<string, string>
-    | undefined;
+  const keyInput = second !== undefined ? first : undefined;
   const valueInput = second ?? first;
-
   if (keyInput !== undefined) assertValueCodec(keyInput, "recordOf");
   assertValueCodec(valueInput, "recordOf");
 
-  const keyCodec = keyInput !== undefined ? promoteToCodec(keyInput) : undefined;
-  const valueCodec = promoteToCodec(valueInput);
-  const keyRunner = keyCodec !== undefined ? getCodecRunner(keyCodec) : undefined;
-  const valueRunner = getCodecRunner(valueCodec);
+  const keyCodec =
+    keyInput !== undefined
+      ? (promoteToCodec(keyInput) as unknown as StandardCodec<string, string>)
+      : undefined;
+  const valueCodec: StandardCodec = promoteToCodec(valueInput);
 
-  return createCodec<Record<string, unknown>, Record<string, unknown>>(
-    (input, direction, collector) => {
-      if (!isPlainObject(input)) {
-        return collector.add("type.object", "Expected a plain object");
+  const convert = (input: unknown, context: ChildRunner): Record<string, unknown> | Failed => {
+    if (!isPlainObject(input)) {
+      return context.issue(builtinIssues.typeObject());
+    }
+    const output: Record<string, unknown> = {};
+    for (const rawKey of Object.keys(input)) {
+      const key = keyCodec === undefined ? rawKey : context.run(keyCodec, rawKey, rawKey);
+      const value = context.run(valueCodec, input[rawKey], rawKey);
+      if (context.failed(key) || context.failed(value)) continue;
+      if (Object.hasOwn(output, key as string)) {
+        pushIssue(context, builtinIssues.recordDuplicateKey(key as string), [rawKey]);
+        continue;
       }
+      writeOwnField(output, key as string, value);
+    }
+    return output;
+  };
 
-      const output: Record<string, unknown> = {};
-      let failed = false;
-
-      for (const rawKey of Object.keys(input)) {
-        collector.pushSegment(rawKey);
-        const convertedKey =
-          keyRunner !== undefined ? keyRunner(rawKey, direction, collector) : rawKey;
-        const convertedValue = valueRunner(input[rawKey], direction, collector);
-
-        if (convertedKey === INVALID || convertedValue === INVALID) {
-          collector.popSegment();
-          failed = true;
-          continue;
-        }
-
-        if (Object.hasOwn(output, convertedKey)) {
-          collector.add(
-            "record.duplicate_key",
-            `Duplicate record key after conversion: ${convertedKey}`,
-          );
-          collector.popSegment();
-          failed = true;
-          continue;
-        }
-
-        collector.popSegment();
-        if (!failed) {
-          writeOwnField(output, convertedKey, convertedValue);
-        }
-      }
-
-      return failed ? INVALID : output;
-    },
-    {
-      descriptor: {
-        kind: "record",
-        ...(keyCodec !== undefined ? { key: keyCodec } : {}),
-        value: valueCodec,
-      },
-    },
-  );
+  return defineCodec<Record<string, unknown>, Record<string, unknown>>({
+    decode: convert,
+    encode: convert,
+    descriptor: compact({ kind: "record" as const, key: keyCodec, value: valueCodec }),
+  });
 }
 
 /** 按固定长度与各位置 Codec 双向编解码异构元组 */
@@ -202,47 +175,23 @@ export function tupleOf<const Items extends readonly ValueCodecInput<unknown, un
   for (const item of items) {
     assertValueCodec(item, "tupleOf");
   }
-
-  const promotedItems = Object.freeze(items.map((item) => promoteToCodec(item)));
-  const itemRunners = promotedItems.map((item) => getCodecRunner(item));
-  const expectedLength = itemRunners.length;
-
-  type DecodedTuple = TupleValues<Items>;
-  type EncodedTuple = TupleEncoded<Items>;
-
-  return createCodec<DecodedTuple, EncodedTuple>(
-    (input, direction, collector) => {
-      if (!Array.isArray(input)) {
-        return collector.add("type.array", "Expected an array");
-      }
-      if (input.length !== expectedLength) {
-        return collector.add(
-          "tuple.length",
-          `Expected tuple of length ${expectedLength}, got ${input.length}`,
-        );
-      }
-
-      const output: unknown[] = [];
-      let failed = false;
-
-      for (let index = 0; index < expectedLength; index++) {
-        collector.pushSegment(index);
-        const converted = itemRunners[index]!(input[index], direction, collector);
-        collector.popSegment();
-        if (converted === INVALID) {
-          failed = true;
-        } else if (!failed) {
-          output.push(converted);
-        }
-      }
-
-      return failed ? INVALID : (output as DecodedTuple | EncodedTuple);
-    },
-    {
-      descriptor: {
-        kind: "tuple",
-        items: promotedItems,
-      },
-    },
+  const promoted: readonly StandardCodec[] = Object.freeze(
+    items.map((item) => promoteToCodec(item)),
   );
+
+  const convert = (input: unknown, context: ChildRunner): unknown[] | Failed => {
+    if (!Array.isArray(input)) {
+      return context.issue(builtinIssues.typeArray());
+    }
+    if (input.length !== promoted.length) {
+      return context.issue(builtinIssues.tupleLength(promoted.length, input.length));
+    }
+    return promoted.map((item, index) => context.run(item, input[index], index));
+  };
+
+  return defineCodec({
+    decode: convert,
+    encode: convert,
+    descriptor: { kind: "tuple", items: promoted },
+  }) as unknown as Codec<TupleValues<Items>, TupleEncoded<Items>>;
 }

@@ -1,13 +1,14 @@
-import type { Codec, InferEncoded, InferValue, StandardSchemaV1 } from "modvia";
+import { Codec, type StandardCodec } from "modvia";
 import { toJsonSchema } from "./converter.ts";
 import type { StandardJSONSchemaV1, ToJsonSchemaOptions, WithJsonSchema } from "./types.ts";
 
 /**
  * 为任意 Modvia Codec 或 Model 挂载 StandardJSONSchemaV1（`~standard.jsonSchema`）能力
  *
- * @description 保留原实例的全部方法、属性与内部符号标识，使其可继续参与容器嵌套、模型组合及直接传入 OpenAPI / AI Tool 框架
+ * @description 经 Codec.extendStandard 派生同构实例：保留全部方法、结构描述符与执行行为，可继续参与容器嵌套、模型组合及直接传入 OpenAPI / AI Tool 框架；
+ * 在其上继续派生的新定义不继承 jsonSchema 扩展（其 Schema 已不同于原定义）
  */
-export function withJsonSchema<C extends Codec<unknown, unknown>>(codec: C): WithJsonSchema<C> {
+export function withJsonSchema<C extends StandardCodec>(codec: C): WithJsonSchema<C> {
   if (
     typeof codec !== "object" ||
     codec === null ||
@@ -16,8 +17,6 @@ export function withJsonSchema<C extends Codec<unknown, unknown>>(codec: C): Wit
   ) {
     throw new TypeError("withJsonSchema requires a standard Modvia Codec or Model instance");
   }
-
-  const baseStandard = codec["~standard"] as StandardSchemaV1.Props<InferEncoded<C>, InferValue<C>>;
 
   const jsonSchemaConverter: StandardJSONSchemaV1.Converter = Object.freeze({
     input(options: StandardJSONSchemaV1.Options): Record<string, unknown> {
@@ -36,28 +35,7 @@ export function withJsonSchema<C extends Codec<unknown, unknown>>(codec: C): Wit
     },
   });
 
-  const combinedStandard = Object.freeze({
-    ...baseStandard,
+  return Codec.extendStandard(codec, {
     jsonSchema: jsonSchemaConverter,
-  });
-
-  const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(codec);
-  descriptors["~standard"] = {
-    value: combinedStandard,
-    enumerable: true,
-    configurable: false,
-    writable: false,
-  };
-  let wrapped: unknown;
-  if ("brand" in descriptors) {
-    descriptors.brand = {
-      value: () => wrapped,
-      enumerable: true,
-      configurable: false,
-      writable: false,
-    };
-  }
-
-  wrapped = Object.freeze(Object.create(Object.getPrototypeOf(codec), descriptors));
-  return wrapped as WithJsonSchema<C>;
+  }) as unknown as WithJsonSchema<C>;
 }

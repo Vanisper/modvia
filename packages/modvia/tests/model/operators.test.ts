@@ -7,7 +7,6 @@ import {
   literal,
   Model,
   number,
-  oneOf,
   string,
   type InferData,
   type InferDTO,
@@ -20,7 +19,7 @@ const BaseUser = Model.define({
   fields: {
     id: string(),
     name: string().trim().nonEmpty(),
-    role: oneOf("admin", "member"),
+    role: literal("admin", "member"),
     createdAt: isoDateTime().alias("created_at"),
     bio: string().optional(),
   },
@@ -122,7 +121,7 @@ describe("model introspection & derivation", () => {
 
   test("partial 支持全量与指定字段可选化，保留外部别名并移除创建期默认值避免覆盖", () => {
     const WithDefault = BaseUser.extend({
-      status: oneOf("active", "archived").default("active").alias("account_status"),
+      status: literal("active", "archived").default("active").alias("account_status"),
     });
 
     const FullPatch = WithDefault.partial();
@@ -260,11 +259,22 @@ describe("model introspection & derivation", () => {
       issues: [
         {
           path: ["created_at"],
-          code: "field.required",
+          code: "object.missing_key",
           message: "Missing required field: created_at",
+          params: { key: "created_at" },
         },
-        { path: ["createdAt"], code: "object.unknown_key", message: "Unknown field: createdAt" },
-        { path: ["typo_flag"], code: "object.unknown_key", message: "Unknown field: typo_flag" },
+        {
+          path: ["createdAt"],
+          code: "object.unknown_key",
+          message: "Unknown field: createdAt",
+          params: { key: "createdAt" },
+        },
+        {
+          path: ["typo_flag"],
+          code: "object.unknown_key",
+          message: "Unknown field: typo_flag",
+          params: { key: "typo_flag" },
+        },
       ],
     });
 
@@ -339,7 +349,7 @@ describe("model introspection & derivation", () => {
 describe("Model.union", () => {
   const TextBlock = Model.define({
     fields: {
-      kind: oneOf("text").alias("block_type"),
+      kind: literal("text").alias("block_type"),
       body: string().trim().nonEmpty(),
     },
   });
@@ -392,12 +402,12 @@ describe("Model.union", () => {
   test("精确定位缺失标签、非法标签及命中分支内部字段的错误路径", () => {
     expect(ContentBlock.safeParse({})).toMatchObject({
       ok: false,
-      issues: [{ path: ["block_type"], code: "field.required" }],
+      issues: [{ path: ["block_type"], code: "object.missing_key" }],
     });
 
     expect(ContentBlock.safeParse({ block_type: "video" })).toMatchObject({
       ok: false,
-      issues: [{ path: ["block_type"], code: "union.invalid_tag" }],
+      issues: [{ path: ["block_type"], code: "union.unknown_tag" }],
     });
 
     expect(ContentBlock.safeDecode({ block_type: "image", image_url: "" })).toMatchObject({
@@ -407,12 +417,12 @@ describe("Model.union", () => {
 
     expect(ContentBlock.safeDump({})).toMatchObject({
       ok: false,
-      issues: [{ path: ["kind"], code: "field.required" }],
+      issues: [{ path: ["kind"], code: "object.missing_key" }],
     });
 
     expect(ContentBlock.safeDump({ kind: "video" })).toMatchObject({
       ok: false,
-      issues: [{ path: ["kind"], code: "union.invalid_tag" }],
+      issues: [{ path: ["kind"], code: "union.unknown_tag" }],
     });
   });
 

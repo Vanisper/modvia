@@ -12,7 +12,6 @@ import {
   literal,
   Model,
   number,
-  oneOf,
   string,
   ValidationError,
   type InferData,
@@ -36,7 +35,7 @@ const MemberModel = Model.define({
   fields: {
     id: string(),
     name: string().trim().nonEmpty(),
-    role: oneOf("admin", "manager", "member"),
+    role: literal("admin", "manager", "member"),
     joinedAt: isoDateTime().alias("joined_at"),
     department: Department,
   },
@@ -95,7 +94,6 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
       "isoDateTime",
       "literal",
       "number",
-      "oneOf",
       "recordOf",
       "string",
       "tupleOf",
@@ -118,6 +116,7 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
 
     expect(Object.keys(Codec).sort()).toStrictEqual([
       "define",
+      "extendStandard",
       "inspect",
       "invert",
       "lazy",
@@ -329,8 +328,8 @@ describe("packaged artifacts (modvia & modvia/codec)", () => {
     if (!ValidationError.is(caught)) throw new Error("Expected ValidationError");
     expect(caught.issues.map((issue) => issue.code)).toEqual([
       "string.min_length",
-      "string.one_of",
-      "datetime.invalid",
+      "literal.no_match",
+      "format.iso_datetime",
       "type.object",
     ]);
   });

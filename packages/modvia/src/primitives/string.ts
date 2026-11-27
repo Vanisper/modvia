@@ -1,5 +1,7 @@
-import { createStatefulCodec } from "../codec/core/runtime.ts";
-import type { WithCodecTrait } from "../codec/core/types.ts";
+import { defineCodec } from "../codec/core/define.ts";
+import { compact } from "../codec/core/descriptor.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
+import type { Failed, StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
 import {
   assertNonNegativeSafeInt,
   validateLengthBounds,
@@ -31,43 +33,41 @@ interface StringState extends LengthBounds {
   readonly pattern?: RegExp;
 }
 
-const defaultStringCodec: StringCodec = createStatefulCodec({
+/** 两端对称：先按状态规范化（trim），再守卫长度与正则 */
+function convertString(
+  input: unknown,
+  context: StatefulCodecContext<StringState>,
+): string | Failed {
+  if (typeof input !== "string") {
+    return context.issue(builtinIssues.typeString());
+  }
+  const { trim, minLength, maxLength, pattern } = context.state;
+  const value = trim ? input.trim() : input;
+  if (minLength !== undefined && value.length < minLength) {
+    return context.issue(builtinIssues.stringMinLength(minLength));
+  }
+  if (maxLength !== undefined && value.length > maxLength) {
+    return context.issue(builtinIssues.stringMaxLength(maxLength));
+  }
+  if (pattern !== undefined && !pattern.test(value)) {
+    return context.issue(builtinIssues.stringPattern(pattern.source));
+  }
+  return value;
+}
+
+const defaultStringCodec: StringCodec = defineCodec({
   state: { trim: false } as StringState,
   validate: validateLengthBounds,
-  createRunner(state) {
-    const { trim, minLength, maxLength, pattern } = state;
-    if (!trim && minLength === undefined && maxLength === undefined && pattern === undefined) {
-      return (input, _direction, collector) =>
-        typeof input === "string" ? input : collector.add("type.string", "Expected a string");
-    }
-    return (input, _direction, collector) => {
-      if (typeof input !== "string") {
-        return collector.add("type.string", "Expected a string");
-      }
-      const value = trim ? input.trim() : input;
-      const len = value.length;
-      if (minLength !== undefined && len < minLength) {
-        return collector.add("string.min_length", `Expected at least ${minLength} characters`);
-      }
-      if (maxLength !== undefined && len > maxLength) {
-        return collector.add("string.max_length", `Expected at most ${maxLength} characters`);
-      }
-      if (pattern !== undefined && !pattern.test(value)) {
-        return collector.add("string.pattern", `String does not match pattern ${pattern}`);
-      }
-      return value;
-    };
-  },
-  createDescriptor(state, description) {
-    return {
-      kind: "string",
+  decode: convertString,
+  encode: convertString,
+  descriptor: (state) =>
+    compact({
+      kind: "string" as const,
       trim: state.trim,
-      ...(state.minLength !== undefined ? { minLength: state.minLength } : {}),
-      ...(state.maxLength !== undefined ? { maxLength: state.maxLength } : {}),
-      ...(state.pattern !== undefined ? { pattern: state.pattern.source } : {}),
-      ...(description !== undefined ? { description } : {}),
-    };
-  },
+      minLength: state.minLength,
+      maxLength: state.maxLength,
+      pattern: state.pattern?.source,
+    }),
   methods: {
     trim: () => ({ trim: true }),
     minLength: (min: number) => {

@@ -60,7 +60,7 @@ vp run bench
 
 1. 工作区构建（生成 `dist` 与类型声明，并通过 `publint` 与 `attw` 校验包出口契约）；
 2. 格式、静态检查与分层依赖守卫；
-3. 单元与产物集成测试（`tests/artifact.test.ts` 直接通过 `modvia`、`modvia/codec`、`modvia/formats`、`@modvia/json-schema` 与 `@modvia/zod` 包出口验证构建产物）。
+3. 单元、属性与产物集成测试（往返收敛律以 fast-check 属性测试锁定，`temporal` 手写扫描器以命名分组正则预言机做等价对照；`tests/artifact.test.ts` 直接通过 `modvia`、`modvia/codec`、`modvia/formats`、`@modvia/json-schema` 与 `@modvia/zod` 包出口验证构建产物）。
 
 `vp run bench` 先构建各包产物，再通过原生 Node ESM 执行核心热路径基准测试（`packages/modvia/benchmarks`）与跨库对比基准测试（`packages/zod/benchmarks`）。
 

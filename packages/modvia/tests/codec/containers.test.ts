@@ -1,5 +1,13 @@
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
-import { arrayOf, isoDateTime, number, oneOf, recordOf, string, tupleOf } from "../../src/codec.ts";
+import {
+  arrayOf,
+  isoDateTime,
+  literal,
+  number,
+  recordOf,
+  string,
+  tupleOf,
+} from "../../src/codec.ts";
 import { Model, type InferEncoded, type InferValue } from "../../src/index.ts";
 
 const Metric = Model.define({
@@ -43,7 +51,7 @@ describe("containers (recordOf)", () => {
   });
 
   test("recordOf 支持受限键 Codec、检测转换后键名冲突并安全处理 __proto__", () => {
-    const Locale = oneOf("zh-CN", "en-US");
+    const Locale = literal("zh-CN", "en-US");
     const Messages = recordOf(Locale, string().trim().nonEmpty());
 
     const messages = Messages.decode({ "zh-CN": "  你好  " });
@@ -52,7 +60,7 @@ describe("containers (recordOf)", () => {
 
     expect(Messages.safeParse({ "fr-FR": "Bonjour" })).toMatchObject({
       ok: false,
-      issues: [{ path: ["fr-FR"], code: "string.one_of" }],
+      issues: [{ path: ["fr-FR"], code: "literal.no_match" }],
     });
 
     expectTypeOf<InferValue<typeof Messages>>().toEqualTypeOf<

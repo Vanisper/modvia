@@ -1,4 +1,4 @@
-import { Codec, type CodecContext, type PathSegment } from "modvia/codec";
+import { Codec, type CodecContext, type Failed, type PathSegment } from "modvia/codec";
 import {
   $ZodAsyncError,
   $ZodEncodeError,
@@ -72,20 +72,19 @@ export function zodCodec<S extends $ZodType>(
     decode(rawInput, context) {
       const result = runZodStep(() => safeParse(schema, rawInput));
       if (!result.success) {
-        reportZodIssues(result.error.issues, context);
-        return undefined as never;
+        return reportZodIssues(result.error.issues, context);
       }
       return result.data;
     },
     encode(domainValue, context) {
       const result = runZodStep(() => safeEncode(schema, domainValue as output<S>));
       if (!result.success) {
-        reportZodIssues(result.error.issues, context);
-        return undefined as never;
+        return reportZodIssues(result.error.issues, context);
       }
       return result.data;
     },
-    meta: {
+    descriptor: {
+      kind: "custom",
       format: "zod",
       ...(description !== undefined ? { description } : {}),
     },
@@ -111,16 +110,18 @@ function runZodStep<R>(execute: () => R): R {
   }
 }
 
-function reportZodIssues(issues: readonly $ZodIssue[], context: CodecContext): void {
+function reportZodIssues(issues: readonly $ZodIssue[], context: CodecContext): Failed {
+  let failed: Failed | undefined;
   for (const issue of issues) {
     const code =
       typeof issue.code === "string" && issue.code.length > 0 ? `zod.${issue.code}` : "zod.invalid";
-    context.issue({
+    failed = context.issue({
       code,
       message: issue.message,
       path: normalizeZodPath(issue.path),
     });
   }
+  return failed ?? context.issue({ code: "zod.invalid", message: "Validation failed" });
 }
 
 function normalizeZodPath(rawPath: readonly PropertyKey[]): readonly PathSegment[] | undefined {

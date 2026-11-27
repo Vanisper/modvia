@@ -9,7 +9,6 @@ import {
   literal,
   Model,
   number,
-  oneOf,
   recordOf,
   string,
   tupleOf,
@@ -33,7 +32,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
           .pattern(/^[a-z0-9_]+$/),
         age: int().nonNegative().max(150).optional().describe("Age in years"),
         score: number().nonNegative().max(100).default(60),
-        role: oneOf("admin", "member").alias("account_role"),
+        role: literal("admin", "member").alias("account_role"),
         active: boolean(),
         nickname: string().nullable(),
         createdAt: isoDateTime(),
@@ -177,7 +176,7 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
       exclusiveMaximum: true,
     });
 
-    const LocaleMap = recordOf(oneOf("zh", "en"), string());
+    const LocaleMap = recordOf(literal("zh", "en"), string());
     expect(toJsonSchema(LocaleMap, { includeSchemaUri: false })).toStrictEqual({
       type: "object",
       propertyNames: { type: "string", enum: ["zh", "en"] },
@@ -359,6 +358,27 @@ describe("@modvia/json-schema — toJsonSchema & withJsonSchema", () => {
     expect(
       arrayOf(Task).parse([{ task_id: "550e8400-e29b-41d4-a716-446655440000" }]),
     ).toStrictEqual([{ taskId: "550e8400-e29b-41d4-a716-446655440000", done: false }]);
+
+    // withJsonSchema 同样支持任意标量与带自有方法的 Codec，且保持原方法面
+    const PortWithSchema = withJsonSchema(int().min(1).max(65535));
+    expect(PortWithSchema["~standard"].jsonSchema.input({ target: "draft-2020-12" })).toMatchObject(
+      { type: "integer", minimum: 1, maximum: 65535 },
+    );
+    expect(PortWithSchema.fromString().decode("8080")).toBe(8080);
+
+    // describe 与 fromString 换序在 DTO 与 Data 两侧导出完全一致的 Schema
+    const DescribedPortA = int().min(1).describe("TCP port").fromString();
+    const DescribedPortB = int().fromString().min(1).describe("TCP port");
+    expect(toJsonSchema(DescribedPortA, { side: "dto", includeSchemaUri: false })).toStrictEqual(
+      toJsonSchema(DescribedPortB, { side: "dto", includeSchemaUri: false }),
+    );
+    expect(toJsonSchema(DescribedPortA, { side: "dto", includeSchemaUri: false })).toMatchObject({
+      type: "string",
+      description: "TCP port",
+    });
+    expect(toJsonSchema(DescribedPortA, { side: "data", includeSchemaUri: false })).toStrictEqual(
+      toJsonSchema(DescribedPortB, { side: "data", includeSchemaUri: false }),
+    );
 
     // Model.strict() 在显式传入 additionalProperties: true 时仍强制输出 additionalProperties: false
     const LooseModel = Model.define({ fields: { a: string() } });

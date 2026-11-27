@@ -169,6 +169,7 @@ function buildDescriptorSchema(
   switch (descriptor.kind) {
     case "string": {
       const schema: JsonSchemaObject = { type: "string" };
+      if (descriptor.format !== undefined) schema.format = descriptor.format;
       if (descriptor.minLength !== undefined) schema.minLength = descriptor.minLength;
       if (descriptor.maxLength !== undefined) schema.maxLength = descriptor.maxLength;
       if (descriptor.pattern !== undefined) schema.pattern = descriptor.pattern;
@@ -205,12 +206,36 @@ function buildDescriptorSchema(
       }
       return {};
     }
+    case "numericString": {
+      if (side === "dto") {
+        return descriptor.numericKind === "number"
+          ? { type: "string" }
+          : { type: "string", pattern: "^[+-]?\\d+$" };
+      }
+      if (descriptor.numericKind === "bigint") {
+        if (context.strict) {
+          throw new TypeError(
+            "Native bigint cannot be represented in strict JSON Schema; use bigint().fromString() for string wire representation",
+          );
+        }
+        return {};
+      }
+      return { type: descriptor.numericKind };
+    }
     case "boolean":
       return { type: "boolean" };
+    case "booleanString": {
+      if (side === "data") return { type: "boolean" };
+      if (descriptor.caseSensitive) {
+        return {
+          type: "string",
+          enum: [...new Set([...descriptor.truthy, ...descriptor.falsy])],
+        };
+      }
+      return { type: "string" };
+    }
     case "unknown":
       return {};
-    case "enum":
-      return { type: "string", enum: [...descriptor.values] };
     case "literal":
       return convertLiterals(descriptor.values, context);
     case "datetime": {
@@ -224,6 +249,8 @@ function buildDescriptorSchema(
       }
       return {};
     }
+    case "json":
+      return side === "dto" ? { type: "string" } : {};
     case "array": {
       const schema: JsonSchemaObject = {
         type: "array",
@@ -261,7 +288,10 @@ function buildDescriptorSchema(
       }
       const keyDescriptor = Codec.inspect(descriptor.key);
       if (context.target === "openapi-3.0") {
-        if (keyDescriptor.kind === "enum") {
+        if (
+          keyDescriptor.kind === "literal" &&
+          keyDescriptor.values.every((value): value is string => typeof value === "string")
+        ) {
           const properties: Record<string, JsonSchemaObject> = {};
           for (const key of keyDescriptor.values) {
             properties[key] = valueSchema;
@@ -335,6 +365,10 @@ function buildDescriptorSchema(
         ...(required.length > 0 ? { required } : {}),
         additionalProperties: descriptor.strict ? false : context.additionalProperties,
       };
+    }
+    case "refined": {
+      // 精化步骤为不透明运行时约束，Schema 按内层结构诚实导出
+      return convertNode(descriptor.inner, side, context);
     }
     case "pipe": {
       return side === "dto"

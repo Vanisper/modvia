@@ -1,5 +1,6 @@
 import { defineCodec } from "../codec/core/define.ts";
-import type { StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
+import { builtinIssues } from "../codec/core/issues.ts";
+import type { Failed, StatefulCodecContext, WithCodecTrait } from "../codec/core/types.ts";
 
 /** 电子邮箱编解码器自有链式方法特征 */
 export interface EmailTrait {
@@ -17,11 +18,12 @@ interface EmailState {
   readonly lowercase: boolean;
 }
 
+const MAX_EMAIL_LENGTH = 254;
 const localPartPattern = /^(?!\.)(?!.*\.\.)[a-zA-Z0-9_'+\-.]*[a-zA-Z0-9_'+-]$/;
 const domainPartPattern = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
 function isValidEmailAddress(value: string): boolean {
-  if (value.length > 254) return false;
+  if (value.length > MAX_EMAIL_LENGTH) return false;
   const atIndex = value.indexOf("@");
   if (atIndex < 1 || atIndex > 64 || value.indexOf("@", atIndex + 1) !== -1) {
     return false;
@@ -31,31 +33,30 @@ function isValidEmailAddress(value: string): boolean {
   return localPartPattern.test(local) && domainPartPattern.test(domain);
 }
 
-function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): string {
+function validateEmail(input: unknown, ctx: StatefulCodecContext<EmailState>): string | Failed {
   if (typeof input !== "string") {
-    return ctx.fail("type.string", "Expected a string");
+    return ctx.issue(builtinIssues.typeString());
   }
   let normalized = ctx.state.trim ? input.trim() : input;
   if (ctx.state.lowercase) {
     normalized = normalized.toLowerCase();
   }
   if (!isValidEmailAddress(normalized)) {
-    return ctx.fail("format.email", "Expected a valid email address");
+    return ctx.issue(builtinIssues.formatEmail());
   }
   return normalized;
 }
-
-const emailSchema = Object.freeze({ type: "string", format: "email", maxLength: 254 });
 
 const defaultEmailCodec: EmailCodec = defineCodec({
   state: { trim: false, lowercase: false } as EmailState,
   decode: validateEmail,
   encode: validateEmail,
-  meta: {
+  descriptor: (state) => ({
+    kind: "string",
     format: "email",
-    encodedSchema: emailSchema,
-    decodedSchema: emailSchema,
-  },
+    trim: state.trim,
+    maxLength: MAX_EMAIL_LENGTH,
+  }),
   methods: {
     trim: () => ({ trim: true }),
     lowercase: () => ({ lowercase: true }),

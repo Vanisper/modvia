@@ -153,7 +153,7 @@ describe("codec kernel", () => {
     const base = number();
     expect(base.or("auto", "inherit").decode("inherit")).toBe("inherit");
     for (const args of [[], [{}], [[]], [string()], [1n], [Symbol()]]) {
-      expect(() => Reflect.apply(base.or, undefined, args)).toThrow(TypeError);
+      expect(() => base.or(...(args as unknown as [string]))).toThrow(TypeError);
     }
   });
 
@@ -232,7 +232,14 @@ describe("codec kernel", () => {
       .refine((s) => !s.startsWith("_"), "user.leading_underscore", "No leading underscore")
       .brand<"Username">();
 
-    expect(Codec.inspect(Username)).toStrictEqual({
+    // 精化节点诚实标注运行时约束：inner 保留内层结构与说明，相邻精化步骤扁平合并
+    const UsernameDescriptor = Codec.inspect(Username);
+    expect(UsernameDescriptor).toMatchObject({
+      kind: "refined",
+      refinements: [{ kind: "normalize" }, { kind: "refine", code: "user.leading_underscore" }],
+    });
+    if (UsernameDescriptor.kind !== "refined") throw new Error("Expected refined descriptor");
+    expect(Codec.inspect(UsernameDescriptor.inner)).toStrictEqual({
       kind: "string",
       trim: true,
       minLength: 3,
@@ -285,16 +292,18 @@ describe("codec kernel", () => {
       base: DerivedA,
       literals: [null],
     });
+    // 接入带自有方法 Codec 的上游槽：整体描述为 pipe，上游链保持原实例引用
     const trimmed = string().trim();
-    expect(Codec.inspect(trimmed.pipe(int().fromString()))).toMatchObject({
-      kind: "pipe",
-      first: trimmed,
-    });
+    const trimmedPort = Codec.inspect(trimmed.pipe(int().fromString()));
+    if (trimmedPort.kind !== "pipe") throw new Error("Expected pipe descriptor");
+    expect(Codec.inspect(trimmedPort.first)).toMatchObject({ kind: "pipe", first: trimmed });
+    expect(Codec.inspect(trimmedPort.second)).toStrictEqual({ kind: "integer" });
 
     const CustomDecimal = Codec.define<number, string>({
       decode: (v) => Number(v),
       encode: (v) => String(v),
-      meta: {
+      descriptor: {
+        kind: "custom",
         format: "decimal",
         description: "Base-10 decimal string",
         encodedSchema: { type: "string", format: "decimal" },
@@ -344,7 +353,8 @@ describe("codec kernel", () => {
         }
         return input.toFixed(ctx.state.scale);
       },
-      meta: (state) => ({
+      descriptor: (state) => ({
+        kind: "custom",
         format: "decimal",
         encodedSchema: { type: "string" },
         decodedSchema: {
@@ -427,7 +437,7 @@ describe("codec kernel", () => {
     expect(Object.isFrozen(nonPlainState)).toBe(false);
   });
 
-  test("收集器池在嵌套重入调用与未捕获异常恢复后保持路径与错误完全隔离", () => {
+  test("每次顶层调用独占收集器，嵌套重入与未捕获异常后保持路径与错误完全隔离，回调结束后 context 立即失效", () => {
     const InnerPositive = Codec.define({
       state: { min: 1 },
       decode(input, ctx): number {
@@ -551,14 +561,13 @@ describe("codec kernel", () => {
       second: "clean",
     });
 
-    // 重入子调用执行期间外层 context 挂起不可被内层篡用，子调用退出后外层自身 context 自动恢复可用
-    let suspendedOuterCtx:
-      | { issue: (detail: { code: string; message: string }) => void }
-      | undefined;
+    // 外层回调同步执行期间（含其内部发起的重入顶层调用）外层 context 仍属于外层自身的独立收集器：
+    // 写入只影响外层本次结果，不会串入重入调用或后续调用
+    let activeOuterCtx: { issue: (detail: { code: string; message: string }) => void } | undefined;
     const ReentrantChild = Codec.define({
       decode(input): string {
-        if (input === "steal-outer") {
-          suspendedOuterCtx?.issue({ code: "stolen.outer", message: "from-child" });
+        if (input === "report-to-outer") {
+          activeOuterCtx?.issue({ code: "outer.from_child", message: "reported during child" });
         }
         return String(input);
       },
@@ -566,21 +575,26 @@ describe("codec kernel", () => {
     });
     const ReentrantParent = Codec.define({
       decode(input, ctx): string {
-        suspendedOuterCtx = ctx;
-        const childVal = ReentrantChild.parse(input);
-        if (childVal === "flag-after-child") {
+        activeOuterCtx = ctx;
+        const childResult = ReentrantChild.safeParse(input);
+        expect(childResult).toEqual({ ok: true, value: input });
+        if (input === "flag-after-child") {
           ctx.issue({ code: "parent.after_child", message: "resumed cleanly" });
         }
-        return childVal;
+        return String(input);
       },
       encode: (input) => String(input),
     });
 
-    expect(() => ReentrantParent.safeParse("steal-outer")).toThrow(Error);
+    expect(ReentrantParent.safeParse("report-to-outer")).toEqual({
+      ok: false,
+      issues: [{ path: [], code: "outer.from_child", message: "reported during child" }],
+    });
     expect(ReentrantParent.safeParse("flag-after-child")).toEqual({
       ok: false,
       issues: [{ path: [], code: "parent.after_child", message: "resumed cleanly" }],
     });
+    expect(() => activeOuterCtx?.issue({ code: "stale.parent", message: "late" })).toThrow(Error);
 
     // 即使经历上述所有拦截，后续解析结果中也绝不混入任何幽灵错误
     expect(StatefulCaptor.parse("clean")).toBe("clean");
@@ -589,25 +603,20 @@ describe("codec kernel", () => {
       issues: [{ path: [], code: "inner.min", message: "too small" }],
     });
 
-    // 跨模块副本通过全局 Symbol.for 协议共享 runner 与 INVALID 哨兵时，失败信号正常识别
-    const foreignCodec = {
+    // 跨副本互操作只走公开协议：伪造的全局符号 runner 与 INVALID 哨兵不会被识别，对象按 CodecLike 执行
+    const forgedCodec = {
       [Symbol.toStringTag]: "modvia.Codec" as const,
-      decode: () => 0,
-      encode: () => 0,
+      decode: (input: unknown) => input,
+      encode: (input: unknown) => input,
     };
-    Object.defineProperty(foreignCodec, Symbol.for("modvia.codecRunner"), {
-      value(
-        _input: unknown,
-        _dir: "decode" | "encode",
-        collector: { add: (code: string, message: string) => unknown },
-      ) {
-        collector.add("foreign.invalid", "failed across copy");
-        return Symbol.for("modvia.invalid");
-      },
+    Object.defineProperty(forgedCodec, Symbol.for("modvia.codecRunner"), {
+      value: () => Symbol.for("modvia.invalid"),
     });
-    expect(arrayOf(foreignCodec).safeParse([1])).toEqual({
-      ok: false,
-      issues: [{ path: [0], code: "foreign.invalid", message: "failed across copy" }],
+    expect(arrayOf(forgedCodec).safeParse([1])).toEqual({ ok: true, value: [1] });
+    const forgedSentinel = Codec.define({
+      decode: () => Symbol.for("modvia.invalid"),
+      encode: (input) => input,
     });
+    expect(forgedSentinel.safeParse(1)).toEqual({ ok: true, value: Symbol.for("modvia.invalid") });
   });
 });

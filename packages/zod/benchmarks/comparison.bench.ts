@@ -1,4 +1,4 @@
-import { Alias, arrayOf, boolean, int, isoDateTime, literal, Model, oneOf, string } from "modvia";
+import { Alias, arrayOf, boolean, int, isoDateTime, literal, Model, string } from "modvia";
 import { describe, expect, test } from "vite-plus/test";
 import { z } from "zod";
 import { zodCodec } from "@modvia/zod";
@@ -13,7 +13,7 @@ const ModviaUser = Model.define({
     displayName: string().trim().nonEmpty(),
     age: int().min(0).max(150),
     isActive: boolean().default(true),
-    role: oneOf("member", "admin", "owner"),
+    role: literal("member", "admin", "owner"),
     createdAt: isoDateTime(),
   },
 });

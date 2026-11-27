@@ -18,7 +18,7 @@ pnpm add modvia @modvia/json-schema
 
 ```ts
 import { toJsonSchema } from "@modvia/json-schema";
-import { Alias, int, isoDateTime, Model, oneOf, string } from "modvia";
+import { Alias, int, isoDateTime, literal, Model, string } from "modvia";
 import { email, uuid } from "modvia/formats";
 
 const User = Model.define({
@@ -27,7 +27,7 @@ const User = Model.define({
     userId: uuid().describe("Primary user UUID"),
     contactEmail: email().trim().lowercase(),
     username: string().minLength(3).maxLength(20),
-    role: oneOf("admin", "member").default("member"),
+    role: literal("admin", "member").default("member"),
     seatQuota: int().positive().max(100),
     createdAt: isoDateTime(),
   },
@@ -45,7 +45,7 @@ const dataSchema = toJsonSchema(User, { side: "data" });
 
 ### 对接 `StandardJSONSchemaV1` 全栈与 AI 工具生态
 
-`withJsonSchema` 在完整保留原 `Codec` / `Model` 全部方法与可组合性的同时，向 `"~standard"` 挂载 `jsonSchema: { input, output }`，可直接接入支持 Standard JSON Schema 的 OpenAPI 路由、RPC 框架与 AI Tool / MCP SDK：
+`withJsonSchema` 在完整保留原 `Codec` / `Model` 全部方法与可组合性的同时，向 `"~standard"` 挂载 `jsonSchema: { input, output }`，可直接接入支持 Standard JSON Schema 的 OpenAPI 路由、RPC 框架与 AI Tool / MCP SDK（该扩展仅属于返回实例，在其上继续派生的新 `Codec` 或 `Model` 不会继承 `jsonSchema` 扩展）：
 
 ```ts
 import { withJsonSchema } from "@modvia/json-schema";
@@ -68,4 +68,4 @@ const parsed = PublicUser.parse(rawPayload);
   - `"openapi-3.0"`：自动省略顶层 `$schema`，单类型 `.nullable()` 折叠为 `nullable: true`，`Model.union` 自动生成 `discriminator: { propertyName }`。
 - **自引用递归环检测**：通过 `Codec.lazy(() => Model)` 定义的树形或图状模型在遇到真实引用环时自动提升至 `$defs` / `definitions` 并输出 `$ref`，非递归复用的子模型保持内联展开。
 - **文档说明与严格对象边界**：`Codec`、`Field` 与 `Model` 上的 `.describe(text)` 自动输出为 `"description"`；经 `Model.strict()` 派生的模型始终强制输出 `additionalProperties: false`。
-- **自定义原语元数据（`meta`）与严格模式（`strict`）**：自定义 `Codec.define` 可通过 `meta: { description, encodedSchema, decodedSchema }` 分别精确声明 `side: "dto"` 与 `side: "data"` 两侧的 Schema 片段（两侧严格按各自声明读取，不做跨侧隐式回退，保证如 `bigint().fromString()` 等跨类型规则在双侧均诚实表达）；开启 `strict: true` 时，遇到目标侧未提供静态描述的不透明规则或不可 JSON 化的原生类型将立即抛出 `TypeError`。
+- **自定义原语描述符（`descriptor`）与严格模式（`strict`）**：自定义 `Codec.define` 可通过 `descriptor: { kind: "custom", description?, encodedSchema?, decodedSchema? }` 分别精确声明 `side: "dto"` 与 `side: "data"` 两侧的 Schema 片段（两侧严格按各自声明读取，不做跨侧隐式回退，保证如 `bigint().fromString()` 等跨类型规则在双侧均诚实表达）；开启 `strict: true` 时，遇到目标侧未提供静态描述的不透明规则或不可 JSON 化的原生类型将立即抛出 `TypeError`。

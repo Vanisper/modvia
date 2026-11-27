@@ -37,17 +37,12 @@ describe("field binding", () => {
     expect(rebound.source).toBe("new_key");
     expect(rebound.presence).toBe("required");
     expect(rebound.codec).toBe(base);
+    // 槽位数据为自有可枚举属性（FieldLike 纯数据协议），修饰方法位于原型
     expect(Object.keys(rebound).sort()).toStrictEqual([
-      "alias",
       "codec",
-      "default",
-      "describe",
       "description",
-      "nullable",
-      "optional",
-      "or",
+      "fallback",
       "presence",
-      "required",
       "source",
     ]);
     expect(rebound.codec.parse(5)).toBe(5);
@@ -61,7 +56,7 @@ describe("field binding", () => {
     expect(CountModel.safeDecode({}).ok).toBe(false);
     expect(CountModel.safeParse({})).toMatchObject({
       ok: false,
-      issues: [{ path: ["new_key"], code: "field.required" }],
+      issues: [{ path: ["new_key"], code: "object.missing_key" }],
     });
   });
 
@@ -73,7 +68,7 @@ describe("field binding", () => {
 
     expect(required.safeParse({})).toMatchObject({
       ok: false,
-      issues: [{ path: ["sku"], code: "field.required" }],
+      issues: [{ path: ["sku"], code: "object.missing_key" }],
     });
     // @ts-expect-error 缺少必填键时编码在编译期报错，运行时亦失败
     expect(() => required.encode({})).toThrow();
@@ -97,33 +92,14 @@ describe("field binding", () => {
     expectTypeOf<InferData<typeof both>>().toEqualTypeOf<{ readonly sku?: string | undefined }>();
   });
 
-  test("对象展开拷贝保留字段元数据，无标识自定义 CodecLike 的同名属性不参与字段声明", () => {
+  test("展开拷贝与跨副本纯数据 FieldLike 按公开协议识别，无标识自定义 CodecLike 的同名属性不参与字段声明", () => {
     const copy = { ...string().optional().alias("external") };
-    const {
-      codec,
-      source,
-      presence,
-      description,
-      alias,
-      or,
-      nullable,
-      optional,
-      required,
-      default: withDefault,
-      describe: describeField,
-    } = string().alias("ignored").optional();
+    const { codec, source, presence, description } = string().alias("ignored").optional();
     const tagged = {
       codec,
       source,
       presence,
       description,
-      alias,
-      or,
-      nullable,
-      optional,
-      required,
-      default: withDefault,
-      describe: describeField,
       [Symbol.toStringTag]: "modvia.Field",
     } as const;
     const plain = {
@@ -150,7 +126,7 @@ describe("field binding", () => {
     expect(model.encode({ code: "A", title: "B" })).toStrictEqual({ external: "A", title: "B" });
     expect(model.safeParse({ ignored: "B" })).toMatchObject({
       ok: false,
-      issues: [{ path: ["title"], code: "field.required" }],
+      issues: [{ path: ["title"], code: "object.missing_key" }],
     });
   });
 
@@ -197,11 +173,11 @@ describe("field binding", () => {
       });
       expect(model.safeParse({ event_dates: [null, false] })).toMatchObject({
         ok: false,
-        issues: [{ path: ["event_dates", 1], code: "type.datetime" }],
+        issues: [{ path: ["event_dates", 1], code: "type.string" }],
       });
       expect(model.safeEncode({ dates: [new Date(Number.NaN)] })).toMatchObject({
         ok: false,
-        issues: [{ path: ["dates", 0], code: "type.datetime" }],
+        issues: [{ path: ["dates", 0], code: "type.date" }],
       });
     }
 
