@@ -1,6 +1,6 @@
 {
   "name": "modvia",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A TypeScript bidirectional codec and domain model layer for runtime validation, DTO mapping, and serialization.",
   "keywords": [
     "bidirectional",

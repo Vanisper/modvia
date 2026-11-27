@@ -1,6 +1,6 @@
 {
   "name": "@modvia/zod",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Bidirectional Zod v4 bridge for Modvia codecs and domain models.",
   "keywords": [
     "bidirectional",

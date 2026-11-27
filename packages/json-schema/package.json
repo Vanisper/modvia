@@ -1,6 +1,6 @@
 {
   "name": "@modvia/json-schema",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Bidirectional JSON Schema & StandardJSONSchemaV1 exporter for Modvia codecs and models.",
   "keywords": [
     "codec",
