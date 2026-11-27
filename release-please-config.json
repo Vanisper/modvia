@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "bootstrap-sha": "783e3b7b7e40bca72994c31152cad36b5a7fc065",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "changelog-sections": [
+    { "type": "feat", "section": "新特性" },
+    { "type": "fix", "section": "问题修复" },
+    { "type": "perf", "section": "性能优化" },
+    { "type": "revert", "section": "回滚变更" },
+    { "type": "refactor", "section": "重构调整", "hidden": true },
+    { "type": "docs", "section": "文档更新", "hidden": true },
+    { "type": "test", "section": "测试补充", "hidden": true },
+    { "type": "build", "section": "构建与依赖", "hidden": true },
+    { "type": "ci", "section": "持续集成", "hidden": true },
+    { "type": "chore", "section": "工程维护", "hidden": true },
+    { "type": "style", "section": "代码风格", "hidden": true }
+  ],
+  "packages": {
+    ".": {
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "packages/modvia/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages/json-schema/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages/zod/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}

@@ -47,6 +47,7 @@ const dto = User.encode(user);
 - [Zod 桥接手册](packages/zod/README.md)：`@modvia/zod` 双向桥接用法与可逆性守卫。
 - [架构与包规划](docs/architecture.md)：分层模型、模块边界与演进路线。
 - [语义与设计规范](docs/design.md)：编解码契约、组合代数与对象读写不变量。
+- [变更日志](CHANGELOG.md)：各版本发布说明与变更记录。
 
 ## 工作区开发
 
